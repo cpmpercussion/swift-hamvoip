@@ -1,0 +1,24 @@
+# IAX-8b — a registrar that skips the challenge and omits REFRESH.
+#
+# Two RFC behaviours in one datagram:
+#
+#  1. No REGAUTH at all. "The IAX protocol does permit servers to forego the
+#     challenge process described above. This open approach is inherently
+#     insecure and does nothing to prevent unauthorized usage." (§10) A
+#     registrant must still cope with a REGACK answering its first REGREQ.
+#  2. No REFRESH IE. "If no 'refresh' is sent, a default registration
+#     expiration of 60 seconds MUST be assumed by both peers." (§6.1.1,
+#     restated §6.1.4 and §8.6.18)
+
+# REGACK — subclass 0x0f (§8.4).
+#   80 42       source call number 0x0042 (the registrar's)
+#   00 01       destination call number 1 (ours)
+#   00000032    time-stamp 50 ms
+#   00 01       OSeqno 0, ISeqno 1 — it has seen our first REGREQ (OSeqno 0)
+# Payload:
+#   06 06 "n0call"  USERNAME — MUST be sent with REGACK        §8.6.6
+#   12 10 …         APPARENT ADDR — "MUST indicate the 'apparent address'"
+#                   (§6.1.1). Family bytes 02 00 again: the RFC's own
+#                   self-contradictory example (trap 13).       §8.6.17
+# No DATETIME (SHOULD, not MUST) and no REFRESH.
+8042 0001 00000032 00 01 06 0f  06 06 6e30 6361 6c6c  12 10 0200 11d9 cb007109 0000000000000000

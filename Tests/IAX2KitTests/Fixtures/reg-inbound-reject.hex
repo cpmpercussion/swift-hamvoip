@@ -1,0 +1,19 @@
+# IAX-8b — a REGREJ, the failure branch of RFC 5456 §6.1 (notes §12(e)).
+#
+#   REGREQ  ==>
+#           <== REGREJ   CAUSE + CAUSECODE (both required)   §6.1.5
+#   ACK     ==>          REGREJ is on the §6.9.1 MUST-ACK list
+#
+# "Upon receipt of a REGREJ message, the registrant MUST consider registration
+# process unsuccessful and no further interaction is required." (§6.1.5)
+
+# REGREJ — subclass 0x10 (§8.4).
+#   80 42       source call number 0x0042 (the registrar's)
+#   00 01       destination call number 1 (ours)
+#   00000032    time-stamp 50 ms
+#   00 01       OSeqno 0, ISeqno 1 (it has seen our REGREQ, OSeqno 0)
+#   06 10       IAX / REGREJ
+# Payload:
+#   16 14 "Registration Refused"  CAUSE      §8.6.21, required on REGREJ §6.1.5
+#   2a 01 15                      CAUSECODE 21 = "Call rejected"  §8.6.33
+8042 0001 00000032 00 01 06 10  16 14 526567 69737472 6174696f 6e205265 66757365 64  2a 01 15

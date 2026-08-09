@@ -1,0 +1,68 @@
+# IAX-8b — every datagram the registrant puts on the wire for a successful
+# registration, in order, asserted byte-for-byte against reg-inbound-session.hex.
+#
+# Hand-built from RFC 5456 §6.1 / §9.3 (notes §12(e)). Our source call number
+# is 1; the registrar's is 0x0042.
+#
+# Four datagrams, not two. The two ACKs are `ReliableChannel`'s doing: it ACKs
+# every in-sequence full frame, following §8.1.1 ("all Full Frames require an
+# immediate acknowledgment") and §6.9.1's explicit permission — "An ACK MAY
+# also be sent as an initial acknowledgment of an IAX message that requires
+# some other protocol-defined message acknowledgment". The ACK of the REGACK is
+# not merely permitted but required: "Receipt of a REGACK message requires an
+# ACK in response." (§6.1.4)
+
+# 1. REGREQ — §6.1.2, subclass 0x0d (§8.4).
+#   80 01       F=1, source call number 1 (ours)          §8.1.1
+#   00 00       R=0, destination call number 0 — the registrar has not created
+#               its side yet, exactly as a NEW has none    §6.2.2, trap 19
+#   00000000    time-stamp 0: this frame *is* the first transmission of the
+#               exchange                                   §8.1.1
+#   00 00       OSeqno 0, ISeqno 0 — initialised to 0      §7, §8.1.1
+#   06          frame type 0x06 IAX                        §8.2.6
+#   0d          C=0, subclass 13 = REGREQ                  §8.4
+# Payload:
+#   06 06 "n0call"  USERNAME — MUST be sent with REGREQ    §8.6.6
+#   13 02 003c      REFRESH  — 60 seconds requested        §8.6.18
+# No MD5 RESULT: "This information element MUST NOT be sent except in response
+# to a CHALLENGE." (§8.6.15)
+8001 0000 00000000 00 00 06 0d  06 06 6e30 6361 6c6c  13 02 003c
+
+# 2. ACK of the REGAUTH — subclass 0x04 (§8.4).
+#   00 42       destination call number 0x0042, learned from the REGAUTH's
+#               source call number                         §6.2.1, §4
+#   00000032    the REGAUTH's time-stamp, echoed — "MUST return the same
+#               time-stamp it received. This time-stamp allows the originating
+#               peer to determine to which message the ACK is responding."
+#                                                          §6.9.1, trap 9
+#   01          OSeqno 1 — unchanged by the ACK itself; an ACK is one of the
+#               five messages that "do not change the message count" (§7),
+#               so this is simply our counter after the REGREQ  §7, trap 4
+#   01          ISeqno 1 — the REGAUTH's OSeqno was 0, so 0+1 is next expected
+#   06 04       IAX / ACK
+8001 0042 00000032 01 01 06 04
+
+# 3. REGREQ re-sent with credentials — §6.1.3: "the registrant MUST resend the
+#    REGREQ or REGREL message with one of the requested credentials".
+#   00000000    time-stamp 0 — the test clock has not advanced; the exchange's
+#               origin is the first REGREQ                 §8.1.1
+#   01 01       OSeqno 1 (the REGREQ advanced it from 0), ISeqno 1
+#   06 0d       IAX / REGREQ
+# Payload:
+#   06 06 "n0call"  USERNAME                                §8.6.6
+#   10 20 …         MD5 RESULT, 32 octets of UTF-8 text:
+#                     MD5("1234567890" ‖ "s3cret")
+#                       = f636d28296db47233db6b0bdeb2442a7
+#                   Challenge first, password second, no separator (§8.6.15).
+#                   Computed by the same IAX2Auth.md5Response a call's AUTHREP
+#                   uses — §8.6.15 governs AUTHREP and REGREQ in one sentence.
+#                   The lowercase-hex text form is OQ-5, a documented
+#                   assumption rather than a specification fact.
+#   13 02 003c      REFRESH                                 §8.6.18
+8001 0042 00000000 01 01 06 0d  06 06 6e30 6361 6c6c  10 20 66363336 64323832 39366462 34373233 33646236 62306264 65623234 34326137  13 02 003c
+
+# 4. ACK of the REGACK — REQUIRED by §6.1.4, and REGACK is on the §6.9.1
+#    MUST-ACK list.
+#   00000064    the REGACK's time-stamp, echoed            §6.9.1
+#   02 02       OSeqno 2 (the credentialed REGREQ advanced it), ISeqno 2
+8001 0042 00000064 02 02 06 04
