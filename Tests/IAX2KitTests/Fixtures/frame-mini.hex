@@ -1,0 +1,24 @@
+# frame-mini.hex — a voice Mini Frame.
+#
+# Hand-built octet by octet from RFC 5456 (provenance rule 1, Tests/FIXTURES.md).
+#
+# Header — 4 octets, RFC 5456 §8.1.2 Figure 6:
+#
+#   12 34        F = 0 (not a Full Frame) + 15-bit source call
+#                number 0x1234 = 4660. The top bit of octet 0 is
+#                clear, which is what distinguishes this from a Full
+#                Frame; the first 16 bits are nonzero, which is what
+#                distinguishes it from a Meta Frame              §8.1.2, §8.1.3.1
+#   0b b8        16-bit time-stamp 0x0BB8 = 3000 ms — "the lower 16
+#                bits of the transmitting peer's full 32-bit
+#                time-stamp for the call"                            §8.1.2
+#
+# Payload — media only. A Mini Frame carries no destination call
+# number, no sequence numbers, no frame type and no subclass; it is
+# implicitly frame type 2 (Voice) and its codec is whatever the most
+# recent full voice frame of the call named.                         §8.1.2
+#
+# 8 octets of G.711 µ-law stand in for a real 160-octet 20 ms frame
+# (1 byte per sample at the default 8 kHz).                          §8.7, §8.6.32
+#
+1234 0bb8 ffffffff 7f7f7f7f

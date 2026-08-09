@@ -1,0 +1,25 @@
+# frame-ack-retransmit.hex — a retransmitted ACK, i.e. the R bit set.
+#
+# It exists to prove that the R bit is read as a flag and not as the
+# top bit of the destination call number (notes trap 1). Hand-built
+# octet by octet from RFC 5456 (provenance rule 1, Tests/FIXTURES.md).
+#
+# Header — 12 octets, RFC 5456 §8.1.1 Figure 5:
+#
+#   85 67        F = 1 + 15-bit source call number 0x0567 = 1383.
+#                0x85 = 0x80 | 0x05                                  §8.1.1
+#   92 34        R = 1 (retransmission) + 15-bit destination call
+#                number 0x1234 = 4660. 0x92 = 0x80 | 0x12. Masking
+#                this word with 0xFFFF instead of 0x7FFF would give
+#                0x9234 = 37428, which is not even a 15-bit number.  §8.1.1
+#   00 00 0b b8  32-bit time-stamp 0x00000BB8 = 3000 ms. An ACK
+#                "MUST return the same time-stamp it received" — this
+#                echoes the voice frame in frame-voice-ulaw.hex      §6.9.1
+#   01           OSeqno = 1. An ACK does not advance OSeqno          §7
+#   01           ISeqno = 1                                          §8.1.1
+#   06           Frame Type 0x06 = IAX control                       §8.2
+#   04           C = 0, subclass 0x04 = ACK                          §8.4
+#
+# No payload: an ACK carries no information elements.                §6.9.1
+#
+8567 9234 00000bb8 01 01 06 04

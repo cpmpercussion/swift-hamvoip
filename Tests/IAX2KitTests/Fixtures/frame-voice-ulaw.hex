@@ -1,0 +1,27 @@
+# frame-voice-ulaw.hex — a full Voice Frame carrying G.711 µ-law.
+#
+# This is the frame that pins the codec for the mini-frame stream that
+# follows it (§8.1.2). Hand-built octet by octet from RFC 5456
+# (provenance rule 1, Tests/FIXTURES.md).
+#
+# Header — 12 octets, RFC 5456 §8.1.1 Figure 5:
+#
+#   92 34        F = 1 + 15-bit source call number 0x1234 = 4660.
+#                0x92 = 0x80 | 0x12                                  §8.1.1
+#   05 67        R = 0 + 15-bit destination call number 0x0567 = 1383 §8.1.1
+#   00 00 0b b8  32-bit time-stamp 0x00000BB8 = 3000 ms since the
+#                first transmission of the call                      §8.1.1
+#   02           OSeqno = 2                                          §8.1.1
+#   03           ISeqno = 3                                          §8.1.1
+#   02           Frame Type 0x02 = Voice; "the subclass is the audio
+#                compression format"                                 §8.2, §8.2.2
+#   82           C = 1, 7-bit subclass field = 2, so the subclass
+#                value is 1 << 2 = 0x00000004 = G.711 µ-law.
+#                "If the 'C' bit is set to 1, the Subclass value is
+#                interpreted as a power of 2."                       §8.1.1, §8.7
+#                Three numbers for one codec: bitmask 4, exponent 2,
+#                subclass octet 0x82 (notes §6, trap 3).
+#
+# Payload — 4 octets of µ-law standing in for a 160-octet 20 ms frame.
+#
+9234 0567 00000bb8 02 03 02 82 ffffffff

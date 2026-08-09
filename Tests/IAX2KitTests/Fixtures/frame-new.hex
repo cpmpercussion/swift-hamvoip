@@ -1,0 +1,34 @@
+# frame-new.hex — an IAX NEW message as a Full Frame.
+#
+# Hand-built octet by octet from RFC 5456 (provenance rule 1, Tests/FIXTURES.md).
+# No packet capture and no other implementation was consulted.
+#
+# Header — 12 octets, RFC 5456 §8.1.1 Figure 5:
+#
+#   80 01        F = 1 (Full Frame) + 15-bit source call number 1     §8.1.1
+#                0x8001 & 0x7FFF = 1. Source call numbers are
+#                allocated from 1…32767                              §8.1.1, notes §15
+#   00 00        R = 0 (first transmission) + 15-bit destination
+#                call number 0. A NEW has no destination call number
+#                because "the remote peer's source call identifier is
+#                not created until after receipt of this frame"      §8.1.1, §6.2.2
+#   00 00 00 00  32-bit time-stamp = 0. "A time-stamp MUST also be
+#                assigned for the call, beginning at zero"           §8.1.1, §6.2.2
+#   00           OSeqno = 0. "When starting a call, the outgoing and
+#                incoming message sequence numbers MUST both be set
+#                to zero"                                            §8.1.1, §7, §6.2.2
+#   00           ISeqno = 0                                          §8.1.1, §7
+#   06           Frame Type 0x06 = IAX control                       §8.2, §8.2.6
+#   01           C = 0, 7-bit subclass = 0x01 = NEW. NEW is an
+#                ordinal ≤ 127 so it is encoded as a plain integer,
+#                not as a power of two                               §8.1.1, §8.4
+#
+# Payload — information elements, opaque to IAX-1 (IAX-2 parses these):
+#
+#   0b 02 0002   VERSION IE (0x0b), length 2, value 0x0002. "A NEW
+#                message MUST include the 'version' IE, and it MUST
+#                be the first IE"                                    §8.6.10, §6.2.2
+#   01 05 "55553"  CALLED NUMBER IE (0x01), length 5, UTF-8 digits
+#                0x35 0x35 0x35 0x35 0x33                            §8.6.1
+#
+8001 0000 00000000 00 00 06 01 0b020002 01053535353533
