@@ -257,8 +257,40 @@ are exactly 160 samples).
 
 ## Phase 2 — IAX2Kit (RFC 5456)
 
-Read RFC 5456 §8 (frame formats), §6 (state machines), §8.6 (IEs) before
-each task. Constants below must be re-checked against the RFC (rule 6).
+**Read `docs/reference/RFC5456-NOTES.md` first.** It is a transcription of the
+RFC's tables and rules made specifically for these tasks, with section
+citations throughout. The RFC itself remains the authority; the notes exist so
+five tasks do not re-derive the same tables five times.
+
+The notes confirmed every numeric constant this plan asserts — frame types,
+IAX subclasses, the fourteen IEs, and µ-law = `1<<2`. They also turned up
+things that change how these tasks must be written:
+
+- **The RFC contradicts itself in four places.** Mini-frame resync interval
+  (32,768 ms MUST in §6.10 vs 65,536 ms SHOULD in §8.1.2 — satisfy both by
+  resyncing at every 0x8000 boundary); retransmit timing (§7.2.1 vs §8.1.1);
+  the §6.9.1 ACK list omitting RINGING/ANSWER, which §9.6 does ACK; and
+  ISeqno's definition (§8.1.1 "next expected" vs §7 "highest received", off by
+  one — implement §8.1.1, be tolerant on receive). Each is documented in the
+  notes with both citations. Follow the notes and do not silently pick a side.
+- **OSeqno is not incremented by ACK, INVAL, TXCNT, TXACC or VNAK** — this
+  plan previously named only ACK and INVAL. See IAX-3.
+- **An ACK echoes the timestamp of the frame it acknowledges** (§6.9.1). That
+  echo is how a peer matches an ACK to an outstanding frame; the
+  retransmission engine depends on it.
+- **There is no plaintext auth path.** IE PASSWORD (0x07) is in Table 1 but
+  has no defining subsection, AUTHMETHODS 0x0001 is "Reserved (was
+  Plaintext)", and §10 says cleartext has been eliminated. Only MD5 (0x0002)
+  and RSA (0x0004) are live. Do not build a plaintext path.
+- **Control HANGUP (type 0x04, subclass 0x01) is not IAX HANGUP (type 0x06,
+  subclass 0x05).** Do not conflate them.
+- **The RFC never says "network byte order" anywhere.** Big-endian is an
+  inference from the packet diagrams. APPARENT_ADDR is worse: the RFC's own
+  example shows family `0x0200` (little-endian 2) beside port `0x11d9`
+  (big-endian 4569) in the same struct. Treat its family field as suspect and
+  tolerate both readings.
+- **Retry limit is 4, and exhausting it tears the call down silently** — no
+  HANGUP is sent to a peer that has stopped answering.
 
 ### IAX-1 — Frame model: parse + serialize
 **Depends on:** RC-8.
@@ -309,7 +341,10 @@ parses correctly.
 **Files:** `Sources/IAX2Kit/ReliableChannel.swift` + tests.
 
 Actor owning OSeqno/ISeqno bookkeeping per RFC 5456 §7: full frames (except
-ACK, INVAL, and mini frames) increment OSeqno and require acknowledgement;
+**ACK, INVAL, TXCNT, TXACC, VNAK**, and mini frames) increment OSeqno and
+require acknowledgement — note that list is longer than earlier drafts of this
+plan claimed, and that an ACK **echoes the acknowledged frame's timestamp**,
+which is how you match it to an outstanding frame;
 retransmit with backoff (initial 500 ms, ×2, max 4 attempts, then declare
 the call dead); inbound full frames update ISeqno and trigger ACK where the
 RFC requires it. Inject the clock. Transport is `DatagramTransport`.
@@ -323,14 +358,25 @@ correctly.
 **Depends on:** IAX-2.
 **Files:** `Sources/IAX2Kit/IAX2Auth.swift` + tests.
 
-AUTHREQ → AUTHREP flow (§6.2, §8.6.15): MD5_RESULT =
-hex(md5(challenge + password)). Use `Insecure.MD5` from CryptoKit (import
-`Crypto` no — CryptoKit is Apple-only and fine here; guard with
-`#if canImport(CryptoKit)`). Pure function:
-`md5Response(challenge: String, secret: String) -> String`.
+AUTHREQ → AUTHREP flow (§6.2, §8.6.15): MD5_RESULT = the MD5 of the challenge
+string concatenated with the password string, challenge first, no separator.
+Use `Insecure.MD5` from CryptoKit, guarded with `#if canImport(CryptoKit)`.
+Pure function: `md5Response(challenge: String, secret: String) -> String`.
 
-**Done when:** test vectors computed by hand (e.g. via `md5` CLI, noted in
-a comment) pass; empty challenge/secret handled.
+**Support MD5 only.** There is no plaintext path (see the Phase 2 preamble);
+RSA (AUTHMETHODS 0x0004) is out of scope for v1 — reject it with a clear
+error rather than failing obscurely.
+
+⚠️ **OQ-5 lives here.** §8.6.15 says the IE carries the *UTF-8-encoded* MD5
+result, but the RFC never states the text encoding — hex or not, upper or
+lower case. LP-2 forbids reading an implementation to settle it. Ship
+**lowercase 32-character hex** as the documented assumption, isolate it behind
+a single named function so it can be changed in one place, and put a prominent
+`// OQ-5:` comment there. CLI-1 against a live node is what will confirm it.
+
+**Done when:** test vectors computed by hand (e.g. via the `md5` CLI, noted in
+a comment) pass; empty challenge/secret handled; the encoding assumption is
+isolated and commented.
 
 ### IAX-5 — Call state machine
 **Depends on:** IAX-2, IAX-3.
@@ -517,7 +563,9 @@ human validation.
 | ID | Question | Blocks |
 |---|---|---|
 | OQ-1 | EchoLink ToS permit third-party clients? | Phase 6 |
-| OQ-2 | Codec2 XCFramework builds all three slices? | M17-3+ (spike M17-1 informs it) |
+| ~~OQ-2~~ | ~~Codec2 XCFramework builds all three slices?~~ **RESOLVED: yes.** All three slices build dynamic and sign cleanly; see `docs/reference/CODEC2-XCFRAMEWORK.md`. | — |
 | OQ-3 | App name + bundle id | Phase 4 |
 | OQ-4 | App in separate repo? (plan assumes yes) | Phase 4 |
+| **OQ-5** | **How is MD5_RESULT represented on the wire?** §8.6.15 says the IE carries the UTF-8-encoded MD5 of `challenge ‖ password`, but the RFC never states the text encoding — hex or not, upper or lower case, padded or not. This cannot be resolved from the specification, and LP-2 forbids reading an implementation to find out. It has to be settled empirically against a real node. | IAX-4 ships lowercase 32-char hex as the documented assumption; **IAX-9/CLI-1 must confirm it against a live AllStar node before v1** |
+| **OQ-6** | **LGPL-2.1 relinking vs App Store code signing.** Shipping Codec2 as a dynamic framework satisfies LP-4's letter, but a signed iOS app cannot have its framework substituted by the user, which is what LGPL §6 relinking is for. A licensing judgement, not a technical blocker, and unchanged by the M17-1 spike — but it wants a conscious decision before App Store submission, not after. | App Store submission of M17 |
 | — | Packet capture of own AllStar session | IAX-9 |
