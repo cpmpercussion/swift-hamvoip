@@ -1,0 +1,85 @@
+# IAX-9 — a live 16-bit mini-frame time-stamp wrap, inbound, with no full
+# frame at the boundary (RFC 5456 §8.1.2, §6.10).
+#
+# Provenance (LP-1, `Tests/FIXTURES.md` rule 2): `wrap.pcap`, a 77-second
+# capture of the maintainer's own traffic against the maintainer's own ASL3
+# node, taken 2026-08-09 for exactly this purpose — a session held open past
+# 65.536 seconds so that both directions would cross the boundary.
+#
+# **This is the fixture the expander exists for.** The node's mini time-stamps
+# run 65500 → 65520 → 4, and it sends **no full frame at the wrap**. Nothing on
+# the wire says an epoch ended. `IAX2MiniTimestampExpander` has to infer it
+# from the low 16 bits alone, and in the live session it did: not one frame was
+# rejected across the boundary, and the audio did not glitch.
+#
+# §6.10 says a peer MUST send a full frame at every 0x8000 boundary. This node
+# does not. That is worth knowing about real nodes, and it is why the receiving
+# side cannot be built to depend on it.
+#
+# One frame here is *not* a mini frame and must not be treated as an anchor:
+# index 6537, the node's ACK of our own re-anchoring Voice frame. §6.9.1 makes
+# an ACK "return the same time-stamp it received", so its 65541 is **our**
+# clock echoed back, not the node's. It reads as plausible only because both
+# clocks started at call setup. A receiver that resynchronised on any full
+# frame rather than on media frames alone would adopt the wrong clock here.
+#
+# The window does not start at the beginning of the call, so it carries no
+# origin of its own: by the time it opens, the expander's reference had climbed
+# continuously to 65,260. The test seeds it there and that is the only piece of
+# session state the fixture does not supply.
+#
+# Machine-generated. The captures themselves are not in the repository —
+# they are the maintainer's own, and large. Regenerate with:
+#   scripts/pcap-to-fixture.py wrap.pcap --stream 0 --dir in --range 6500:6545
+# Capture SHA-256: 2658320d536ff332990c0d1d33571e0f7504366089476bddde8bec11772a3053
+#
+# Each datagram is the UDP payload verbatim — the octets RFC 5456 §5
+# defines as an IAX2 frame. `[n]` is the datagram's index in the capture
+# stream, so a gap in the indices is a datagram deliberately left out.
+
+# [6500] 65.260s <== mini  call 14253  ts 65280  160B audio
+37ad ff00 deed726158534f4f4f52575f6fefdfd7d2cfcecfd2d8e0f36c5d56504e4d4e51575f71ecddd5cfcecdced0d6deef6d5d56504e4e4f52596175eaddd6d1cfcfd1d5dce6fe685c5652505052575d69fbe6dcd6d2d1d1d4d9dfee72615a55515051555a616fefdfd9d4d0cfd1d4dae1f36d5e5853505052565c677fe8ddd7d3d1d1d3d8deeb7a665c5652505154595f6ef0e0d9d5d1d0d1d5dbe3f86a5d56524f4f
+# [6501] 65.280s <== mini  call 14253  ts 65300  160B audio
+37ad ff14 51555b66fee6dbd4cfcececfd4dae5fd675c55514f4f51565c67fee6dcd6d1cfd0d3d7ddeb75625953504f4f52575e6eefe0d9d4d1d1d3d6dce6fa6b5e5853515153575e6bf8e4dad4d0cfcfd2d7deeb77645a5551505154595f6ff0e0d9d4d0cfd1d5dae3f76b5d5753504f51555c667be9ddd7d2d0d0d2d6dce77f675c55514f4f52565d68fde7dcd6d2d0d0d3d7dde97c665c565351525559606fefdfd9d4
+# [6507] 65.299s <== mini  call 14253  ts 65320  160B audio
+37ad ff28 d1cfd1d4dae2f56c5e57524f4f50545a6479e9dcd6d1cfcfd0d5dbe77c6459524e4d4d4f545b68f7e1d8d1cecdcecfd5dce9776259534f4e4f52585f6fedded7d2cfcfd0d4dae4fa695c56514f4f50545a657de7dbd5d0cfcfd1d6ddeb746058524f4e4e51575e6fedddd6cfcecdced0d6deef6d5e564f4e4d4e50575f75e9dcd4cfcdcdced1d8e2fb665a524e4d4d4e535a66fce3d9d3cfcecfd1d7dfef6d5e
+# [6508] 65.319s <== mini  call 14253  ts 65340  160B audio
+37ad ff3c 56514e4e4e51586072ecddd5d0cecdced1d7dff26a5c554f4e4d4e5159637de5d9d2ceccccced1d8e2fa675a534f4d4d4f535965ffe5dad4cfcececfd5dcea756058514e4d4d4f545c6bf1dfd6cfcdcdcdcfd6def06c5d554f4e4d4e52586278e7d9d2ceccccced0d8e37e6358504d4c4c4e5158637ee4d9d2cecdcdcfd4dce9756058514e4d4d4f545c6af2dfd6cfcdcdcdcfd5ddec6f5e57514e4e4e51575f
+# [6509] 65.340s <== mini  call 14253  ts 65360  160B audio
+37ad ff50 70eddfd7d1cfcecfd2d9e1f66a5c55504e4e50545b67fee5dad4d0ceced0d4dbe87c645a534f4e4e4f545b67fce4dad4d0cfcfd2d7ddea7a655b56525152565b657aeaded7d3d0d0d1d6dce6fc685c56514f4f51555b6579ebded8d3d1d1d3d7deeb78645a54504f4f51565c69f9e4dad4d0cececfd4dae5fc685c56514f4f51565d69fae4dbd4d0cfcfd1d6ddea79645a54514f5054596072edded8d3d0d0d2
+# [6510] 65.360s <== mini  call 14253  ts 65380  160B audio
+37ad ff64 d6dce87d665b55514f4f52575d6af9e5dbd5d1d0d0d3d8dfee706058534f4e4f52575f6eefdfd7d2cfcecfd1d7ddeb75625a55515152555a6274eee0dad5d3d2d4d8dde97e685d5854525254595f6cf9e5dcd7d3d2d2d5dae0ed75645c57535253565b6371f0e2dbd6d4d3d4d8dce6f86d615b57545455595e687becdfdad6d4d3d5d9dee9fe6a5f5a565555575a5f6a7feadfdbd8d6d6d8dce2ef73655d5855
+# [6511] 65.380s <== mini  call 14253  ts 65400  160B audio
+37ad ff78 5455585d6678ecdfdad6d4d3d5d8dde7f86d615b575554565a5f6bfde9ded9d6d4d5d7dbe2f170635b5552505154595e6bfae7ddd8d5d3d4d6dae0ed77665d59555556595e687deadfd9d6d4d4d6dadfebff6a5f5a565555575b626ff6e5dcd8d5d4d5d8dde5f56e625b57545456595e697dece1dbd8d5d6d7dbe0ec7b685e59565454565b616df7e7ddd9d6d5d5d8dce3f074655d595656575a5f697cebdfdb
+# [6517] 65.400s <== mini  call 14253  ts 65420  160B audio
+37ad ff8c d7d6d6d8dbe0ec7d695f5a575656585c626ef7e7ded9d7d6d7d9dde6f56f625b57555455585c6473efe2dbd7d4d3d5d8dde6f471655d595757595c626dfbe9dfdbd8d6d7d9dde4f174665d58555455585c636ff7e8dedbd8d7d8dadfe9fa6d615b585656585c626df9e8ddd8d6d4d4d7dbe0ec7c695f5a575657595d6674f1e4dcd8d6d5d7dadee9fc6b5f5a56535355595e697debdfdad7d5d6d8dce3f17264
+# [6518] 65.419s <== mini  call 14253  ts 65440  160B audio
+37ad ffa0 5c57545354575c6474efe1dbd6d3d2d3d6dbe3f171635b57545455585d677aebdfd9d5d2d1d3d6dbe2f171635b57545455585d6675efe3dcd9d7d7d8dbe0eb7e6a5f5a575555565a5f6a7cebdfdbd7d5d5d7dbdfebfe6c605b585656585b606cfbe8ded9d6d4d5d7dbe2ef74655c57545354575b626ef5e6ddd9d6d4d5d7dbe1ee74645c58555455585d6778ede1dbd7d5d5d6dadee9fa6d615b585656585b60
+# [6519] 65.440s <== mini  call 14253  ts 65460  160B audio
+37ad ffb4 6cfeebe0dcd9d7d8d9dde4ee7b6a5f5b585657595c626dfceadfdbd7d6d6d8dbe0ebfd6c605b585656585b5f697bede2ddd9d7d8d9dce1ebfc6e655f5d5c5c5e636a77f3e9e1dddbdbdcdee2ebf970665f5b59595a5d616a76f4e8e0dddcdcdddfe6ef7b6b625d5a59595b5e656efdece2dddad8d8dadde2ecfc6f655f5c5a5a5c5f6771f9eae1dcdad8d9dbdfe7f374675e5b5958595c606a7cede2dcd8d6d6
+# [6520] 65.459s <== mini  call 14253  ts 65480  160B audio
+37ad ffc8 d8dbe0ebff6a5f5a575555575a5f6bffebdfdbd8d7d7dadde5f273655d58555455585c6473efe1dad5d2d1d3d6dbe3f171635c57555455585d6779ecdfdad5d3d2d4d8deea7d675c5752505052565c667de9ddd7d3d1d1d3d6dce7fe685c5652505051565d69f7e1d9d3cfceced0d5ddeb756058514e4d4e4f545c6af3dfd6d0cecdcdcfd5deee6d5d564f4e4d4e50575f70ecddd6d0cececfd2d9e3fa675a53
+# [6521] 65.480s <== mini  call 14253  ts 65500  160B audio
+37ad ffdc 4f4e4e4f545c69f3dfd6d0cdcccdced3dbe9745f57504d4c4d4f545c6bf0ded5cfcdcccdcfd6dff4685a534e4c4c4d4f565e71eadbd3cecdcccdd0d7e2fc665a524e4d4d4f545b6af2ded6cfcdcccdcfd4dced6e5d554f4d4c4d4f555d6eecdcd4cecccccccfd5ddef6b5c544f4d4c4d4f565e6eedddd5d0cececfd2d7dff26b5d56504e4e4f52596177e9dcd5d0cfced0d4dbe77e665b54504f4f52575f6eef
+# [6523] 65.499s <== mini  call 14253  ts 65520  160B audio
+37ad fff0 dfd8d2cfcfcfd3d9e1f36c5e57524f4e4f53596277eadcd5d0cececfd4dbe77d645a534f4e4f50565d6af7e3dad4d0cfcfd2d7ddea78645a54514f5053596070eedfd8d3d0cfd1d5dbe4f76b5d56524f4f51555b657be9ddd7d3d1d1d3d7dde97c665c5653515154595f6df5e3dad5d2d1d2d4d9dfec77655c57545354565b6373f0e2dbd7d5d5d6dadfea7e695f5a565555575a5f6a7dece1dcd9d7d7d9dce3
+# [6528] 65.519s <== mini  call 14253  ts     4  160B audio
+37ad 0004 ef78685f5b5957585a5e6674f3e7dedbd8d8d9dbdfe8f671665e5b59585a5d636dfcebe1dcd8d6d6d8dce1ecfe6c615c595757595d636dfbeadfdbd8d7d7dadee6f273655d595757575a5e6674f2e5dedbd9d8d9dce1eaf970665f5c5a5a5b5e636dffece2dddad8d8dadde4ee7b6b615c5958585a5d636dfeece3dddad9dadbdee5ee7b6b625d5b5a5a5c5f6773f6e9e0dcdad9dadce0e9f67468605d5b5a5b
+# [6529] 65.540s <== mini  call 14253  ts    24  160B audio
+37ad 0018 5e636c7befe6dfdcdbdbdcdee5ee7c6c635d5b59595b5d636c7deee4dedbdad9dbdde4edff6d645d5b59595a5d626b7ceee5dedbd9d9dbdde2ebf87268605d5c5c5d606873f8eae2dddbdadadcdfe7f37769605c5a595a5c5f6772f8ebe3dedcdcdddfe5edfd6e645e5b5a5a5b5e636c7deee5dedbd9d9dadde2ebfb6f665f5d5b5b5d606872f8eae1dddbdadbdcdfe7f37769615d5a595a5d616a79f1e6dedc
+# [6530] 65.559s <== mini  call 14253  ts    44  160B audio
+37ad 002c dadadbdee5ee7e6d645e5b5a5a5c5e656efdece2dddbd9d9dbdfe7f374675e5b5858585a5e6671f6e8dfdbd8d7d8dadee5ef78695f5c5958595b5f6978f1e6dfdcdad9dbdde2ecff6e645d5a58585a5d636efbeadfdbd8d7d8dadee7f374675e5a5857585b5f6a7bede1dcd8d6d5d7dadee7f86d615b58555556595e6777eee2dcd9d6d6d8dbe0ebfe6b5f5a575555575b606cfbe8ded9d6d4d5d7dbe2ef7465
+# [6531] 65.580s <== mini  call 14253  ts    64  160B audio
+37ad 0040 5d58565556595e6779ede0dad6d3d3d4d7dce5f76c5f5954525152565b6579ebded8d4d1d1d3d7dde7ff675c5652505052565c68fee7ddd7d3d2d2d4d9dfec7a675d58545354565b6270f1e2dbd6d3d3d4d7dce4f270625b57545456595f6cf9e6dcd7d3d2d2d5dae0ed76645b5652505052565c667de8ddd8d4d1d1d3d8dde97d685d58555353565a5f6cfae7ddd8d5d3d4d6dadfec7b685e59565555575c62
+# [6537] 65.589s <== full  14253->1     ts      65541 O 14 I 15  ACK    0B
+b7ad 0001 00010005 0e 0f 06 04
+# [6538] 65.599s <== mini  call 14253  ts    84  160B audio
+37ad 0054 6ef6e6ddd9d6d5d6d9dde6f66e615b56545355585d687cebdfd9d6d4d4d5d9dee9fe6a5f5a565454565a5f6bfee9ded9d6d5d6d8dce4f074665e5a5757585b5f6b7eebdfdbd7d6d6d8dce3f074655d58555455585c636ff7e7dedad7d5d6d8dce3ef77665d59565556595d6675efe3dcd8d5d4d5d8dce3ef76675e5a5756585b5f6a7bede3dddad8d9dbdee5f078685e5a585757595d636efaeae0dcdad9dadc
+# [6539] 65.619s <== mini  call 14253  ts   104  160B audio
+37ad 0068 dfe9f773675f5b59595a5d616b7ceee4dddad8d8d9dbe0eafb6e635d5a5858595c626cffece1dcd9d7d7d8dbdfe9fa6e645d5a58585a5d636c7eede3dedbdadadcdfe8f573665e5b59585a5c616a7beee5dedbd9d8dadce1eaf871665e5b59595a5c606a79efe4dddad9d9dadde3ed7e6c635e5b595a5b5e656efcebe1dcdad8d9dbdee5ef796a605c5958595b5e656ff9e9e0dcd9d8d9dbdfe8f572665e5b59
+# [6540] 65.639s <== mini  call 14253  ts   124  160B audio
+37ad 007c 595a5d626dfceae0dbd8d7d7d9dde4ef76685e5a575657595d636ff6e7dedad8d7d8dadfe8f96e625c585656575b5f697cece0dbd7d5d5d7dadee8f76f635c595758595d636efae9dfdcd9d8dadce0e9f86f645e5a5857585b5f6878f0e5dddad7d7d8dbdfe9fb6e635c585656575a5e687bece0dbd8d5d5d7dadfe9fb6d625c595857595c626dfdebe2dcd9d8d8d9dce2ec7f6c625d5a59595b5e6671f6e8df
+# [6541] 65.660s <== mini  call 14253  ts   144  160B audio
+37ad 0090 dbd9d8d9dce1eb7e6b605b585656575a5f6a7cece1dcd9d7d7d8dbdfe9fa6e635d5a58585a5d636efbebe1dcd9d8d9dbdfe7f474675f5b5a595a5d616a7af0e6dfdcdadadbdee4edfe6e645e5b5a5a5c5e656efdece3dddbdadadcdfe6f1796a625d5b5b5c5e626a77f4e9e1dedcdbdcdee3ebf87368605d5c5b5c5f656d7cf0e7dfdcdbdbdddfe6eefe6e655f5c5b5b5c5f656effeee6dfdddcdcdde1e8f477
+# [6542] 65.680s <== mini  call 14253  ts   164  160B audio
+37ad 00a4 6a625e5c5c5d5f666ffcede4dedbd9d9dbdee4ecfd6e645d5a58585a5d616b7ceee3dddad8d8dadde4ee7b6b605b585757595d636efdece2dddbdadbdcdfe7f1796b645f5c5c5d5f656d7feee5dedcdadadbdee4ee7c6b615d5a595a5c5f6671f8ebe3dedbdadbdcdfe5ef7d6d655e5b5a5a5b5e646d7defe6dfdddcdddee3eaf4776b635f5d5d5e60676f7eefe6dfdddcdcdde0e7ef7e6e66605e5c5c5e6168

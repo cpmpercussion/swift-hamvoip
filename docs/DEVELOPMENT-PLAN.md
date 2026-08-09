@@ -79,7 +79,7 @@ not remembered; if it disagrees with the repository, the repository is right.
   `M17Kit` — plus the `hamvoip-cli` executable, a test-only `TestSupport`
   target and four test targets. One dependency, `swift-argument-parser`,
   authorised by CLI-1.
-- `swift build` and `swift test` are green on `main`: **520 tests, no
+- `swift build` and `swift test` are green on `main`: **537 tests, no
   failures.** CI runs the SPDX check on Ubuntu and build + test on macOS 14.
 - `RadioCore` and `IAX2Kit` are complete. `M17Kit` has reflector control,
   base-40 callsigns and stream-packet parse/serialise, but **no codec wiring
@@ -90,8 +90,10 @@ not remembered; if it disagrees with the repository, the repository is right.
   speech intelligible both ways, DTMF round-tripped, the SF-1 watchdog cut
   transmission at exactly its limit, teardown clean. Two items want a re-run
   before v1 (PTT edges, the signal teardown paths) and one wart is tracked as
-  IAX-10. The capture-replay conformance test (IAX-9) now has captures for
-  both halves but is still to be written.
+  IAX-10. **IAX-9 is done:** those sessions are now six `live-*.hex` fixtures
+  replayed by `IAX2ConformanceTests`, so registration, call setup, an inbound
+  over and both `0x8000` time-stamp boundaries are regression-tested against
+  what a real node put on the wire, not only against our reading of the RFC.
 
 Per-task status is on the task headings themselves — `✅ DONE` where the work
 has merged and the code it describes exists.
@@ -533,11 +535,11 @@ shipped and this is now a symmetry/hygiene item rather than a defect. Thread
 `md5ResultEncoding` through `IAX2Registrar.Configuration` in the same shape
 when convenient. See `docs/CLI.md`.
 
-### IAX-9 — Capture-replay conformance test ✅ UNBLOCKED — captures in hand
-**Depends on:** IAX-8. **No longer blocked:** three captures of the
-maintainer's own sessions against their own node now exist (LP-1) —
-`oq5-confirm.pcap`, `connect3.pcap` and `wrap.pcap`. The task is now purely
-"convert and write the test".
+### IAX-9 — Capture-replay conformance test ✅ DONE
+**Depends on:** IAX-8. **Delivered** as
+`Tests/IAX2KitTests/IAX2ConformanceTests.swift` (6 tests), six `live-*.hex`
+fixtures, and `scripts/pcap-to-fixture.py`, which cuts a fixture out of a
+capture. See "What it found" at the end of this entry.
 
 **The signalling half now exists.** The OQ-5 session of 2026-08-09 produced a
 capture of the maintainer's own traffic against their own ASL3 node —
@@ -574,6 +576,48 @@ Then, for both halves: convert to hex fixtures and replay the server-side
 datagrams through MockTransport, asserting the client's responses are
 protocol-valid (parseable, correct call numbers, sequence numbers, ACK
 discipline).
+
+**What it found.** Everything in `IAX2Kit` survived the replay unchanged: all
+six tests passed on the first run against the library. The value came out as
+documentation of what a real node does, and one defect outside the library.
+
+Four behaviours of the live node that no fixture written from RFC 5456 would
+have contained, each now pinned by an assertion:
+
+- It uses a **Control subclass of `0xff`**, which §8.3 does not define, and an
+  **information element `0x38`** and a **frame type `0x0c`**, which §8.6 and
+  §8.2 do not define either. All three are ACKed, the control draws an
+  UNSUPPORT (§6.5.5), and none disturbs the sequence numbering. The
+  `.unknown`/`.unassigned` cases that carry them were built on the RFC's own
+  "refer to the IANA registry" wording; this is the first evidence they were
+  needed.
+- It writes the **media format literally** (`0x04`) where we write it as a
+  power of two (`0x82` = 2^2). §8.1.1 allows both. A parser that handled only
+  our own spelling would pass every hand-built fixture and fail here.
+- It **never lets an answer double as an acknowledgement**: every request draws
+  a bare ACK and then the answer, as two frames.
+- It **crosses the 16-bit mini-frame boundary without the full frame §6.10 says
+  it MUST send there** — inbound time-stamps step 65500 → 65520 → 4 with
+  nothing to say an epoch ended. `IAX2MiniTimestampExpander` reconstructs it
+  from the low half alone. Our own side does obey §6.10, at both `0x8000`
+  crossings of the same call, and the transmitter still makes the same choice
+  frame for frame when driven with the captured time-stamps.
+
+Two things the fixtures deliberately do **not** contain: the capture files
+themselves (large, and personal traffic — each fixture carries the regeneration
+command and the capture's SHA-256 instead), and our own half of any
+authenticated exchange, which would mean checking in a digest of the
+maintainer's live node password. `Tests/FIXTURES.md` records both rules.
+
+**The one defect, and it was not in the library.** The registration captures
+show every ACK-of-REGAUTH leaving with **destination call number 0** instead of
+the node's (§6.2.1, §8.1.1). That is `hamvoip-cli oq5`, not `IAX2Registrar`:
+the probe called `channel.receive` *before* `setDestinationCallNumber`, and
+learned the number only on `.deliver`, so the node's opening bare ACK — which
+is `.consumed` — never taught it anything. `IAX2Call` and `IAX2Registrar` both
+already learn the number first, which is why the replay produces the correct
+destination where the capture has 0. Fixed in `OQ5Command.swift`; Asterisk had
+tolerated it, so nothing about OQ-5's conclusion changes.
 
 ---
 

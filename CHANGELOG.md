@@ -41,7 +41,41 @@ major version is 0, the API may change in any release.
   directions. Previously it had only ever been exercised against fixtures.
   The call and voice paths still have not: M2 sign-off remains outstanding.
 
+### Added
+
+- **Capture-replay conformance tests (IAX-9).** Six fixtures cut from packet
+  captures of the maintainer's own sessions against their own ASL3 node, and
+  `IAX2ConformanceTests`, which replays the *node's* datagrams through
+  `MockTransport` and asserts our side is protocol-valid — frames that parse,
+  the peer's call number on every frame after it identifies itself, §7
+  sequence numbering with ACKs exempt from the message count, and one ACK per
+  acknowledgeable inbound frame echoing its time-stamp (§6.9.1). Covered:
+  registration and rejection (§6.1), a full call setup with the node's
+  mid-call PING/LAGRQ/DTMF traffic (§6.2, §6.3, §6.7), an inbound over
+  switching to mini frames (§8.1.2), and both `0x8000` time-stamp boundaries
+  of a 77-second call (§6.10). `scripts/pcap-to-fixture.py` cuts a fixture out
+  of a capture; `Tests/FIXTURES.md` records the rules these follow.
+
+  Nothing in `IAX2Kit` had to change to pass them. What they add is a
+  regression pin on the parts of the protocol where the RFC leaves room and
+  this node took its own path: a Control subclass, an information element and
+  a frame type that RFC 5456 does not define, all of which we ACK and carry
+  through untouched; a media format written literally where we write it as a
+  power of two; and — the one that would be hardest to find any other way — an
+  inbound 16-bit time-stamp wrap with no full frame at the boundary, which
+  §6.10 says the peer MUST send and this node does not.
+
 ### Fixed
+
+- **`hamvoip-cli oq5` addressed its ACKs to call number 0.** Found by the
+  IAX-9 replay: in every captured registration, the probe's ACK of the REGAUTH
+  went out with destination call number 0 rather than the node's (§6.2.1,
+  §8.1.1). It called `channel.receive` — which is what emits the ACK — before
+  `setDestinationCallNumber`, and learned the peer's number only from a
+  `.deliver`, so the node's opening bare ACK never taught it anything. The
+  library was never affected: `IAX2Call` and `IAX2Registrar` both learn the
+  number before the channel sees the frame, and the replay tests assert that.
+  Asterisk had tolerated the malformed ACK, so OQ-5's conclusion is unchanged.
 
 - **Received audio shorter than 20 ms is played instead of dropped.** A live
   ASL3 node sent a 44-octet media payload — the tail of a playback, 5.5 ms of

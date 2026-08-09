@@ -314,12 +314,21 @@ enum OQ5Probe {
                 continue
             }
 
-            let inbound = await channel.receive(frame)
-            guard case .deliver(let full) = inbound else { continue }
-
-            if await channel.destinationCallNumber == 0, full.sourceCallNumber != 0 {
+            // Learn the peer's call number *before* the channel sees the frame,
+            // the way `IAX2Call` and `IAX2Registrar` both do it. The channel
+            // ACKs from inside `receive`, so anything learned afterwards is
+            // learned too late for that ACK — and doing it on `.deliver` alone
+            // never learns it from the node's opening bare ACK, which is
+            // `.consumed`. The IAX-9 captures show the cost: every ACK this
+            // probe sent for a REGAUTH went out with destination call number 0
+            // instead of the node's (§6.2.1, §8.1.1). Asterisk tolerated it.
+            if let full = frame.fullFrame, full.sourceCallNumber != 0,
+                await channel.destinationCallNumber == 0 {
                 await channel.setDestinationCallNumber(full.sourceCallNumber)
             }
+
+            let inbound = await channel.receive(frame)
+            guard case .deliver(let full) = inbound else { continue }
 
             let elements = (try? InformationElement.parseList(full.payload)) ?? []
 

@@ -1,0 +1,110 @@
+# IAX-9 — the node's half of a live call, signalling only.
+#
+# Provenance (LP-1, `Tests/FIXTURES.md` rule 2): `connect3.pcap`, a capture of
+# the maintainer's own traffic against the maintainer's own ASL3 node
+# (Asterisk + app_rpt in a UTM VM), taken 2026-08-09 during the M2 sign-off —
+# the first two-way QSO through this stack. The first of its two sessions, 36.7
+# seconds, 1179 datagrams.
+#
+# Every full frame the node sent is here and nothing else. Mini frames are
+# dropped because they carry no sequence numbers (§8.1.2), so removing them
+# leaves the reliable stream exactly as the peer sent it — the node's OSeqno
+# runs 0,1,2,3,4,5,6,7,8,9,10 across the frames below with no gap. The voice
+# path gets its own fixture, `live-call-voice.hex`, cut from the same session.
+#
+# What the node did, in order:
+#
+#   NEW      ==>                                        §6.2.2
+#            <== ACK
+#            <== AUTHREQ   USERNAME + AUTHMETHODS + CHALLENGE   §6.2.6
+#   ACK      ==>
+#   AUTHREP  ==>  MD5 RESULT                            §6.2.7
+#            <== ACK
+#            <== ACCEPT    FORMAT                       §6.2.3
+#   ACK      ==>
+#            <== CONTROL ANSWER                         §6.3.4
+#            <== CONTROL subclass 0xff                  (not in §8.3)
+#   ACK ×2   ==>
+#   UNSUPPORT ==>                                       §6.5.5
+#            <== ACK
+#   … 27 seconds of audio …
+#            <== VOICE (µ-law), LAGRQ ×3, PING, DTMF '3'
+#   HANGUP   ==>                                        §6.2.5
+#            <== ACK
+#
+# Four things a hand-built fixture would not have taught us, all of which the
+# replay test now pins:
+#
+#  * **The node's CONTROL 0xff.** Subclass octet `0xff` is not in the §8.3
+#    table. Our client ACKed it and answered UNSUPPORT (§6.5.5) rather than
+#    treating the call as broken, which is the behaviour the test asserts. Note
+#    the octet has its high bit set, so §8.1.1's power-of-two rule reads it as
+#    2^127 — an unassigned control either way.
+#  * **The node encodes the media format literally, we encode it as a power of
+#    two.** Its VOICE frames carry subclass octet `0x04`; ours carry `0x82`,
+#    meaning 2^2. §8.1.1 permits both and §8.7 fixes µ-law at `0x00000004`, so
+#    a parser that handles only one encoding passes a self-built fixture and
+#    fails against this node.
+#  * **An unassigned frame type arrives mid-call.** The frame at index 1010 has
+#    frame type `0x0c`, which §8.2 does not define. It is ACKed like any other
+#    full frame and does not disturb the sequence numbering.
+#  * **The node ACKs first and answers second**, as two frames, on every
+#    request — never letting the answer double as the acknowledgement.
+#
+# Our source call number was 1 here, which is what the allocator hands out
+# first, so the replay test's own call answers to the same number the capture
+# does and every octet below is injected exactly as captured.
+#
+# Machine-generated. The captures themselves are not in the repository —
+# they are the maintainer's own, and large. Regenerate with:
+#   scripts/pcap-to-fixture.py connect3.pcap --stream 0 --dir in --full-frames-only
+# Capture SHA-256: c9a1cbd6a973a94720086b3f22d6d996544693056db5c827f07533b873e6000d
+#
+# Each datagram is the UDP payload verbatim — the octets RFC 5456 §5
+# defines as an IAX2 frame. `[n]` is the datagram's index in the capture
+# stream, so a gap in the indices is a datagram deliberately left out.
+
+# [1] 0.003s <== full  15069->1     ts          8 O  0 I  1  ACK    0B
+badd 0001 00000008 00 01 06 04
+# [2] 0.004s <== full  15069->1     ts         11 O  0 I  1  AUTHREQ   24B
+badd 0001 0000000b 00 01 06 08 0e020002 0f09313836313338313238 06076f713574657374
+# [5] 0.005s <== full  15069->1     ts          5 O  1 I  2  ACK    0B
+badd 0001 00000005 01 02 06 04
+# [6] 0.006s <== full  15069->1     ts         14 O  1 I  2  ACCEPT   17B
+badd 0001 0000000e 01 02 06 07 090400000004 3809000000000000000004
+# [8] 0.015s <== full  15069->1     ts         17 O  2 I  2  CONTROL ANSWER    0B
+badd 0001 00000011 02 02 04 04
+# [9] 0.015s <== full  15069->1     ts         20 O  3 I  2  CONTROL 2^127    0B
+badd 0001 00000014 03 02 04 ff
+# [13] 0.018s <== full  15069->1     ts         17 O  4 I  3  ACK    0B
+badd 0001 00000011 04 03 06 04
+# [19] 2.922s <== full  15069->1     ts       2922 O  4 I  4  ACK    0B
+badd 0001 00000b6a 04 04 06 04
+# [20] 2.962s <== full  15069->1     ts       2980 O  4 I  4  VOICE fmt 4  160B
+badd 0001 00000ba4 04 04 02 04 7b7b7c7c7c7c7b7b7c7c7d7d7d7d7d7d7d7d7c7a7a7a7a7a7a7a7a7b7c7c7d7e7d7c7e7e7e7e7e7e7e7d7d7c7d7d7d7d7efffffffffefefdfdfefefefefefdfcfdfdfdfdfdfcfcfcfdfdfdfdfdfcfcfdfcfcfcfdfefdfcfdfdfefefefeffff7f7e7e7e7f7f7ffffefefefefefefe7f7e7efefeff7f7fff7f7e7e7e7e7e7e7e7e7e7e7e7e7e7e7fffff7e7e7f7f7e7e7e7d7e7ffffefdfdfefffffefefefefffe
+# [581] 10.006s <== full  15069->1     ts      10056 O  5 I  4  LAGRQ    0B
+badd 0001 00002748 05 04 06 0b
+# [584] 10.007s <== full  15069->1     ts      10056 O  6 I  5  ACK    0B
+badd 0001 00002748 06 05 06 04
+# [1009] 18.318s <== full  15069->1     ts      18318 O  6 I  6  ACK    0B
+badd 0001 0000478e 06 06 06 04
+# [1010] 18.444s <== full  15069->1     ts      18491 O  6 I  6  12 51    0B
+badd 0001 0000483b 06 06 0c 33
+# [1012] 18.540s <== full  15069->1     ts      18494 O  7 I  6  DTMF '3'    0B
+badd 0001 0000483e 07 06 01 33
+# [1014] 20.005s <== full  15069->1     ts      20057 O  8 I  6  LAGRQ    0B
+badd 0001 00004e59 08 06 06 0b
+# [1017] 20.007s <== full  15069->1     ts      20057 O  9 I  7  ACK    0B
+badd 0001 00004e59 09 07 06 04
+# [1018] 21.005s <== full  15069->1     ts      21056 O  9 I  7  PING    0B
+badd 0001 00005240 09 07 06 02
+# [1021] 21.006s <== full  15069->1     ts      21056 O 10 I  8  ACK    0B
+badd 0001 00005240 0a 08 06 04
+# [1022] 30.006s <== full  15069->1     ts      30057 O 10 I  8  LAGRQ    0B
+badd 0001 00007569 0a 08 06 0b
+# [1025] 30.008s <== full  15069->1     ts      30057 O 11 I  9  ACK    0B
+badd 0001 00007569 0b 09 06 04
+# [1031] 32.826s <== full  15069->1     ts      32776 O 11 I 10  ACK    0B
+badd 0001 00008008 0b 0a 06 04
+# [1178] 36.730s <== full  15069->1     ts      36704 O 11 I 11  ACK    0B
+badd 0001 00008f60 0b 0b 06 04
