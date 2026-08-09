@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import AVFoundation
 import XCTest
 @testable import RadioCore
 
@@ -271,6 +272,174 @@ final class PCMFormatConverterTests: XCTestCase {
     }
 }
 
+// MARK: - PlaybackChain (Defect 1 regression surface)
+
+/// Pins down the playback path's *format decision* — the thing that was wrong
+/// in the original RC-7 implementation and that no test could see, because the
+/// decision was smeared across `startCapture` (which rebuilt the shared
+/// converter from the **input** device) and `enqueuePlayback` (which took its
+/// buffer format from the **main mixer**). On a machine with a 48 kHz input
+/// and a 44.1 kHz stereo output, 20 ms of speech was generated at 48 kHz and
+/// scheduled as if it were 44.1 kHz — 8.8 % slow, ~1.5 semitones flat — with
+/// the right channel allocated and never written.
+///
+/// `PlaybackChain` is `AVAudioConverter`/`AVAudioPCMBuffer`/`AVAudioFormat`
+/// only: offline format conversion, no `AVAudioEngine`, no microphone, no
+/// speaker, no `AVAudioSession`, no permission. Safe headless.
+final class PlaybackChainTests: XCTestCase {
+    private let wireSampleRate = 8_000.0
+    private let wireFrameSize = AudioPipeline.captureFrameSize // 160 = 20 ms @ 8 kHz
+    private let frameDuration = 0.020
+
+    /// Plausible hardware output rates a real device might report.
+    private let deviceRates: [Double] = [8_000, 16_000, 22_050, 32_000, 44_100, 48_000, 88_200, 96_000, 192_000]
+
+    private func tone(count: Int) -> [Int16] {
+        let w = 2 * Double.pi * 440 / wireSampleRate
+        return (0..<count).map { Int16(0.4 * Double(Int16.max) * sin(w * Double($0))) }
+    }
+
+    // MARK: The rate decision itself
+
+    func testEngineSampleRateFollowsTheOutputDevice() {
+        for rate in deviceRates {
+            XCTAssertEqual(
+                PlaybackChain.engineSampleRate(forOutputSampleRate: rate), rate,
+                "a plausible output rate must be used as-is, not replaced by a default"
+            )
+        }
+    }
+
+    func testEngineSampleRateFallsBackWhenTheOutputRateIsUnusable() {
+        // 0 Hz is what a headless machine with no output device reports; the
+        // rest are defensive.
+        let unusable: [Double] = [0, -1, -48_000, 1, 7_999, 384_001, 1e9, .nan, .infinity, -.infinity]
+        for rate in unusable {
+            XCTAssertEqual(
+                PlaybackChain.engineSampleRate(forOutputSampleRate: rate),
+                PlaybackChain.fallbackSampleRate,
+                "unusable output rate \(rate) must fall back to the AU-1 default"
+            )
+        }
+    }
+
+    // MARK: Buffer format
+
+    func testBufferIsAlwaysMonoAtTheChainRate() throws {
+        for rate in deviceRates {
+            let chain = try XCTUnwrap(PlaybackChain(outputSampleRate: rate, wireSampleRate: wireSampleRate))
+            XCTAssertEqual(chain.sampleRate, rate)
+            XCTAssertEqual(chain.format.channelCount, 1, "playback format must be mono at \(rate) Hz")
+
+            let buffer = try XCTUnwrap(chain.makeBuffer(wirePCM: tone(count: wireFrameSize)))
+            XCTAssertEqual(buffer.format.sampleRate, rate, "buffer declared at the wrong rate for a \(rate) Hz device")
+            XCTAssertEqual(buffer.format.channelCount, 1, "a stereo buffer leaves channel 1 silent — see Defect 1")
+            XCTAssertEqual(buffer.format.commonFormat, .pcmFormatFloat32)
+            XCTAssertNotNil(buffer.floatChannelData)
+        }
+    }
+
+    /// **This is the test that would have caught Defect 1.**
+    ///
+    /// For every combination of an input-device rate and an output-device rate
+    /// — including the 48 kHz mic / 44.1 kHz output mismatch the reviewer
+    /// reproduced — build the capture converter exactly as `startCapture`
+    /// does, then assert that the playback buffer is mono and declared at the
+    /// **output** rate, and that its length corresponds to the intended 20 ms
+    /// *at that declared rate*. The old code failed both halves: the samples
+    /// came from the input-derived converter and the format came from the
+    /// stereo mixer.
+    func testPlaybackBufferIgnoresTheCaptureRateAndMatchesTheOutputDevice() throws {
+        let inputRates: [Double] = [44_100, 48_000, 96_000, 16_000]
+        let outputRates: [Double] = [44_100, 48_000, 96_000, 16_000]
+
+        for inputRate in inputRates {
+            for outputRate in outputRates {
+                // What startCapture builds for the microphone. It must have no
+                // influence whatsoever on the playback buffer below.
+                let captureConverter = try XCTUnwrap(
+                    PCMFormatConverter(sourceSampleRate: inputRate, wireSampleRate: wireSampleRate)
+                )
+                XCTAssertEqual(captureConverter.sourceSampleRate, inputRate)
+
+                let chain = try XCTUnwrap(
+                    PlaybackChain(outputSampleRate: outputRate, wireSampleRate: wireSampleRate)
+                )
+                let context = "input \(inputRate) Hz / output \(outputRate) Hz"
+
+                XCTAssertEqual(chain.sampleRate, outputRate, "playback rate followed the input device — \(context)")
+                XCTAssertEqual(chain.format.channelCount, 1, "playback format was not mono — \(context)")
+
+                // Steady state: prime the resampler, then measure. The
+                // interesting quantity is wall-clock duration as the *buffer's
+                // own declared rate* implies it. A buffer generated at 48 kHz
+                // but declared 44.1 kHz reads 8.8 % long here; the tolerance
+                // below is far tighter than that.
+                _ = chain.makeBuffer(wirePCM: tone(count: wireFrameSize))
+                var producedFrames = 0
+                let frameCount = 50
+                for _ in 0..<frameCount {
+                    let buffer = try XCTUnwrap(chain.makeBuffer(wirePCM: tone(count: wireFrameSize)))
+                    XCTAssertEqual(buffer.format.sampleRate, outputRate, "buffer rate ≠ output rate — \(context)")
+                    XCTAssertEqual(buffer.format.channelCount, 1, "buffer was not mono — \(context)")
+                    producedFrames += Int(buffer.frameLength)
+                }
+
+                let producedDuration = Double(producedFrames) / chain.sampleRate
+                let intendedDuration = Double(frameCount) * frameDuration
+                XCTAssertEqual(
+                    producedDuration, intendedDuration, accuracy: 0.005,
+                    "playback of \(intendedDuration) s of wire audio came out as \(producedDuration) s — \(context)"
+                )
+            }
+        }
+    }
+
+    // MARK: Frame counts
+
+    func testOneWireFrameProducesApproximatelyOneFrameOfPlayback() throws {
+        for rate in deviceRates {
+            let chain = try XCTUnwrap(PlaybackChain(outputSampleRate: rate, wireSampleRate: wireSampleRate))
+            let expected = rate * frameDuration
+
+            let first = try XCTUnwrap(chain.makeBuffer(wirePCM: tone(count: wireFrameSize)))
+            // The first buffer may be short by the resampler's filter latency;
+            // it must never be *long*, and never collapse to a fragment.
+            XCTAssertGreaterThan(Double(first.frameLength), expected * 0.7, "first frame too short at \(rate) Hz")
+            XCTAssertLessThanOrEqual(Double(first.frameLength), expected * 1.05, "first frame too long at \(rate) Hz")
+
+            // After priming, each 20 ms wire frame yields 20 ms of playback.
+            let steady = try XCTUnwrap(chain.makeBuffer(wirePCM: tone(count: wireFrameSize)))
+            XCTAssertEqual(
+                Double(steady.frameLength) / rate, frameDuration, accuracy: 0.002,
+                "steady-state frame was \(steady.frameLength) samples at \(rate) Hz, expected ≈ \(expected)"
+            )
+        }
+    }
+
+    func testFrameCapacityMatchesFrameLength() throws {
+        let chain = try XCTUnwrap(PlaybackChain(outputSampleRate: 44_100, wireSampleRate: wireSampleRate))
+        let buffer = try XCTUnwrap(chain.makeBuffer(wirePCM: tone(count: wireFrameSize)))
+        XCTAssertEqual(buffer.frameLength, buffer.frameCapacity, "no unwritten frames may be left in the buffer")
+    }
+
+    func testEmptyWirePCMProducesNoBuffer() throws {
+        let chain = try XCTUnwrap(PlaybackChain(outputSampleRate: 48_000, wireSampleRate: wireSampleRate))
+        XCTAssertNil(chain.makeBuffer(wirePCM: []))
+    }
+
+    func testUnusableOutputRateStillYieldsAWorkingChain() throws {
+        // A headless machine reports 0 Hz; playback must still be constructible
+        // and produce a mono 48 kHz buffer rather than failing or producing a
+        // 0 Hz format.
+        let chain = try XCTUnwrap(PlaybackChain(outputSampleRate: 0, wireSampleRate: wireSampleRate))
+        XCTAssertEqual(chain.sampleRate, PlaybackChain.fallbackSampleRate)
+        let buffer = try XCTUnwrap(chain.makeBuffer(wirePCM: tone(count: wireFrameSize)))
+        XCTAssertEqual(buffer.format.sampleRate, PlaybackChain.fallbackSampleRate)
+        XCTAssertEqual(buffer.format.channelCount, 1)
+    }
+}
+
 // MARK: - AudioPipeline construction
 
 /// `AudioPipeline.init()` attaches nodes to an `AVAudioEngine` graph but does
@@ -289,6 +458,29 @@ final class AudioPipelineConstructionTests: XCTestCase {
     func testStopIsSafeBeforeStart() {
         let pipeline = AudioPipeline()
         pipeline.stop() // must not crash even though capture/playback never started
+    }
+
+    /// Closes the gap between "the format decision is right" and "the graph
+    /// uses it": the player node must be connected with exactly the format
+    /// playback buffers are built in, and that format must be mono.
+    ///
+    /// Attaching and connecting nodes does not start the engine or open a
+    /// device, so this needs no hardware. It is the assertion that fails
+    /// loudest if anyone reintroduces `format: nil` on the player→mixer
+    /// connection (which adopts the mixer's stereo format and leaves the
+    /// right channel silent).
+    func testPlayerNodeIsConnectedWithTheMonoPlaybackBufferFormat() {
+        let pipeline = AudioPipeline()
+        let bufferFormat = pipeline.playbackBufferFormat
+        let connectionFormat = pipeline.playbackConnectionFormat
+
+        XCTAssertEqual(bufferFormat.channelCount, 1, "playback buffers must be mono")
+        XCTAssertEqual(connectionFormat.channelCount, 1, "player node must be connected as mono")
+        XCTAssertEqual(
+            connectionFormat.sampleRate, bufferFormat.sampleRate,
+            "buffers would be scheduled at a rate the connection does not expect"
+        )
+        XCTAssertGreaterThanOrEqual(bufferFormat.sampleRate, PlaybackChain.minimumSampleRate)
     }
 
     func testSignalsStreamFinishesOnDeinit() async {

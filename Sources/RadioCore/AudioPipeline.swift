@@ -247,19 +247,153 @@ private protocol ConversionSample {
 extension Float: ConversionSample { fileprivate typealias OutputElement = Int16 }
 extension Int16: ConversionSample { fileprivate typealias OutputElement = Float }
 
+// MARK: - Playback format decision (pure, directly testable — AU-5)
+
+/// The playback half of the pipeline: the wire→engine `PCMFormatConverter`
+/// and the `AVAudioFormat` that the buffers handed to the player node are
+/// declared in, constructed **together from one chosen sample rate** so the
+/// two can never disagree.
+///
+/// ### Why this type exists
+///
+/// The original RC-7 implementation upsampled with a converter whose rate had
+/// been rebuilt from the *input* device in `startCapture`, then wrapped the
+/// resulting mono samples in a buffer whose format came from the *main mixer*
+/// (`playerNode.outputFormat(forBus: 0)`). On any machine where the two
+/// devices disagree — a 48 kHz microphone with a 44.1 kHz output, which is an
+/// ordinary Mac configuration — 20 ms of speech was generated at one rate and
+/// then played back at another: 8.8 % slow, roughly 1.5 semitones flat. Worse,
+/// the mixer's format is stereo, so channel 1 was allocated and never written
+/// and the right channel was silent. And because the converter was only ever
+/// rebuilt by `startCapture`, whether any of this happened depended on
+/// call order and on which devices the user happened to have — it works on the
+/// developer's machine and fails on someone else's.
+///
+/// Input rate and output rate are independent facts about two independent
+/// devices. This type makes that structural: only the output side can
+/// influence playback, the buffer format is the converter's own format by
+/// construction, and the rate decision is a pure function that unit tests pin
+/// down for every (input rate, output rate) pair without any hardware.
+struct PlaybackChain {
+    /// Engine-side rate used when the output device's reported rate is not
+    /// usable — a headless CI machine with no output device reports 0 Hz.
+    /// 48 kHz per AU-1.
+    static let fallbackSampleRate: Double = 48_000
+    /// Bounds for believing a rate the output node reports. Anything outside
+    /// this (0, negative, NaN, infinity, absurdly high) is a "we don't know"
+    /// answer, not a rate.
+    static let minimumSampleRate: Double = 8_000
+    static let maximumSampleRate: Double = 384_000
+
+    /// The format every playback buffer is declared in: **mono** Float32 at
+    /// ``sampleRate``. Mono is deliberate — the wire is mono, so writing one
+    /// channel and letting `AVAudioMixerNode` fan it out to however many
+    /// channels the hardware has is the only way to avoid silent channels.
+    let format: AVAudioFormat
+    private let converter: PCMFormatConverter
+
+    var sampleRate: Double { format.sampleRate }
+    var wireSampleRate: Double { converter.wireSampleRate }
+
+    /// Chooses the engine-side playback rate from whatever the output node
+    /// reports, falling back to ``fallbackSampleRate`` for any rate that is
+    /// not a plausible hardware rate.
+    ///
+    /// Pure, total, and hardware-free on purpose: this is the decision that
+    /// Defect 1 got wrong, so it is the decision that gets a unit test.
+    static func engineSampleRate(forOutputSampleRate rate: Double) -> Double {
+        guard rate.isFinite, rate >= minimumSampleRate, rate <= maximumSampleRate else {
+            return fallbackSampleRate
+        }
+        return rate
+    }
+
+    /// - Parameters:
+    ///   - outputSampleRate: the rate reported by the engine's output node.
+    ///     Sanitised through ``engineSampleRate(forOutputSampleRate:)``, so
+    ///     any value at all is accepted.
+    ///   - wireSampleRate: network/codec-side rate (8 kHz for every codec in
+    ///     scope).
+    /// - Returns: `nil` only if `AVAudioFormat`/`AVAudioConverter` reject the
+    ///   chosen pair of formats.
+    init?(outputSampleRate: Double, wireSampleRate: Double = 8_000) {
+        let rate = Self.engineSampleRate(forOutputSampleRate: outputSampleRate)
+        guard
+            let format = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: rate,
+                channels: 1,
+                interleaved: false
+            ),
+            let converter = PCMFormatConverter(sourceSampleRate: rate, wireSampleRate: wireSampleRate)
+        else { return nil }
+
+        self.format = format
+        self.converter = converter
+    }
+
+    /// Converts one frame of wire-side Int16 PCM up to the engine-side rate
+    /// and wraps it in a buffer declared in exactly ``format`` — the same
+    /// format the samples were just produced at, and the same format the
+    /// player node is connected with.
+    ///
+    /// Returns `nil` for empty input or if the converter produced nothing.
+    ///
+    /// Not thread-safe: `AVAudioConverter` is stateful, so callers must
+    /// serialise calls (``AudioPipeline`` does this under its lock, off the
+    /// render thread).
+    func makeBuffer(wirePCM: [Int16]) -> AVAudioPCMBuffer? {
+        guard !wirePCM.isEmpty else { return nil }
+        let samples = converter.upsample(wirePCM)
+        guard !samples.isEmpty else { return nil }
+        guard
+            let buffer = AVAudioPCMBuffer(
+                pcmFormat: format,
+                frameCapacity: AVAudioFrameCount(samples.count)
+            ),
+            let channel = buffer.floatChannelData
+        else { return nil }
+
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { src in
+            channel[0].update(from: src.baseAddress!, count: samples.count)
+        }
+        return buffer
+    }
+}
+
+// MARK: - Capture tap state
+
+/// Mutable state owned **solely** by one installed microphone tap.
+///
+/// `AVAudioEngine` delivers tap buffers serially on a real-time audio thread.
+/// A fresh instance is created per `startCapture` and captured by that call's
+/// tap closure and by nothing else, so the chunker it holds is only ever
+/// touched from that one thread — no lock is taken on the render thread, and
+/// no other thread can observe or mutate it. `stop()` removes the tap; the
+/// closure (and this box with it) is then released by `AVAudioEngine`.
+private final class CaptureTapState {
+    var chunker: AudioFrameChunker
+
+    init(frameSize: Int) {
+        self.chunker = AudioFrameChunker(frameSize: frameSize)
+    }
+}
+
 // MARK: - AudioPipeline
 
 /// Wraps `AVAudioEngine` + `AVAudioConverter` for the capture/playback path
 /// (AU-1, AU-2).
 ///
 /// Everything that can be unit-tested without a microphone, a speaker, or
-/// audio hardware permission lives in ``AudioFrameChunker`` and
-/// ``PCMFormatConverter`` above — pure value types with no dependency on a
-/// running `AVAudioEngine`. This class is the wiring that connects them to
-/// real hardware, and is deliberately *not* unit-tested here: RC-7's done
-/// criterion is that this file builds for macOS and iOS, and that those two
-/// pure pieces have direct tests. The engine wiring itself gets its first
-/// real exercise from a human on real hardware via CLI-1.
+/// audio hardware permission lives in ``AudioFrameChunker``,
+/// ``PCMFormatConverter`` and ``PlaybackChain`` above — value types with no
+/// dependency on a running `AVAudioEngine`. This class is the wiring that
+/// connects them to real hardware. Keeping the *decisions* (what rate, how
+/// many channels, how many frames) in those types and leaving only
+/// `attach`/`connect`/`installTap`/`scheduleBuffer` here is what makes the
+/// untestable part small: what remains for CLI-1 to check on real hardware is
+/// whether audio flows at all, not whether the formats are right.
 ///
 /// ### SF-3 — interruption must drop transmit
 ///
@@ -270,6 +404,25 @@ extension Int16: ConversionSample { fileprivate typealias OutputElement = Float 
 /// stop any in-progress transmit on every event it yields.** Not doing so is
 /// exactly the "stuck open microphone" failure mode DESIGN-REQUIREMENTS.md §7
 /// calls out as the dominant on-air failure for software clients.
+///
+/// ### Concurrency
+///
+/// `@unchecked Sendable` here is backed by an actual design, not by hope:
+///
+/// * The microphone tap closure touches **only** values captured at
+///   `installTap` time (an immutable `PCMFormatConverter` built for that one
+///   capture session, and the caller's `onFrame`) plus a private
+///   ``CaptureTapState`` box created for that one tap. It does not capture
+///   `self`, does not read or write any property of this class, and never
+///   takes a lock — taking a contended lock on a real-time audio thread would
+///   be a bug in its own right.
+/// * Everything on the caller's side — the engine graph, `isCapturing` — is
+///   mutated only under ``lock``, which the render thread never touches.
+/// * ``playback`` and ``signals`` are `let`s established in `init`.
+///
+/// Public methods (`startCapture`, `enqueuePlayback`, `stop`) may therefore be
+/// called from any thread, but **must not** be called from an audio render
+/// callback, since they take the lock and allocate.
 public final class AudioPipeline: @unchecked Sendable {
     /// Fixed capture frame size: 160 samples = 20 ms at 8 kHz. Matches
     /// `G711MuLawCodec.samplesPerFrame` and `JitterBuffer`'s `frameDuration`
@@ -279,15 +432,35 @@ public final class AudioPipeline: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
 
-    /// Rebuilt by `startCapture` once the input node's actual native format
-    /// is known; a default (48 kHz assumption) is installed at `init` so
-    /// `enqueuePlayback` also works in a receive-only session that never
-    /// calls `startCapture`.
-    private var converter: PCMFormatConverter
-    private var chunker = AudioFrameChunker(frameSize: AudioPipeline.captureFrameSize)
-    private var onFrame: (([Int16]) -> Void)?
+    /// Wire→engine conversion and buffer format for the playback path,
+    /// derived from the **output** device only (see ``PlaybackChain``).
+    ///
+    /// Immutable for the pipeline's lifetime: the player→mixer connection is
+    /// made once, in `init`, with `playback.format`, and `AVAudioMixerNode`
+    /// converts from there to whatever the hardware currently wants —
+    /// including after a route change, which is why nothing here needs
+    /// rebuilding when the route changes. Capture deliberately does *not*
+    /// share this: the input device's rate is a fact about a different piece
+    /// of hardware.
+    private let playback: PlaybackChain
+
+    /// Serialises caller-side state and engine-graph mutations.
+    ///
+    /// **Never acquired from the real-time audio thread.** The tap closure is
+    /// built to need nothing this lock protects; see the type-level
+    /// concurrency note.
+    private let lock = NSLock()
+
+    /// Guarded by ``lock``. Tracks whether a tap is installed, so `stop()` is
+    /// idempotent and a second `startCapture` cannot install a second tap on
+    /// a bus that already has one.
+    private var isCapturing = false
 
     private let signalContinuation: AsyncStream<AudioSessionSignal>.Continuation
+
+    /// Written only during `init` (by `observeSignals`) and read only during
+    /// `deinit`. Neither point can overlap with another thread's access to
+    /// this instance, so it needs no lock.
     private var notificationTokens: [NSObjectProtocol] = []
 
     /// SF-3 signal stream — see the type-level documentation. Finishes when
@@ -299,16 +472,25 @@ public final class AudioPipeline: @unchecked Sendable {
         self.signals = AsyncStream { continuation = $0 }
         self.signalContinuation = continuation
 
-        guard let converter = PCMFormatConverter() else {
-            // Only reachable if AVAudioConverter rejects the fixed 48k/8k
-            // formats this package always requests, which does not happen
-            // on any Apple platform this package targets.
-            preconditionFailure("AudioPipeline: default PCM formats must always construct a converter")
+        // Ask the output node — not the input node, and not the main mixer's
+        // channel layout — what rate playback should run at.
+        let outputSampleRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
+        guard let playback = PlaybackChain(outputSampleRate: outputSampleRate) else {
+            // Unreachable: PlaybackChain sanitises the rate to 48 kHz when the
+            // hardware's answer is unusable, and AVAudioConverter does not
+            // reject mono 48k/8k Float32↔Int16 on any platform this package
+            // targets.
+            preconditionFailure("AudioPipeline: playback formats must always construct a converter")
         }
-        self.converter = converter
+        self.playback = playback
 
         engine.attach(playerNode)
-        engine.connect(playerNode, to: engine.mainMixerNode, format: nil)
+        // Explicit mono format: the player node speaks exactly the format the
+        // playback buffers are built in, and the mixer does the rate and
+        // channel conversion to the hardware. Passing `nil` here would adopt
+        // the mixer's (typically stereo) format and leave every channel but
+        // the first unwritten.
+        engine.connect(playerNode, to: engine.mainMixerNode, format: playback.format)
 
         observeSignals()
     }
@@ -331,56 +513,81 @@ public final class AudioPipeline: @unchecked Sendable {
     /// buffers on (a real-time audio thread) — callers must hop off it before
     /// doing anything that can block or allocate unpredictably (network I/O,
     /// UI updates).
+    ///
+    /// The tap owns everything it needs: a converter built for this capture
+    /// session's input rate and a private chunker. Nothing it touches is
+    /// reachable from any other thread, so it takes no lock (see the
+    /// type-level concurrency note), and `onFrame` cannot be swapped out from
+    /// under a call in progress — `stop()` removes the tap, which is what ends
+    /// delivery.
     public func startCapture(onFrame: @escaping ([Int16]) -> Void) throws {
-        self.onFrame = onFrame
-        chunker = AudioFrameChunker(frameSize: Self.captureFrameSize)
-
         let inputNode = engine.inputNode
         let hardwareFormat = inputNode.outputFormat(forBus: 0)
-        if hardwareFormat.sampleRate != converter.sourceSampleRate {
-            guard let rebuilt = PCMFormatConverter(sourceSampleRate: hardwareFormat.sampleRate) else {
-                throw AudioPipelineError.converterUnavailable
-            }
-            converter = rebuilt
-        }
-        let converter = self.converter
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: hardwareFormat) { [weak self] buffer, _ in
-            guard let self else { return }
+        // A converter per capture session, owned by this session's tap alone.
+        // Its rate comes from the input device and is never allowed to reach
+        // the playback path (Defect 1) — and because it is never shared, the
+        // stateful `AVAudioConverter` inside it is only ever driven from the
+        // one thread that drives this tap (Defect 2).
+        guard let captureConverter = PCMFormatConverter(sourceSampleRate: hardwareFormat.sampleRate) else {
+            throw AudioPipelineError.converterUnavailable
+        }
+        let tapState = CaptureTapState(frameSize: Self.captureFrameSize)
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        // Installing a second tap on a bus that already has one is a hard
+        // error in AVAudioEngine; make a repeated startCapture mean "restart".
+        if isCapturing {
+            inputNode.removeTap(onBus: 0)
+            isCapturing = false
+        }
+
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: hardwareFormat) { buffer, _ in
             let samples = Self.floatSamples(from: buffer)
             guard !samples.isEmpty else { return }
-            let wirePCM = converter.downsample(samples)
-            let frames = self.chunker.push(wirePCM)
-            for frame in frames {
-                self.onFrame?(frame)
+            let wirePCM = captureConverter.downsample(samples)
+            for frame in tapState.chunker.push(wirePCM) {
+                onFrame(frame)
             }
         }
+        isCapturing = true
 
-        if !engine.isRunning {
-            try engine.start()
+        do {
+            if !engine.isRunning {
+                try engine.start()
+            }
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            isCapturing = false
+            throw error
         }
     }
 
     // MARK: - Playback
 
     /// Enqueues one frame of wire-side 8 kHz Int16 PCM for playback,
-    /// converting it up to the engine's Float32 working format and
+    /// converting it up to the playback chain's mono Float32 format and
     /// scheduling it on the player node.
+    ///
+    /// The buffer is built in ``PlaybackChain/format`` — the same format the
+    /// samples were produced at and the same format the player node is
+    /// connected with — so the mixer, not this method, is what adapts to the
+    /// output device's rate and channel count.
+    ///
+    /// Call from an ordinary thread (typically the jitter buffer's drain
+    /// task), **not** from an audio render callback: this takes a lock and
+    /// allocates.
     public func enqueuePlayback(_ pcm: [Int16]) {
         guard !pcm.isEmpty else { return }
-        let floatSamples = converter.upsample(pcm)
-        guard !floatSamples.isEmpty else { return }
 
-        let outputFormat = playerNode.outputFormat(forBus: 0)
-        guard let buffer = AVAudioPCMBuffer(
-            pcmFormat: outputFormat,
-            frameCapacity: AVAudioFrameCount(floatSamples.count)
-        ) else { return }
-        buffer.frameLength = buffer.frameCapacity
-        guard let channel = buffer.floatChannelData else { return }
-        floatSamples.withUnsafeBufferPointer { src in
-            channel[0].update(from: src.baseAddress!, count: floatSamples.count)
-        }
+        lock.lock()
+        defer { lock.unlock() }
+
+        // Under the lock: `PlaybackChain` wraps a stateful AVAudioConverter,
+        // so concurrent callers must not drive it at the same time.
+        guard let buffer = playback.makeBuffer(wirePCM: pcm) else { return }
 
         if !engine.isRunning {
             try? engine.start()
@@ -394,10 +601,19 @@ public final class AudioPipeline: @unchecked Sendable {
     // MARK: - Stop
 
     /// Stops capture and playback and tears down the tap. Safe to call more
-    /// than once.
+    /// than once, and safe to call before ever starting.
     public func stop() {
-        engine.inputNode.removeTap(onBus: 0)
-        onFrame = nil
+        lock.lock()
+        defer { lock.unlock() }
+
+        if isCapturing {
+            // Only touch the input node if we actually opened it: reaching for
+            // `engine.inputNode` instantiates the input audio unit, which is
+            // pointless (and on iOS, permission-adjacent) in a receive-only or
+            // never-started session.
+            engine.inputNode.removeTap(onBus: 0)
+            isCapturing = false
+        }
         playerNode.stop()
         if engine.isRunning {
             engine.stop()
@@ -473,6 +689,21 @@ public final class AudioPipeline: @unchecked Sendable {
         try session.setActive(true)
     }
     #endif
+
+    // MARK: - Test hooks (AU-5)
+
+    /// The format every playback buffer is built in.
+    ///
+    /// Internal, read-only, and free of hardware: exists so tests can assert
+    /// that the graph the pipeline actually wires up agrees with the format
+    /// decision ``PlaybackChain`` made, which is precisely where Defect 1
+    /// lived.
+    var playbackBufferFormat: AVAudioFormat { playback.format }
+
+    /// The format the player node is actually connected to the mixer with.
+    /// Must equal ``playbackBufferFormat`` — a buffer scheduled in a format
+    /// other than its connection's is the bug this pair of hooks guards.
+    var playbackConnectionFormat: AVAudioFormat { playerNode.outputFormat(forBus: 0) }
 
     // MARK: - Helpers
 
