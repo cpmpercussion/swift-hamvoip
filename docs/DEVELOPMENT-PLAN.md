@@ -45,7 +45,27 @@ do not improvise a different design.
    target, test target and resource directory later tasks need already
    exists. Tasks that do need a manifest change: CLI-1 (executable target),
    M17-4 (codec2 shim target).
-10. **Shared test helpers live in `Tests/TestSupport/`** (target `TestSupport`,
+10. **Actor reentrancy: never infer "is an operation in flight?" from mutable
+   state.** This cost a real hang in M17-3. `connect()` awaited
+   `transport.send`, and an actor is reentrant across an await, so the receive
+   loop handled the reply *before* `connect()` parked its continuation. The
+   reply handler set `state = .linked` and then delivered the outcome, but the
+   delivery path only stashed an early result while `state == .connecting` — so
+   the success was dropped and `connect()` waited forever. It reproduced in
+   about 4% of whole-suite runs and never once in 60 runs of that class alone.
+
+   Two patterns that are safe, both in the codebase now:
+   - Track the in-flight operation with its own dedicated flag, independent of
+     any state the completion path mutates (`M17ReflectorClient`).
+   - Re-check the terminal conditions and park the continuation in the **same
+     actor-isolated synchronous region**, with no await between the check and
+     the park, so no interleaving is possible (`IAX2Call.waitUntilUp()`).
+
+   When you write a continuation-parking API, add a test that delivers the
+   completion from *inside* the awaited call. See
+   `testConnectReturnsWhenAcknIsProcessedDuringSend`. A test that only exercises
+   the common ordering will not find this.
+11. **Shared test helpers live in `Tests/TestSupport/`** (target `TestSupport`,
    depended on by all three test targets, deliberately not a product). Put
    anything more than one test target needs there — `FixtureLoader` is
    already in place; `MockTransport` joins it in RC-1.
