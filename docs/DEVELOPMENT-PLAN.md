@@ -476,6 +476,15 @@ transmit PCM frames; `AudioPipeline` is attached by the app layer, not here.
 Covers FR-1.2 (direct); registered-node/Web-Transceiver REGREQ flow
 (FR-1.3) is a follow-up subtask IAX-8b using the same fixture pattern.
 
+⚠️ **Two things IAX-6 deliberately left for you:**
+1. **VNAK is not sent** when a mini frame arrives before the codec is pinned,
+   though §6.9.3 says one should be. VNAK is a sequenced full frame that only
+   `ReliableChannel` may emit, and IAX-6 was not permitted to touch it — the
+   frame is dropped and reported as `.codecNotPinned` instead. You own both
+   sides of that seam, so wire it up if you agree it is worth it.
+2. IAX-6/7 have no clock: **IAX-8 supplies the 20 ms playout tick** and pumps
+   `call.events` into `IAX2VoiceStream.handle(_:)`.
+
 **Done when:** end-to-end test: scripted fixture session connects,
 transmits 1 s of synthetic tone (asserting emitted datagram shapes),
 receives fixture voice datagrams and yields decoded PCM; watchdog expiry
