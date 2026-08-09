@@ -1,0 +1,15 @@
+# Hand-built IE block (RFC 5456 §8.6) for a realistic NEW full-frame payload.
+# This is the payload block only (12-byte full-frame header is IAX-1's
+# concern, not this parser's) -- five IEs back to back, VERSION first as
+# §8.6.10 requires on NEW ("MUST include the 'version' IE, and it MUST be
+# the first IE; the order of other IEs is unspecified").
+#
+# Field-by-field:
+#   0b 02 0002              -- §8.6.10 VERSION (0x0b): len 2, value 0x0002
+#   01 05 3535353533        -- §8.6.1 CALLED_NUMBER (0x01): len 5, ASCII "55553"
+#   06 06 4b4331414243      -- §8.6.6 USERNAME (0x06): len 6, ASCII "KC1ABC"
+#   08 04 00000006          -- §8.6.7/§8.7 CAPABILITY (0x08): len 4, bitmask
+#                               0x00000006 = GSM Full Rate (1<<1) | G.711 mu-law (1<<2)
+#   09 04 00000004          -- §8.6.8/§8.7 FORMAT (0x09): len 4, single bit
+#                               0x00000004 = G.711 mu-law (notes §8)
+0b 02 00 02  01 05 35 35 35 35 33  06 06 4b 43 31 41 42 43  08 04 00 00 00 06  09 04 00 00 00 04
