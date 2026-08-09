@@ -457,6 +457,29 @@ numbers, sequence numbers, ACK discipline).
 
 ---
 
+### RC-9 — Real-time-safe capture path ⚠️ NEW, do before CLI-1 sign-off
+**Depends on:** RC-7. **Files:** `Sources/RadioCore/AudioPipeline.swift` + tests.
+
+The `AVAudioEngine` tap callback runs on a real-time thread and currently
+allocates on every callback: `AudioFrameChunker.push` grows and `removeFirst`s
+a heap array, `downsample` allocates two `AVAudioPCMBuffer`s per callback, and
+`onFrame` calls unbounded caller code. None of this is a data race — the
+RC-7 fix removed those — but allocating, locking or calling unbounded code on
+the audio render thread is a priority-inversion hazard.
+
+This will not show up as a hard failure. It shows up as **intermittent audio
+dropouts under load**, which is exactly the kind of fault that gets blamed on
+the network and chased for weeks.
+
+Fix properly: preallocated ring buffers, a lock-free handoff to a non-real-time
+consumer, no allocation and no unbounded calls inside the tap. This is a
+rewrite of the capture path rather than a defect fix, which is why it is its
+own task.
+
+**Done when:** no allocation occurs on the tap thread (verify by inspection and,
+if practical, an allocation-counting test on the chunker); frames still arrive
+as exact 160-sample buffers; existing tests still pass.
+
 ## Phase 3 — CLI harness
 
 ### CLI-1 — `hamvoip-cli` (macOS)
