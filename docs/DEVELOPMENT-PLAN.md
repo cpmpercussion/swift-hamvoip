@@ -135,6 +135,11 @@ IAX-5, IAX-8 and M17-3 all need it.
 order and captures sends; `NWDatagramTransport` compiles (no live-network
 test — that's deliberate).
 
+✅ **DONE.** Note for IAX-8: `NWConnection` treats `.waiting` as recoverable
+and retries internally, so an unreachable node makes `send` hang rather than
+throw. **A connect timeout must be implemented one layer up, in `IAX2Call`
+or `IAX2Client` — the transport will not surface it.**
+
 ### RC-2 — G.711 µ-law codec
 **Depends on:** nothing. **Spec:** ITU-T G.711 (µ-law).
 **Files:** `Sources/RadioCore/Codecs/G711MuLawCodec.swift`,
@@ -197,6 +202,14 @@ supplied by the caller so tests fully control time.
 **Done when:** tests show depth grows under jittery synthetic arrival
 patterns, shrinks back under steady ones, stays within [60, 200] ms, and
 never changes mid-spurt.
+
+✅ **DONE.** Estimator is the RFC 3550-style relative transit difference
+`D = (arrival₂ − arrival₁) − (timestamp₂ − timestamp₁)`, EWMA'd with
+α = 1/8; target = clamp(4 · deviation, 60 ms, 200 ms). Starvation un-primes
+the buffer and re-anchors the playout grid to the new head frame — without
+that, resuming after a long gap emits one concealment per missed slot.
+Timestamp wraparound at 2³² ms is explicitly out of scope here:
+**IAX-6 owns 16→32-bit timestamp expansion** before frames reach the buffer.
 
 ### RC-5 — Transmit watchdog (SF-1)
 **Depends on:** nothing.
