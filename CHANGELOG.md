@@ -8,6 +8,13 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-08-10
+
+First release. The AllStarLink/IAX2 path is complete and has been validated
+against a real node, including a two-way audio session; `M17Kit` has reflector
+control but no audio path and has never been run against a reflector. See
+"Known limitations" below before depending on it.
+
 ### Milestone
 
 - **M2 passed on 2026-08-09 — a human held a two-way audio conversation
@@ -23,25 +30,60 @@ major version is 0, the API may change in any release.
   and the `Ctrl-C`/`kill` teardown paths were not re-confirmed — and the
   transmit-burst wart is tracked as IAX-10. Full result table in
   `docs/CLI.md` §5.
-
-### Resolved
-
-- **OQ-5 — the MD5 RESULT encoding is hexadecimal.** Settled against a live
-  ASL3 node on 2026-08-09 with `hamvoip-cli oq5 --method register
-  --exhaustive`: lowercase and uppercase hex both accepted, base64 and raw
-  bytes both refused with cause code 29. The node decodes the IE back to bytes
-  or compares case-insensitively; the refusals prove it checks the digest at
-  all. **What IAX2Kit already sent was right, so no behaviour changed** — the
-  §8.6.15 encoding is now an observation rather than an assumption. It remains
-  an observation about one implementation: `oq5Default` stays lowercase hex,
-  because another peer may compare byte-for-byte.
-- **The IAX2 registration path has run against a real node.** Four complete
-  §6.1 exchanges — REGREQ → REGAUTH → REGREQ+MD5 → REGACK/REGREJ — with
-  correct call numbers, sequence progression and ACK discipline in both
-  directions. Previously it had only ever been exercised against fixtures.
-  The call and voice paths still have not: M2 sign-off remains outstanding.
+- **The IAX2 registration path has run against a real node**, in the session
+  that settled OQ-5: four complete §6.1 exchanges — REGREQ → REGAUTH →
+  REGREQ+MD5 → REGACK/REGREJ — with correct call numbers, sequence progression
+  and ACK discipline in both directions.
 
 ### Added
+
+**`RadioCore`** — the mode-independent layer.
+
+- `DatagramTransport`, the seam every network mode is written against, with a
+  `Network.framework` UDP implementation (PD-1) and a mock for tests.
+- G.711 µ-law encode and decode (FR-1.4).
+- Adaptive jitter buffer, target depth 60–200 ms, adjusting to measured arrival
+  variance (AU-3).
+- Transmit watchdog (SF-1), default 180 s.
+- Received-audio leveller (AU-4).
+- `AVAudioEngine` capture and playback pipeline with 48 kHz ↔ 8 kHz conversion
+  (AU-1, AU-2), and a real-time-safe capture path that does not allocate or
+  lock on the audio thread.
+
+**`IAX2Kit`** — AllStarLink over IAX2 (RFC 5456).
+
+- Full frame model: parse and serialise, full frames and mini-frames.
+- Information elements.
+- Sequence numbering and the retransmission engine.
+- MD5 challenge authentication (§8.6.15), lowercase hexadecimal — confirmed
+  against a live node, see "Resolved" below.
+- Outbound call state machine: NEW, ACCEPT, ANSWER, HANGUP, PING/PONG,
+  LAGRQ/LAGRP (FR-1.1).
+- Voice path and DTMF (FR-1.5). Media payloads are treated as sample-wise
+  rather than as fixed 20 ms slots: a short payload is padded to the slot with
+  encoded silence, an over-long one is split across consecutive slots, and only
+  an empty payload is rejected. Nothing in §8.7 promises a peer sends exactly
+  160 octets, and a live node does not — it sent 44 at the tail of a playback.
+  The playout contract is unchanged: every tick is exactly `samplesPerFrame`
+  samples.
+- Registration and registered-node mode (FR-1.3), including refresh with
+  jittered renewal and a geometric retry ladder.
+- `IAX2Client`, an actor composing the above with the jitter buffer, watchdog
+  and leveller, exposing `receivedAudio` and `events` as `nonisolated` streams.
+
+**`M17Kit`** — partial.
+
+- Reflector control: CONN, ACKN, NACK, PING, PONG, DISC and module selection
+  (FR-2.1).
+- Base-40 callsign encoding into the 48-bit address field (FR-2.3).
+- Stream packet parse and serialise, with encryption surfaced only as
+  `isEncrypted` / `playability == .encrypted` and no decrypt path (FR-2.5).
+
+**`hamvoip-cli`** — a macOS harness for validating the stack against a real
+node: connect, level metering, keying, DTMF, and an `oq5` subcommand that
+settles the authentication-encoding question without placing a call.
+
+**Tests**
 
 - **Capture-replay conformance tests (IAX-9).** Six fixtures cut from packet
   captures of the maintainer's own sessions against their own ASL3 node, and
@@ -65,113 +107,6 @@ major version is 0, the API may change in any release.
   inbound 16-bit time-stamp wrap with no full frame at the boundary, which
   §6.10 says the peer MUST send and this node does not.
 
-### Fixed
-
-- **`hamvoip-cli oq5` addressed its ACKs to call number 0.** Found by the
-  IAX-9 replay: in every captured registration, the probe's ACK of the REGAUTH
-  went out with destination call number 0 rather than the node's (§6.2.1,
-  §8.1.1). It called `channel.receive` — which is what emits the ACK — before
-  `setDestinationCallNumber`, and learned the peer's number only from a
-  `.deliver`, so the node's opening bare ACK never taught it anything. The
-  library was never affected: `IAX2Call` and `IAX2Registrar` both learn the
-  number before the channel sees the frame, and the replay tests assert that.
-  Asterisk had tolerated the malformed ACK, so OQ-5's conclusion is unchanged.
-
-- **Received audio shorter than 20 ms is played instead of dropped.** A live
-  ASL3 node sent a 44-octet media payload — the tail of a playback, 5.5 ms of
-  ordinary speech — and `IAX2VoiceReceiver` rejected it for not being exactly
-  160 octets. Nothing in RFC 5456 promises a media frame is exactly one 20 ms
-  slot: §8.7 gives µ-law as one byte per sample and stops there, and 160 is a
-  consequence of 20 ms at 8 kHz rather than a rule about what a peer may send.
-  Because µ-law is sample-wise, a partial frame is a shorter frame and not a
-  corrupt one. Short payloads are now padded to the slot with encoded silence,
-  over-long ones are split across consecutive slots, and only a genuinely
-  empty payload is rejected (`Rejection.emptyPayload`). The playout contract
-  is unchanged: every tick is still exactly `samplesPerFrame` samples.
-- **Quitting no longer announces that your call dropped.** Pressing `q` (or
-  `Ctrl-C`, or taking a signal) closes the transport, and the read loop then
-  reported it as `DISCONNECTED: the transport closed` — telling the operator
-  their call had failed at the exact moment they ended it themselves. The
-  banner is now suppressed once a quit is under way. A packet capture confirms
-  the HANGUP and its ACK were going out correctly all along, so this was
-  always cosmetic; it was also alarming, and it appeared in the middle of a
-  sign-off run.
-- **`hamvoip-cli connect` no longer reports captured frames as transmitted
-  ones.** The closing summary printed the audio bridge's *submitted* count
-  under the label `transmitted frames`; because capture runs continuously by
-  design, that number rises whether or not PTT is on, so a session with no
-  transmission at all reported 55 transmitted frames. It now reports `frames
-  captured` and `frames transmitted` separately, the latter counted at the PTT
-  gate itself. No behaviour changed — nothing was ever sent unkeyed — but a
-  summary that says the client keyed up when it did not is the most alarming
-  thing it could get wrong, and it would have been read into an M2 sign-off.
-- **`MediaFormat` names the codec instead of printing a bitmask.** A live
-  session showed `CONNECTED  codec MediaFormat(rawValue: 4)` where
-  `docs/CLI.md` §5 promises the harness names a codec; it now prints
-  `G.711 µ-law`, joins multiple bits with `+`, and surfaces unassigned bits
-  rather than dropping them.
-- `hamvoip-cli oq5` no longer reports a case-insensitive node as an impossible
-  result. Accepting both hex renderings while refusing a non-hex one is now
-  read as the answer it is; only genuinely contradictory combinations are
-  reported as unreliable. Accepting both hex forms with *nothing* refused is
-  reported as inconclusive rather than as an answer, since a node that accepts
-  anything is indistinguishable from that angle.
-
-### Changed
-
-- The `IAX2Registrar` MD5-encoding seam is downgraded from a defect to a
-  hygiene item: it hard-codes the default encoding, and the default turned out
-  to be correct, so FR-1.3 registered node mode works as shipped.
-- `docs/CLI.md` gains one-shot and Keychain forms for supplying the secret,
-  and an explanation of why `HAMVOIP_SECRET` can appear not to take effect.
-
-## [0.1.0] — 2026-08-09
-
-First release. The AllStarLink/IAX2 path is complete and tested against
-recorded fixtures; **none of it has been validated against a real node.** See
-"Known limitations" below before depending on it.
-
-### Added
-
-**`RadioCore`** — the mode-independent layer.
-
-- `DatagramTransport`, the seam every network mode is written against, with a
-  `Network.framework` UDP implementation (PD-1) and a mock for tests.
-- G.711 µ-law encode and decode (FR-1.4).
-- Adaptive jitter buffer, target depth 60–200 ms, adjusting to measured arrival
-  variance (AU-3).
-- Transmit watchdog (SF-1), default 180 s.
-- Received-audio leveller (AU-4).
-- `AVAudioEngine` capture and playback pipeline with 48 kHz ↔ 8 kHz conversion
-  (AU-1, AU-2), and a real-time-safe capture path that does not allocate or
-  lock on the audio thread.
-
-**`IAX2Kit`** — AllStarLink over IAX2 (RFC 5456).
-
-- Full frame model: parse and serialise, full frames and mini-frames.
-- Information elements.
-- Sequence numbering and the retransmission engine.
-- MD5 challenge authentication (§8.6.15) — see Known limitations.
-- Outbound call state machine: NEW, ACCEPT, ANSWER, HANGUP, PING/PONG,
-  LAGRQ/LAGRP (FR-1.1).
-- Voice path and DTMF (FR-1.5).
-- Registration and registered-node mode (FR-1.3), including refresh with
-  jittered renewal and a geometric retry ladder.
-- `IAX2Client`, an actor composing the above with the jitter buffer, watchdog
-  and leveller, exposing `receivedAudio` and `events` as `nonisolated` streams.
-
-**`M17Kit`** — partial.
-
-- Reflector control: CONN, ACKN, NACK, PING, PONG, DISC and module selection
-  (FR-2.1).
-- Base-40 callsign encoding into the 48-bit address field (FR-2.3).
-- Stream packet parse and serialise, with encryption surfaced only as
-  `isEncrypted` / `playability == .encrypted` and no decrypt path (FR-2.5).
-
-**`hamvoip-cli`** — a macOS harness for validating the stack against a real
-node: connect, level metering, keying, DTMF, and an `oq5` subcommand that
-settles the authentication-encoding question without placing a call.
-
 **Project**
 
 - Apache-2.0 throughout, with an SPDX identifier on every source file, enforced
@@ -179,29 +114,43 @@ settles the authentication-encoding question without placing a call.
 - Every timer injected via `Clock`, so a full session runs in tests with no
   real-time waits (AU-5).
 
+### Resolved
+
+- **OQ-5 — the MD5 RESULT encoding is hexadecimal.** Settled against a live
+  ASL3 node on 2026-08-09 with `hamvoip-cli oq5 --method register
+  --exhaustive`: lowercase and uppercase hex both accepted, base64 and raw
+  bytes both refused with cause code 29. The node decodes the IE back to bytes
+  or compares case-insensitively; the refusals prove it checks the digest at
+  all. **What IAX2Kit sends was right, so nothing changed** — the §8.6.15
+  encoding is an observation rather than an assumption. It remains an
+  observation about one implementation: `oq5Default` stays lowercase hex,
+  because another peer may compare byte-for-byte.
+
 ### Known limitations
 
-- **The `MD5_RESULT` encoding is an unverified assumption.** RFC 5456 §8.6.15
-  does not state how the digest is textually encoded, and the clean-room policy
-  (LP-2) forbids reading an implementation to find out. Lowercase 32-character
-  hex ships as the default. If it is wrong, authentication fails against real
-  nodes; the fix is `IAX2Call.Configuration.md5ResultEncoding`, reachable from
-  `IAX2Client.Configuration.call`. Run `hamvoip-cli oq5` against a live node to
-  settle it (OQ-5).
-- **That override does not extend to registration.** `IAX2Registrar` computes
-  its digest with the default encoding and carries no configuration point, so
-  if OQ-5 resolves to anything other than lowercase hex, registered node mode
-  (FR-1.3) remains broken after the call path has been corrected. Threading
-  `md5ResultEncoding` through `IAX2Registrar.Configuration` is the fix.
-- **A `raw-bytes` outcome is not expressible at all.** `TextDigestEncoding`
-  renders to a `String` and `InformationElement.md5Result` takes a `String`,
-  so should that candidate win, IAX2Kit needs a byte-valued MD5 RESULT path
-  before either code path can authenticate.
-- **No on-air validation of any kind.** There is no capture-replay conformance
-  test against a recorded session of a real node (IAX-9).
-- **M17 has no audio path.** Stream mode is unimplemented pending OQ-7, the
-  question of whether the IP stream frame is 56 or 54 bytes, which cannot be
-  settled from the specification. There is no `M17Client`.
+- **The MD5 RESULT encoding is confirmed against one implementation, not
+  against the protocol.** RFC 5456 §8.6.15 still does not state it, and the
+  clean-room policy (LP-2) forbids reading an implementation to find out. A
+  peer that compares the digest byte-for-byte would refuse what we send.
+  `IAX2Call.Configuration.md5ResultEncoding` overrides the call path;
+  `IAX2Registrar` hard-codes the default and has no such seam, and a
+  `raw-bytes` encoding is not expressible at all — `TextDigestEncoding` renders
+  to a `String` and `InformationElement.md5Result` takes one. Both are hygiene
+  items rather than defects while hex is what nodes accept.
+- **Each over opens by bursting the buffered capture frames** rather than
+  pacing them at 20 ms. One node answered with `VNAK` ×3 at the first voice
+  frame; the retransmission engine recovered and audio was intelligible
+  throughout. Tracked as IAX-10.
+- **Two on-air checks are outstanding**: PTT edge timing, which a full-duplex
+  `Echo()` target cannot show, and the `Ctrl-C` / `kill` teardown paths. The
+  `q` teardown path is verified on the wire.
+- **On-air validation is against one node.** Every live observation here comes
+  from a single ASL3 node (Asterisk + app_rpt) in a VM. No hardware node, no
+  other Asterisk version, no other implementation.
+- **M17 is unvalidated and has no audio path.** Stream mode is unimplemented
+  pending OQ-7, the question of whether the IP stream frame is 56 or 54 bytes,
+  which cannot be settled from the specification. There is no `M17Client`, and
+  none of `M17Kit` has been run against a reflector.
 - **The M17 reflector specification is offline** (OQ-8). The chapter this code
   was written against was published as HTML at a host that now 404s; the
   implementation was taken from an Internet Archive capture, cross-checked

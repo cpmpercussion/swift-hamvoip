@@ -10,52 +10,56 @@ Every existing cross-platform client for these modes is GPL-licensed, which
 prevents App Store distribution. There is no permissively licensed Swift
 implementation of IAX2, and none of M17 in any form.
 
-swift-hamvoip covers only modes with no patent encumbrance:
-
-- **AllStarLink** — IAX2 (RFC 5456), G.711 µ-law
-- **M17** — reflector protocol, Codec2 3200
-- **EchoLink** — RTP/GSM 06.10 *(planned, see OQ-9)*
-
-DMR, System Fusion, D-STAR, P25 and NXDN are permanently out of scope. All
-require AMBE or AMBE+2, which is patented.
+swift-hamvoip covers only modes with no patent encumbrance. DMR, System Fusion,
+D-STAR, P25 and NXDN are permanently out of scope: all require AMBE or AMBE+2,
+which is patented.
 
 ## Status
 
-**v0.1 — the IAX2 stack is complete and tested, and has never been on the air.**
-
-Both halves of that sentence matter. There are 520 tests and the AllStarLink
-path is implemented end to end: frames, information elements, sequencing and
-retransmission, MD5 authentication, the call state machine, voice, DTMF,
-registration, and a client that composes them. All of it is driven from
-recorded fixtures and a mock transport, exactly as AU-5 requires.
-
-The **registration and authentication paths have now been run against a real
-node** — an ASL3 node in a VM, on 2026-08-09 — which settled the one thing
-that had been an **unverified assumption**. RFC 5456 §8.6.15 does not state
-how `MD5_RESULT` is textually encoded, and the clean-room policy forbids
-reading an implementation to find out, so the library shipped lowercase
-32-character hex on the strength of an argument rather than an observation.
-`hamvoip-cli oq5` asked the node, and the answer was hexadecimal: nothing
-changed, and the assumption is now a measurement. See
-[`docs/CLI.md`](docs/CLI.md) §4 for the evidence and its limits.
-
-The **call and voice paths have been validated too**. On the same day a person
-held a two-way conversation through the stack against that node: speech
-intelligible both ways, DTMF round-tripped, the SF-1 transmit watchdog cutting
-transmission at exactly its limit, clean teardown, no frames dropped. That is
-milestone M2; the full result table, including the two items worth re-running
-before v1, is in [`docs/CLI.md`](docs/CLI.md) §5.
+**v0.1.** 537 tests, green on `main`. This is a 0.x release — the API will
+change.
 
 | Module | State |
 |---|---|
-| `RadioCore` | Complete. Transport abstraction, µ-law, adaptive jitter buffer, transmit watchdog, audio pipeline, received-audio leveller, real-time-safe capture. |
-| `IAX2Kit` | Complete, unvalidated on air. See above. |
-| `M17Kit` | **Partial.** Reflector control and base-40 callsigns only. There is no audio path: stream mode is blocked on OQ-7, and no `M17Client` exists yet. |
+| `RadioCore` | Complete. Transport abstraction, G.711 µ-law, adaptive jitter buffer, transmit watchdog, received-audio leveller, `AVAudioEngine` pipeline with 48 kHz ↔ 8 kHz conversion and a real-time-safe capture path. |
+| `IAX2Kit` | Complete. AllStarLink over IAX2 (RFC 5456): frames and mini-frames, information elements, sequencing and retransmission, MD5 authentication, call state machine, voice, DTMF, registration, and `IAX2Client` composing them. |
+| `M17Kit` | **Partial.** Reflector control, base-40 callsigns, stream-packet parse and serialise. No codec wiring, no audio path, no `M17Client`. |
+| `hamvoip-cli` | macOS harness: connect, level metering, keying, DTMF. |
 
-EchoLink is not implemented and is not scheduled — see OQ-9 in
+`IAX2Kit` has been validated against a real node — an ASL3 node (Asterisk +
+app_rpt) in a VM, on 2026-08-09. Registration, authentication and a full
+two-way audio session all ran on the wire; that is milestone M2, and the
+result table is in [`docs/CLI.md`](docs/CLI.md) §5. Six fixtures cut from those
+captures are replayed by `IAX2ConformanceTests`, so registration, call setup,
+an inbound over and both 16-bit time-stamp boundaries are pinned against what
+a real node actually sent rather than only against our reading of the RFC.
+Everything else in the suite runs on hand-built fixtures and a mock transport.
+
+M17 has been validated against nothing. It has never been run against a
+reflector.
+
+## What is not here yet
+
+- **M17 audio.** Stream mode and `M17Client` (M17-4, M17-5) are blocked on
+  OQ-7 — whether the IP stream frame is 56 bytes or 54, which cannot be
+  settled from the specification and needs a capture from a live reflector.
+- **Transmit pacing.** Each over opens by sending the buffered capture frames
+  as fast as the socket accepts them instead of pacing at 20 ms. One node
+  answered with `VNAK`; the retransmission engine recovered and audio was
+  intelligible throughout. Tracked as IAX-10.
+- **Two on-air checks worth re-running before v1**: PTT edge timing, which a
+  full-duplex `Echo()` target cannot show, and the `Ctrl-C` / `kill` teardown
+  paths.
+- **EchoLink**, which is not implemented and not scheduled. The service's
+  terms are not the obstacle; the absence of any published protocol
+  specification is, and the clean-room policy rules out the implementations
+  that document it (OQ-9).
+- **Codec2 under LGPL-2.1 for App Store distribution** is an open licensing
+  question (OQ-6), and it gates shipping M17 in a signed iOS app rather than
+  the code here.
+
+The open questions are tracked in
 [`docs/DEVELOPMENT-PLAN.md`](docs/DEVELOPMENT-PLAN.md).
-
-This is a 0.x release. The API will change.
 
 ## Requirements
 
@@ -123,9 +127,9 @@ let client = IAX2Client(clock: manualClock, transportFactory: { _ in mock })
 
 ## The command-line harness
 
-`hamvoip-cli` is a macOS harness for validating the stack against a real node
-before any GUI is involved — connect, monitor levels, key up, send DTMF, and
-settle OQ-5, which it has now done. See [`docs/CLI.md`](docs/CLI.md).
+`hamvoip-cli` is a macOS harness for exercising the stack against a real node
+without a GUI — connect, monitor levels, key up, send DTMF. See
+[`docs/CLI.md`](docs/CLI.md).
 
 ```sh
 swift run hamvoip-cli --help
@@ -151,6 +155,9 @@ implementations (DroidStar, SvxLink/EchoLib, thebridge, iaxclient) at source
 level. See §3 of the requirements document. Pull requests that cannot attest to
 this will not be merged.
 
+Test fixtures follow the same rule; where they come from and what may not go
+into one is recorded in [`Tests/FIXTURES.md`](Tests/FIXTURES.md).
+
 ## Documentation
 
 - [`docs/DESIGN-REQUIREMENTS.md`](docs/DESIGN-REQUIREMENTS.md) — what is being
@@ -158,6 +165,7 @@ this will not be merged.
 - [`docs/DEVELOPMENT-PLAN.md`](docs/DEVELOPMENT-PLAN.md) — the task list and
   the open questions, including the ones that need a decision rather than code.
 - [`docs/CLI.md`](docs/CLI.md) — the command-line harness.
+- [`Tests/FIXTURES.md`](Tests/FIXTURES.md) — fixture provenance rules.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — clean-room attestation and PR rules.
 
 ## Licence
