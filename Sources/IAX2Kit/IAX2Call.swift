@@ -555,12 +555,29 @@ public actor IAX2Call {
         /// Retransmission policy handed to the call's `ReliableChannel`.
         public var channel: ReliableChannel.Configuration
 
+        /// How the MD5 RESULT IE (§8.6.15) is rendered on the wire.
+        ///
+        /// ⚠️ **This is OQ-5.** §8.6.15 says the IE carries the UTF-8-encoded
+        /// MD5 of `challenge ‖ password`, but the RFC never states the text
+        /// encoding — hex or not, upper or lower case. It cannot be settled
+        /// from the specification, and LP-2 forbids reading another
+        /// implementation to find out, so it has to be settled against a live
+        /// node. `hamvoip-cli oq5` does exactly that.
+        ///
+        /// It is configurable here so that the answer, once known, is a
+        /// one-line change at the call site rather than a library edit — and
+        /// so an experiment can drive a real call with a non-default
+        /// rendering. Defaults to `.oq5Default` (lowercase 32-character hex).
+        public var md5ResultEncoding: IAX2Auth.TextDigestEncoding
+
         public init(
             connectTimeout: Duration = .seconds(10),
-            channel: ReliableChannel.Configuration = ReliableChannel.Configuration()
+            channel: ReliableChannel.Configuration = ReliableChannel.Configuration(),
+            md5ResultEncoding: IAX2Auth.TextDigestEncoding = .oq5Default
         ) {
             self.connectTimeout = connectTimeout
             self.channel = channel
+            self.md5ResultEncoding = md5ResultEncoding
         }
     }
 
@@ -1236,8 +1253,12 @@ public actor IAX2Call {
         guard let secret = request.secret else { throw IAX2CallError.missingSecret }
 
         // §8.6.15: MD5( challenge ‖ password ), challenge first, no separator,
-        // carried as text. The text encoding is OQ-5 and lives in IAX2Auth.
-        let response = IAX2Auth.md5Response(challenge: challenge, secret: secret)
+        // carried as text. The text encoding is OQ-5 — unknowable from the RFC
+        // — so it comes from configuration rather than being hardcoded here.
+        let response = IAX2Auth.md5Response(
+            challenge: challenge,
+            secret: secret,
+            encoding: configuration.md5ResultEncoding)
         try await channel.send(
             .authrep,
             timestamp: timestampMilliseconds,

@@ -89,12 +89,25 @@ public enum IAX2Auth {
     /// different rendering — e.g. uppercase, or something else entirely —
     /// without touching `md5Response` or the digest computation. See OQ-5
     /// on `textEncodedDigest(_:encoding:)`.
-    public struct TextDigestEncoding: Sendable {
+    public struct TextDigestEncoding: Sendable, Equatable, CustomStringConvertible {
+        /// A short name for this rendering, used in diagnostics and to give the
+        /// type an identity.
+        ///
+        /// Equality compares names, because Swift closures cannot be compared.
+        /// Two encodings sharing a name are therefore treated as the same
+        /// encoding — give distinct renderings distinct names.
+        public let name: String
+
         private let render: @Sendable ([UInt8]) -> String
 
-        public init(_ render: @escaping @Sendable ([UInt8]) -> String) {
+        public init(name: String = "custom", _ render: @escaping @Sendable ([UInt8]) -> String) {
+            self.name = name
             self.render = render
         }
+
+        public static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
+
+        public var description: String { name }
 
         fileprivate func callAsFunction(_ digestBytes: [UInt8]) -> String {
             render(digestBytes)
@@ -104,7 +117,7 @@ public enum IAX2Auth {
         /// each byte zero-padded to exactly two hex digits. See the
         /// `// OQ-5:` comment on `textEncodedDigest(_:encoding:)` for why
         /// this is a documented guess rather than a spec fact.
-        public static let oq5Default = TextDigestEncoding { bytes in
+        public static let oq5Default = TextDigestEncoding(name: "lowercase-hex") { bytes in
             bytes.map { String(format: "%02x", $0) }.joined()
         }
     }

@@ -1086,6 +1086,48 @@ final class IAX2CallTests: XCTestCase {
         await tearDown(harness)
     }
 
+    /// The configured MD5 RESULT encoding must actually reach the wire.
+    ///
+    /// OQ-5 is the open question of how §8.6.15's "UTF-8 encoded" MD5 result is
+    /// rendered — hex or not, upper or lower case. The RFC does not say, and
+    /// LP-2 forbids reading another implementation to find out, so it has to be
+    /// settled against a live node. `Configuration.md5ResultEncoding` exists so
+    /// that the answer is a one-line change; this test is what makes that true,
+    /// because a setting nothing asserts on is a setting that can silently stop
+    /// working.
+    func testConfiguredMD5ResultEncodingIsWhatGoesOnTheWire() async throws {
+        // Same digest as the test above, rendered uppercase instead.
+        //     printf '%s' '1234567890hunter2' | md5
+        //     423705a562413ef5e90f24f5a4bd2a53
+        let uppercase = IAX2Auth.TextDigestEncoding(name: "uppercase-hex") { bytes in
+            bytes.map { String(format: "%02X", $0) }.joined()
+        }
+        let expected = "423705A562413EF5E90F24F5A4BD2A53"
+
+        var configuration = IAX2Call.Configuration()
+        configuration.md5ResultEncoding = uppercase
+
+        let harness = try await makeHarness(
+            request: IAX2CallRequest(
+                calledNumber: "55553", username: "n0call", secret: "hunter2"),
+            configuration: configuration)
+
+        try await harness.call.start()
+        harness.transport.inject(
+            try FixtureLoader.datagrams("call-auth-session.hex", in: Bundle.module))
+        await waitFor(harness.call, state: .up)
+        await waitForSent(5, harness.transport)
+
+        let authrep = try XCTUnwrap(
+            IAX2Frame.parse(XCTUnwrap(sentDatagram(harness.transport, 2))).fullFrame)
+        XCTAssertEqual(authrep.iaxMessage, .authrep)
+        XCTAssertEqual(
+            try InformationElement.parseList(authrep.payload), [.md5Result(expected)],
+            "the AUTHREP must carry the digest in the configured rendering, not the default")
+
+        await tearDown(harness)
+    }
+
     // MARK: - Actor reentrancy (plan rule 10)
 
     /// A peer that answers before our own `send` resumes must not be treated as
