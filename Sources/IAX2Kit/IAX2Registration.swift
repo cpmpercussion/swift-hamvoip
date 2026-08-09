@@ -1226,12 +1226,16 @@ public actor IAX2Registrar {
         // Geometric: interval × 2^(failures − 1), clamped. The first failure
         // waits `initialInterval`; a node that keeps refusing is backed away
         // from rather than hammered.
-        var delay = policy.initialInterval
+        var ladder = policy.initialInterval
         for _ in 1..<max(1, consecutiveFailures) {
-            delay = delay * 2
-            if delay > policy.maximumInterval { break }
+            ladder = ladder * 2
+            if ladder > policy.maximumInterval { break }
         }
-        delay = min(delay, policy.maximumInterval)
+        // `let`, because the retry `Task` below captures it: an older
+        // toolchain than the one this was written on rejects capturing a
+        // `var` in concurrently-executing code, and the value is finished
+        // being computed here anyway.
+        let delay = min(ladder, policy.maximumInterval)
 
         continuation.yield(.retryScheduled(after: delay, attempt: consecutiveFailures + 1))
 
