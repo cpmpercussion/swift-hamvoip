@@ -12,9 +12,12 @@ import Network
 /// Wi-Fi/cellular handoff.
 ///
 /// This type is the *only* place in the package that knows a socket exists.
-/// There is deliberately no unit test for it (AU-5: no network in unit tests);
-/// it is exercised by the CLI harness (CLI-1) against a real node. Everything
-/// that can be tested lives above the `DatagramTransport` seam.
+/// Per AU-5, no test here ever contacts a real host or depends on DNS
+/// resolution succeeding: `NWDatagramTransportTests` exercises only
+/// cancellation and lifecycle plumbing, against endpoints guaranteed never to
+/// connect. End-to-end behaviour against a real node is exercised by the CLI
+/// harness (CLI-1). Everything else that can be tested lives above the
+/// `DatagramTransport` seam.
 ///
 /// Thread safety: all mutable state lives in the internal `Core` actor. This
 /// class holds only immutable, `Sendable` references, so it is safe to share.
@@ -60,9 +63,15 @@ public final class NWDatagramTransport: DatagramTransport {
     }
 
     deinit {
-        // Nothing to do: `Core` owns the connection and cancels it on `close()`.
-        // A transport dropped without `close()` leaks its connection until the
-        // consuming Task releases the actor, which is why callers must close.
+        // A transport dropped without an explicit `close()` must still keep
+        // `DatagramTransport`'s contract: `incoming` "finishes when the
+        // transport closes or the connection fails." Capture `core` (not
+        // `self`, which is mid-deinitialisation) so this cleanup task is the
+        // only thing keeping the actor alive; once `close()` runs it cancels
+        // the connection and finishes `incoming`, so a caller that forgets to
+        // close never leaks a live UDP socket or a stuck receive loop.
+        let core = self.core
+        Task { await core.close() }
     }
 }
 
@@ -79,7 +88,7 @@ private actor Core {
     private var isClosed = false
     private var isReceiving = false
     private var failure: DatagramTransportError?
-    private var readyWaiters: [CheckedContinuation<Void, any Error>] = []
+    private var readyWaiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
 
     init(host: NWEndpoint.Host, port: NWEndpoint.Port, continuation: AsyncStream<Data>.Continuation) {
         let parameters = NWParameters.udp
@@ -89,6 +98,16 @@ private actor Core {
         self.connection = NWConnection(host: host, port: port, using: parameters)
         self.continuation = continuation
         self.queue = DispatchQueue(label: "org.hamvoip.radiocore.nwdatagram")
+    }
+
+    deinit {
+        // Backstop for `close()`: if `Core` is ever deallocated without it
+        // (there should be no path left that does this, now that
+        // `NWDatagramTransport.deinit` calls `close()`), still release the
+        // socket and finish `incoming` rather than leaking silently.
+        connection.stateUpdateHandler = nil
+        connection.cancel()
+        continuation.finish()
     }
 
     // MARK: - Lifecycle
@@ -165,25 +184,52 @@ private actor Core {
         }
     }
 
+    /// Suspends until the connection is ready, or throws if it never will be.
+    ///
+    /// Cancellation-safe: a caller that races this against a deadline (the
+    /// documented way to impose a connect timeout above this layer, per
+    /// RC-1) must get `CancellationError` back promptly, not leak a parked
+    /// continuation. `withTaskCancellationHandler` and the waiter dictionary
+    /// are both driven from actor-isolated code, so registering the waiter
+    /// and removing it on cancellation are serialised against each other the
+    /// same way `ManualTestClock.sleep(until:)` serialises under its lock:
+    /// the cancellation check and the registration happen in the same
+    /// synchronous, non-suspending span, so a waiter can never be registered
+    /// after its cancellation handler has already run.
     private func waitUntilReady() async throws {
         if let failure { throw failure }
         if isClosed { throw DatagramTransportError.closed }
         if isReady { return }
-        try await withCheckedThrowingContinuation { (waiter: CheckedContinuation<Void, any Error>) in
-            readyWaiters.append(waiter)
+
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (waiter: CheckedContinuation<Void, any Error>) in
+                if Task.isCancelled {
+                    waiter.resume(throwing: CancellationError())
+                    return
+                }
+                readyWaiters[id] = waiter
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id) }
         }
+    }
+
+    private func cancelWaiter(_ id: UUID) {
+        guard let waiter = readyWaiters.removeValue(forKey: id) else { return }
+        waiter.resume(throwing: CancellationError())
     }
 
     private func resumeWaiters() {
         let waiters = readyWaiters
         readyWaiters.removeAll()
-        for waiter in waiters { waiter.resume() }
+        for waiter in waiters.values { waiter.resume() }
     }
 
     private func finishWaiters(with error: DatagramTransportError) {
         let waiters = readyWaiters
         readyWaiters.removeAll()
-        for waiter in waiters { waiter.resume(throwing: error) }
+        for waiter in waiters.values { waiter.resume(throwing: error) }
     }
 
     // MARK: - Receive
