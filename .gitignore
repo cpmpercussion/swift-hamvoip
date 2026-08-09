@@ -7,3 +7,6 @@ DerivedData/
 xcuserdata/
 Package.resolved
 *.xcframework
+
+# Agent worktrees created by tooling; never part of the source tree.
+.claude/worktrees/

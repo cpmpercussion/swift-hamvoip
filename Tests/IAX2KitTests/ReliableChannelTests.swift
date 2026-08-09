@@ -765,4 +765,84 @@ final class ReliableChannelTests: XCTestCase {
             .full(peerFrame(.ack, timestamp: 1, oSeqno: 0, iSeqno: 1)))
         XCTAssertEqual(disposition, .ignored)
     }
+
+    // MARK: - Overlapping sends (plan rule 10)
+
+    /// Two sends that overlap must not share a sequence number.
+    ///
+    /// `send` awaits `transport.send`, and an actor is reentrant across an
+    /// await, so a second send can begin while the first is still being
+    /// written. The sequence number used to be read before that await and
+    /// advanced after it, so both frames went out as OSeqno 0 — the second
+    /// clobbering the first's entry in the outstanding table, leaving one ACK
+    /// to retire both and the other frame never retransmitted.
+    ///
+    /// This is not theoretical: a peer's AUTHREQ answered while our NEW is
+    /// still being written produces exactly this overlap, which is how it was
+    /// found (IAX-8b, on the registration path).
+    func testOverlappingSendsGetDistinctSequenceNumbers() async throws {
+        let transport = SlowSendTransport(yieldsDuringFirstSend: 200)
+        let channel = ReliableChannel(
+            sourceCallNumber: localCallNumber,
+            destinationCallNumber: peerCallNumber,
+            transport: transport,
+            clock: ManualTestClock())
+
+        // First send parks inside the transport write.
+        async let first = channel.send(.new, timestamp: 0, payload: [])
+        while transport.sendsStarted < 1 { await Task.yield() }
+
+        // Second send begins while the first is still in flight.
+        async let second = channel.send(.authrep, timestamp: 10, payload: [])
+
+        let sent = try await [first, second]
+        XCTAssertEqual(sent[0].oSeqno, 0, "the NEW takes the first sequence number")
+        XCTAssertEqual(sent[1].oSeqno, 1, "the overlapping frame must take the next one, not reuse 0")
+
+        let counter = await channel.outboundSequenceNumber
+        XCTAssertEqual(counter, 2)
+
+        // Both must be independently outstanding, so one ACK cannot retire both.
+        let outstanding = await channel.outstandingFrameCount
+        XCTAssertEqual(outstanding, 2, "each frame needs its own outstanding-table entry")
+
+        await channel.close()
+        await transport.close()
+    }
+}
+
+/// A transport whose first `send` stays in flight long enough for another send
+/// to begin, making the reentrancy window deterministic.
+private final class SlowSendTransport: DatagramTransport, @unchecked Sendable {
+    let incoming: AsyncStream<Data>
+    private let continuation: AsyncStream<Data>.Continuation
+    private let yieldsDuringFirstSend: Int
+    private let lock = NSLock()
+    private var started = 0
+    private var sentDatagrams: [Data] = []
+
+    var sendsStarted: Int { lock.withLock { started } }
+    var sent: [Data] { lock.withLock { sentDatagrams } }
+
+    init(yieldsDuringFirstSend: Int) {
+        self.yieldsDuringFirstSend = yieldsDuringFirstSend
+        var escaped: AsyncStream<Data>.Continuation!
+        incoming = AsyncStream<Data>(bufferingPolicy: .unbounded) { escaped = $0 }
+        continuation = escaped
+    }
+
+    func send(_ datagram: Data) async throws {
+        let isFirst: Bool = lock.withLock {
+            started += 1
+            sentDatagrams.append(datagram)
+            return started == 1
+        }
+        if isFirst {
+            for _ in 0..<yieldsDuringFirstSend { await Task.yield() }
+        }
+    }
+
+    func close() async {
+        continuation.finish()
+    }
 }

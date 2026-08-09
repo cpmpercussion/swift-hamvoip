@@ -363,13 +363,33 @@ public actor ReliableChannel {
 
         let wire = IAX2Frame.full(frame)
         try wire.validateForTransmission()
-        try await transport.send(wire.encoded())
 
         // §7: ACK, INVAL, TXCNT, TXACC and VNAK "do not change the message
         // count". They are also never themselves acknowledged — an ACK for an
         // ACK could not terminate — so they get no retransmission timer.
+        //
+        // Consume the sequence number BEFORE awaiting the write. `transport.send`
+        // is an await and an actor is reentrant across an await, so a second
+        // send starting while this one is suspended would otherwise be handed
+        // the same OSeqno: two distinct frames sharing a sequence number, the
+        // later one clobbering the earlier's entry in the outstanding table, and
+        // one ACK retiring both. That is reachable in practice — a peer's
+        // AUTHREQ answered while our NEW is still being written produces exactly
+        // this overlap.
+        //
+        // If the write then fails the number is spent and the outbound sequence
+        // has a gap. That is the right trade: a gap is visible to the peer as a
+        // missing frame, whereas a reused number is silently wrong. Every caller
+        // tears the call down on a send failure anyway.
         if !frame.isSequenceNumberExempt {
             outboundSequenceNumber &+= 1
+        }
+
+        try await transport.send(wire.encoded())
+
+        // Tracked only once it is genuinely on the wire — a frame that never
+        // left has nothing to retransmit and nothing to acknowledge.
+        if !frame.isSequenceNumberExempt {
             track(frame)
         }
         return frame
