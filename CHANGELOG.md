@@ -8,6 +8,22 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+### Milestone
+
+- **M2 passed on 2026-08-09 — a human held a two-way audio conversation
+  through this stack.** Against an ASL3 node (Asterisk + app_rpt in a UTM VM),
+  via `Echo()` in a plain dialplan context so nothing was keyed. Speech was
+  intelligible in both directions with no pitch or rate problem, DTMF was sent
+  and echoed back, the SF-1 transmit watchdog stopped transmission at exactly
+  its 10 s limit (500 frames × 20 ms), teardown was clean, and no frames were
+  dropped. Also exercised live for the first time: PING/PONG, LAGRQ/LAGRP, the
+  full-frame-then-mini transmit ordering of §8.1.2, and the retransmission
+  engine recovering from a peer `VNAK`. Two checklist items want a re-run
+  before v1 — PTT edge timing needs a half-duplex target rather than `Echo()`,
+  and the `Ctrl-C`/`kill` teardown paths were not re-confirmed — and the
+  transmit-burst wart is tracked as IAX-10. Full result table in
+  `docs/CLI.md` §5.
+
 ### Resolved
 
 - **OQ-5 — the MD5 RESULT encoding is hexadecimal.** Settled against a live

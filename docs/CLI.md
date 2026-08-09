@@ -375,6 +375,38 @@ settled by §8.6.15.
 
 ## 5. Milestone M2 sign-off checklist
 
+### Result — 2026-08-09, ASL3 node in a UTM VM ✅ PASSED
+
+Run against `Echo()` in a plain dialplan context, so nothing was keyed. Packet
+captures retained (`connect3.pcap`, two sessions of 36.7 s and 15.7 s).
+
+| # | Item | Result |
+|---|---|---|
+| 1 | Call comes up | ✅ `CONNECTED  codec G.711 µ-law`, authenticated |
+| 2 | Inbound intelligible | ✅ words understood; no pitch or rate problem |
+| 3 | Outbound intelligible | ✅ own words understood coming back |
+| 4 | Levels sane | ⚠️ rx −18 dBFS, tx −29 dBFS — usable, tx a little below the −20…−12 target |
+| 5 | PTT edges crisp | ⚠️ not cleanly assessable: `Echo()` is full duplex with ~0.5 s round trip, so there is no unkey-then-hear boundary to judge. No clipping reported |
+| 6 | **Watchdog fires** | ✅ `--transmit-timeout 10`: banner, `TX OFF`, `watchdog expiries 1`, and **exactly 500 frames transmitted** — 500 × 20 ms = 10.000 s, so it cut on the limit and not a frame later |
+| 7 | DTMF reaches the node | ✅ `DTMF '3'` sent, ACKed, echoed back |
+| 8 | Teardown clean | ✅ `q` path verified on the wire (HANGUP + cause IEs, ACKed). `Ctrl-C` and `kill` paths not re-confirmed this session |
+| 9 | Nothing dropped | ✅ `frames dropped 0` on every run |
+
+Also validated live, beyond the checklist: PING/PONG and LAGRQ/LAGRP
+(the node polled at 10, 20, 21 and 30 s and every one was answered), the
+full-frame-then-mini transmit ordering of §8.1.2, and 1135 mini frames each
+way all exactly 160 octets.
+
+**Open wart:** on one session the node sent `VNAK` ×3 at our first voice
+frame; retransmission recovered it and the call was unaffected. It correlates
+with the client emitting a burst of frames in a single millisecond rather than
+pacing them at 20 ms. Tracked as IAX-10.
+
+Re-run items 5 and 8 before v1: item 5 needs a half-duplex target rather than
+`Echo()`, and item 8's signal paths need one pass each.
+
+---
+
 Run against a real node, by a licensed operator, on hardware. Record the result
 on the CLI-1 pull request.
 

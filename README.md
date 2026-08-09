@@ -39,9 +39,12 @@ reading an implementation to find out, so the library shipped lowercase
 changed, and the assumption is now a measurement. See
 [`docs/CLI.md`](docs/CLI.md) §4 for the evidence and its limits.
 
-The **call and voice paths have still not been validated against a real
-node** — no audio has crossed a real link, and the M2 sign-off checklist in
-[`docs/CLI.md`](docs/CLI.md) §5 is untouched.
+The **call and voice paths have been validated too**. On the same day a person
+held a two-way conversation through the stack against that node: speech
+intelligible both ways, DTMF round-tripped, the SF-1 transmit watchdog cutting
+transmission at exactly its limit, clean teardown, no frames dropped. That is
+milestone M2; the full result table, including the two items worth re-running
+before v1, is in [`docs/CLI.md`](docs/CLI.md) §5.
 
 | Module | State |
 |---|---|

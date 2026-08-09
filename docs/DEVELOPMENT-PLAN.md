@@ -84,12 +84,14 @@ not remembered; if it disagrees with the repository, the repository is right.
 - `RadioCore` and `IAX2Kit` are complete. `M17Kit` has reflector control,
   base-40 callsigns and stream-packet parse/serialise, but **no codec wiring
   and no `M17Client`** — M17-4 and M17-5 are the remaining work there.
-- The **registration and authentication paths have been exercised against a
-  real node** (ASL3 in a VM, 2026-08-09), which settled OQ-5 — the MD5 RESULT
-  encoding is now an observation rather than an assumption. The **call and
-  voice paths have not**: no audio has crossed a real link, so M2 sign-off
-  (`docs/CLI.md` §5) is still entirely outstanding, and the capture-replay
-  conformance test (IAX-9) is still to be written.
+- **`IAX2Kit` has been validated against a real node** (ASL3 in a VM,
+  2026-08-09): registration, authentication — which settled OQ-5 — and then a
+  full two-way audio session. **Milestone M2 has passed** (`docs/CLI.md` §5):
+  speech intelligible both ways, DTMF round-tripped, the SF-1 watchdog cut
+  transmission at exactly its limit, teardown clean. Two items want a re-run
+  before v1 (PTT edges, the signal teardown paths) and one wart is tracked as
+  IAX-10. The capture-replay conformance test (IAX-9) now has captures for
+  both halves but is still to be written.
 
 Per-task status is on the task headings themselves — `✅ DONE` where the work
 has merged and the code it describes exists.
@@ -542,15 +544,42 @@ directions, 32 datagrams. That is a legitimate fixture source under LP-1 and
 covers REGREQ, REGAUTH, REGREQ+MD5, REGACK, REGREJ and ACK discipline. It
 contains no secret: only the challenges and the digests derived from them.
 
-**The voice half does not.** The registration flow places no call, so the
-capture has no NEW/ACCEPT/ANSWER, no full voice frames, no mini-frames and no
-timestamp wrap. Ask the maintainer to run `tcpdump -w allstar.pcap udp port
-4569` during a short `hamvoip-cli connect` QSO to get those.
+**The voice half now exists too.** `connect3.pcap`, captured 2026-08-09 during
+the M2 sign-off against the maintainer's own ASL3 node: two sessions of 36.7 s
+and 15.7 s, ~1100 datagrams, covering NEW → AUTHREQ → AUTHREP → ACCEPT →
+ANSWER, full VOICE frames and the switch to mini frames (§8.1.2), 1135 mini
+frames each way at 160 octets, DTMF out and echoed back, PING/PONG,
+LAGRQ/LAGRP, VNAK with the retransmission that recovered it, and a clean
+client-initiated HANGUP with cause IEs. **Still missing:** a 16-bit timestamp
+wrap, which needs a session longer than 65.5 s.
 
 Then, for both halves: convert to hex fixtures and replay the server-side
 datagrams through MockTransport, asserting the client's responses are
 protocol-valid (parseable, correct call numbers, sequence numbers, ACK
 discipline).
+
+---
+
+### IAX-10 — Pace transmitted frames instead of bursting them ⚠️ NEW
+**Depends on:** CLI-1. **Found by:** the M2 sign-off session, 2026-08-09.
+
+Every over in `connect3.pcap` opens with the whole of the first capture
+buffer's worth of frames leaving in the *same millisecond* — a full VOICE
+frame plus a dozen or more mini frames, timestamped 20 ms apart but sent at
+once. The capture tap hands `AudioFrameBridge` a buffer, the transmit loop
+drains it as fast as it can, and nothing paces the result to the 20 ms grid
+those timestamps claim.
+
+On one of the two sessions the node answered the first voice frame with
+`VNAK` ×3; the retransmission engine resent and the call carried on unharmed,
+which is why this is a wart and not a defect. But a burst is not what the
+timestamps describe, it gives the peer's jitter buffer a worse arrival
+distribution than it needs, and it is the most likely explanation for a VNAK
+that appeared on one session and not the other.
+
+**Done when:** frames leave at roughly the interval their timestamps claim,
+a test asserts the pacing against a mock clock, and a re-captured session
+shows no VNAK at the start of an over.
 
 ---
 
