@@ -84,9 +84,12 @@ not remembered; if it disagrees with the repository, the repository is right.
 - `RadioCore` and `IAX2Kit` are complete. `M17Kit` has reflector control,
   base-40 callsigns and stream-packet parse/serialise, but **no codec wiring
   and no `M17Client`** — M17-4 and M17-5 are the remaining work there.
-- Nothing in this repository has been exercised against a real node. The
-  authentication encoding is still the assumption described in OQ-5, and there
-  is no capture-replay conformance test (IAX-9).
+- The **registration and authentication paths have been exercised against a
+  real node** (ASL3 in a VM, 2026-08-09), which settled OQ-5 — the MD5 RESULT
+  encoding is now an observation rather than an assumption. The **call and
+  voice paths have not**: no audio has crossed a real link, so M2 sign-off
+  (`docs/CLI.md` §5) is still entirely outstanding, and the capture-replay
+  conformance test (IAX-9) is still to be written.
 
 Per-task status is on the task headings themselves — `✅ DONE` where the work
 has merged and the code it describes exists.
@@ -410,12 +413,14 @@ Pure function: `md5Response(challenge: String, secret: String) -> String`.
 RSA (AUTHMETHODS 0x0004) is out of scope for v1 — reject it with a clear
 error rather than failing obscurely.
 
-⚠️ **OQ-5 lives here.** §8.6.15 says the IE carries the *UTF-8-encoded* MD5
-result, but the RFC never states the text encoding — hex or not, upper or
-lower case. LP-2 forbids reading an implementation to settle it. Ship
-**lowercase 32-character hex** as the documented assumption, isolate it behind
-a single named function so it can be changed in one place, and put a prominent
-`// OQ-5:` comment there. CLI-1 against a live node is what will confirm it.
+✅ **OQ-5 lived here, and is settled.** §8.6.15 says the IE carries the
+*UTF-8-encoded* MD5 result, but the RFC never states the text encoding — hex
+or not, upper or lower case. LP-2 forbade reading an implementation to settle
+it, so it shipped as an assumption — **lowercase 32-character hex**, isolated
+behind a single named function with a `// OQ-5:` comment — and was confirmed
+against a live ASL3 node on 2026-08-09. The assumption was right; the
+function stays as it is. See the open-questions table for the evidence and for
+what the result does and does not license.
 
 **Done when:** test vectors computed by hand (e.g. via the `md5` CLI, noted in
 a comment) pass; empty challenge/secret handled; the encoding assumption is
@@ -510,20 +515,42 @@ refresh at a jittered fraction of the granted validity period (§7.2.2) and a
 geometric retry ladder with a configurable ceiling. Events surface as
 `refreshScheduled`, `retryScheduled` and `gaveUp`.
 
-⚠️ **One seam left open**, and OQ-5 is what will force it: the registrar calls
+**Validated live on 2026-08-09** against an ASL3 node (Asterisk + app_rpt, in
+a UTM VM), by the four `hamvoip-cli oq5 --method register` probes that settled
+OQ-5. All four completed the §6.1 exchange end to end — REGREQ → ACK →
+REGAUTH → ACK → REGREQ+MD5 → ACK → REGACK/REGREJ → ACK — with correct call
+numbers, correct `OSeqno`/`ISeqno` progression, ACKs not consuming a sequence
+number, and well-formed IEs in both directions. This is the first time the
+registration path has run against anything other than a fixture.
+
+ℹ️ **One seam left open**, no longer urgent: the registrar calls
 `IAX2Auth.md5Response(challenge:secret:)` with the **default** encoding and
 carries no override, where `IAX2Call.Configuration` gained one in `c77ce86`.
-If OQ-5 resolves to anything other than lowercase hex, registered node mode
-stays broken until `md5ResultEncoding` is threaded through
-`IAX2Registrar.Configuration` in the same shape. See `docs/CLI.md`.
+OQ-5 resolved *to* lowercase hex, so registered node mode (FR-1.3) works as
+shipped and this is now a symmetry/hygiene item rather than a defect. Thread
+`md5ResultEncoding` through `IAX2Registrar.Configuration` in the same shape
+when convenient. See `docs/CLI.md`.
 
-### IAX-9 — Capture-replay conformance test
+### IAX-9 — Capture-replay conformance test ⏳ HALF-UNBLOCKED
 **Depends on:** IAX-8. **Blocked on human:** requires a packet capture of
-the maintainer's own AllStar session (LP-1). Ask the maintainer to run
-`tcpdump -w allstar.pcap udp port 4569` during a short QSO and convert to
-hex fixtures. Then: replay server-side datagrams through MockTransport and
-assert the client's responses are protocol-valid (parseable, correct call
-numbers, sequence numbers, ACK discipline).
+the maintainer's own AllStar session (LP-1).
+
+**The signalling half now exists.** The OQ-5 session of 2026-08-09 produced a
+capture of the maintainer's own traffic against their own ASL3 node —
+`oq5-confirm.pcap`, four complete §6.1 registration exchanges, both
+directions, 32 datagrams. That is a legitimate fixture source under LP-1 and
+covers REGREQ, REGAUTH, REGREQ+MD5, REGACK, REGREJ and ACK discipline. It
+contains no secret: only the challenges and the digests derived from them.
+
+**The voice half does not.** The registration flow places no call, so the
+capture has no NEW/ACCEPT/ANSWER, no full voice frames, no mini-frames and no
+timestamp wrap. Ask the maintainer to run `tcpdump -w allstar.pcap udp port
+4569` during a short `hamvoip-cli connect` QSO to get those.
+
+Then, for both halves: convert to hex fixtures and replay the server-side
+datagrams through MockTransport, asserting the client's responses are
+protocol-valid (parseable, correct call numbers, sequence numbers, ACK
+discipline).
 
 ---
 
@@ -717,7 +744,7 @@ human validation.
 | ~~OQ-3~~ | ~~App name~~ **RESOLVED: "Currawong".** A bird with a distinctive, far-carrying call, and locally notable in VK1. Trademark databases checked: nothing in class 9 (the class that governs software); the hits are food/wine, tourism operators, and "Currawong Engineering" — no app. Derives from no existing product's branding, as OQ-3 required. Library naming is unaffected: the package stays `swift-hamvoip`. **Bundle identifier still open** — see OQ-3b. | — |
 | ~~OQ-3b~~ | ~~Bundle identifier~~ **RESOLVED: `au.charlesmartin.currawong`.** Extensions extend it (`…currawong.liveactivity`); the Keychain access group is `$(TeamID).au.charlesmartin.currawong`. | — |
 | ~~OQ-4~~ | ~~App in a separate repo?~~ **RESOLVED: yes**, a separate `currawong` repo depending on `swift-hamvoip` via SPM. Keeps the Apache-2.0 protocol libraries reusable, keeps app-only dependencies out of the library repo, and lets the two release independently. | — |
-| **OQ-5** | ⏳ **Ready to settle — one session with a live node.** Run `hamvoip-cli oq5 --host … --node … --username … --callsign …`. It defaults to the **registration** flow (REGREQ → REGAUTH → REGREQ+MD5 → REGACK), so it settles the question with **no call placed, nothing ringing and no repeater keyed**; `--method call` places a real call if needed. It tries lowercase-hex (shipped), uppercase-hex, base64 and raw-bytes. Whatever wins, set `IAX2Call.Configuration.md5ResultEncoding` (reachable from `IAX2Client.Configuration.call`) — the encoding is plumbed end to end and covered by a test. **Original question:** how is MD5_RESULT represented on the wire? §8.6.15 says the IE carries the UTF-8-encoded MD5 of `challenge ‖ password`, but the RFC never states the text encoding — hex or not, upper or lower case, padded or not. This cannot be resolved from the specification, and LP-2 forbids reading an implementation to find out. It has to be settled empirically against a real node. | IAX-4 ships lowercase 32-char hex as the documented assumption; **IAX-9/CLI-1 must confirm it against a live AllStar node before v1** |
+| **OQ-5** | ✅ **RESOLVED 2026-08-09 — hexadecimal. Keep sending lowercase; no code change.** Settled by `hamvoip-cli oq5 --method register --exhaustive` against an ASL3 node (Asterisk + app_rpt in a UTM VM), packet capture retained. Result: **`lowercase-hex` ACCEPTED** (REGACK), **`uppercase-hex` ACCEPTED** (REGACK), **`base64` REFUSED**, **`raw-bytes` REFUSED** — both refusals `CAUSE "Registration Refused"`, `CAUSE CODE 29`, and each of the four probes got its own fresh CHALLENGE on its own UDP association, so these are four independent verifications. Both hex cases being accepted is not a contradiction and does not make the run unreliable: the node is decoding the IE text back to sixteen bytes, or comparing it case-insensitively. The refusals are what carry the weight — a node that accepted anything would have taken base64 too, so the digest is genuinely being checked. Corroborated on the wire: the node answered REGACK immediately but held both REGREJs for ~1.0 s, the pacing of a real credential check that failed rather than a parse error. **Scope of the claim:** this is an observation about one implementation, not a fact about the protocol. Case-insensitivity is that node's business; another peer may well compare byte-for-byte, so `IAX2Auth.TextDigestEncoding.oq5Default` stays lowercase hex. **Original question:** §8.6.15 says the IE carries the UTF-8-encoded MD5 of `challenge ‖ password`, but the RFC never states the text encoding — hex or not, upper or lower case, padded or not. Unresolvable from the specification, and LP-2 forbids reading an implementation to find out. | Confirms IAX-4's shipped assumption. Unblocks the `connect` path and FR-1.3 registered node mode; downgrades the `IAX2Registrar` encoding seam from defect to hygiene |
 | **OQ-6** | **LGPL-2.1 relinking vs App Store code signing.** Shipping Codec2 as a dynamic framework satisfies LP-4's letter, but a signed iOS app cannot have its framework substituted by the user, which is what LGPL §6 relinking is for. A licensing judgement, not a technical blocker, and unchanged by the M17-1 spike — but it wants a conscious decision before App Store submission, not after. | App Store submission of M17 |
 | **OQ-7** | **Is the M17 IP stream frame 56 bytes or 54?** The spec's Table 27 gives LICH as 240 bits, which is the full 30-byte LSF *including* its own CRC → 56 bytes. 54 is widely quoted elsewhere, and the difference is exactly whether that CRC is present. Implemented as 56 per the spec. Cannot be settled from the document. | **M17-4 — settle against a capture from a live reflector before building stream TX.** `M17StreamPacket.byteCount` is the single place to change |
 | **OQ-8** | **The M17 reflector specification is offline.** The chapter we implement against was published as HTML at a readthedocs host that now 404s; M17-3 worked from an Internet Archive capture. Should the repository keep a local copy of that archived chapter, licence permitting? Right now the only record of what we implemented against is a third-party archive that may itself disappear. | Nothing today; a maintenance risk |

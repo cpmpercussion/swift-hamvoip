@@ -155,8 +155,31 @@ hamvoip-cli connect --host … --node … --username vk1xyz --callsign VK1XYZ
 read -rs HAMVOIP_SECRET && export HAMVOIP_SECRET
 hamvoip-cli connect --host … --node … --username vk1xyz --callsign VK1XYZ
 
+# 2a. One-shot, from a file or the Keychain. Nothing persists, nothing
+#     reaches argv, and only the path reaches your shell history.
+HAMVOIP_SECRET="$(cat ~/.config/hamvoip/secret)" hamvoip-cli connect …
+HAMVOIP_SECRET="$(security find-generic-password -a hamvoip -s <account> -w)" \
+    hamvoip-cli connect …
+
 # 3. --secret. Scripting only, and it costs you the hazard above.
 hamvoip-cli connect … --secret "$(cat ~/.config/hamvoip/secret)"
+```
+
+**If it prompts when you expected it not to, the variable was not in the
+process environment** — the tool checks `HAMVOIP_SECRET` and treats an empty
+value as absent, so a prompt means nothing was there to find. An `export`
+lives only in the shell that ran it: a new tab, a new terminal, a `sudo`, or a
+runner that starts a fresh shell per command all lose it. Confirm with
+`printenv HAMVOIP_SECRET | wc -c` in the *same* shell you are about to run
+from, or sidestep the question entirely with the one-shot form above. Note
+also that `read` takes its input from stdin — paste a whole multi-line block
+at once and `read` will silently swallow the next line of the block as the
+secret.
+
+To put a secret in the Keychain rather than a plaintext file:
+
+```sh
+security add-generic-password -a hamvoip -s <account> -w
 ```
 
 Precedence is `--secret` → `$HAMVOIP_SECRET` → prompt. The banner names the
@@ -185,6 +208,35 @@ tempting shortcut.
 
 IAX-4 shipped **lowercase 32-character hex** as a documented assumption. This
 subcommand turns the assumption into an observation by asking a real node.
+
+### The answer, 2026-08-09
+
+**Hexadecimal. Keep sending lowercase.** Asked of an ASL3 node (Asterisk +
+app_rpt, in a UTM VM) with `--method register --exhaustive`:
+
+| Candidate | Node's answer |
+|---|---|
+| `lowercase-hex` | **REGACK** — accepted |
+| `uppercase-hex` | **REGACK** — accepted |
+| `base64` | REGREJ, `CAUSE "Registration Refused"`, `CAUSE CODE 29` |
+| `raw-bytes` | REGREJ, `CAUSE "Registration Refused"`, `CAUSE CODE 29` |
+
+Two acceptances, and the run is still sound. Each probe ran on its own UDP
+association and drew its own fresh CHALLENGE, so these are four independent
+verifications rather than one result echoed. A node that decodes the IE text
+back to sixteen bytes before comparing — or that compares case-insensitively —
+accepts both hex renderings by construction. The refusals are what make the
+reading safe: a node that waved everything through would have taken base64
+too, so this one is genuinely checking the digest. The capture corroborates
+it — REGACK came back immediately, while both REGREJs were held for about a
+second, which is the pacing of a credential check that failed rather than of a
+parse error.
+
+**What this does not license.** It is an observation about one implementation.
+Case-insensitivity is that node's business, not the protocol's; the RFC still
+does not say. Another peer may compare byte-for-byte, so
+`IAX2Auth.TextDigestEncoding.oq5Default` stays lowercase hex and no call site
+changes.
 
 ### Running it
 
@@ -274,13 +326,15 @@ let client = IAX2Client(configuration: configuration)
 To change it for every caller rather than per client, edit the closure in
 `IAX2Auth.TextDigestEncoding.oq5Default` instead.
 
-**⚠️ The registration path is not configurable.**
+**ℹ️ The registration path is not configurable — which turned out not to matter.**
 `IAX2Registrar` calls `IAX2Auth.md5Response(challenge:secret:)` with the
 default encoding (`Sources/IAX2Kit/IAX2Registration.swift:927`) and carries no
-override. If the answer is not lowercase hex, **registered node mode (FR-1.3)
-stays broken until `md5ResultEncoding` is threaded through
-`IAX2Registrar.Configuration` the same way it was threaded through
-`IAX2Call.Configuration`.** This is a real gap, not a matter of opinion.
+override. Had the answer been anything other than lowercase hex, registered
+node mode (FR-1.3) would have stayed broken until `md5ResultEncoding` was
+threaded through `IAX2Registrar.Configuration` the same way it was threaded
+through `IAX2Call.Configuration`. The 2026-08-09 run resolved OQ-5 to
+lowercase hex, so FR-1.3 works as shipped and threading the override through
+is now a symmetry item rather than a defect.
 
 **⚠️ `raw-bytes` cannot be expressed at all.**
 `TextDigestEncoding` renders to a `String`, and `InformationElement.md5Result`

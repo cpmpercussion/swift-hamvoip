@@ -8,6 +8,40 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+### Resolved
+
+- **OQ-5 — the MD5 RESULT encoding is hexadecimal.** Settled against a live
+  ASL3 node on 2026-08-09 with `hamvoip-cli oq5 --method register
+  --exhaustive`: lowercase and uppercase hex both accepted, base64 and raw
+  bytes both refused with cause code 29. The node decodes the IE back to bytes
+  or compares case-insensitively; the refusals prove it checks the digest at
+  all. **What IAX2Kit already sent was right, so no behaviour changed** — the
+  §8.6.15 encoding is now an observation rather than an assumption. It remains
+  an observation about one implementation: `oq5Default` stays lowercase hex,
+  because another peer may compare byte-for-byte.
+- **The IAX2 registration path has run against a real node.** Four complete
+  §6.1 exchanges — REGREQ → REGAUTH → REGREQ+MD5 → REGACK/REGREJ — with
+  correct call numbers, sequence progression and ACK discipline in both
+  directions. Previously it had only ever been exercised against fixtures.
+  The call and voice paths still have not: M2 sign-off remains outstanding.
+
+### Fixed
+
+- `hamvoip-cli oq5` no longer reports a case-insensitive node as an impossible
+  result. Accepting both hex renderings while refusing a non-hex one is now
+  read as the answer it is; only genuinely contradictory combinations are
+  reported as unreliable. Accepting both hex forms with *nothing* refused is
+  reported as inconclusive rather than as an answer, since a node that accepts
+  anything is indistinguishable from that angle.
+
+### Changed
+
+- The `IAX2Registrar` MD5-encoding seam is downgraded from a defect to a
+  hygiene item: it hard-codes the default encoding, and the default turned out
+  to be correct, so FR-1.3 registered node mode works as shipped.
+- `docs/CLI.md` gains one-shot and Keychain forms for supplying the secret,
+  and an explanation of why `HAMVOIP_SECRET` can appear not to take effect.
+
 ## [0.1.0] — 2026-08-09
 
 First release. The AllStarLink/IAX2 path is complete and tested against

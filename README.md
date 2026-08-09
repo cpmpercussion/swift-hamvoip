@@ -29,14 +29,19 @@ retransmission, MD5 authentication, the call state machine, voice, DTMF,
 registration, and a client that composes them. All of it is driven from
 recorded fixtures and a mock transport, exactly as AU-5 requires.
 
-None of it has been validated against a real node. One thing in particular is
-an **unverified assumption**: RFC 5456 §8.6.15 does not state how `MD5_RESULT`
-is textually encoded, and the clean-room policy forbids reading an
-implementation to find out. The library ships lowercase 32-character hex. If
-that is wrong, authentication fails against real nodes, and the fix is one
-configuration value — `IAX2Call.Configuration.md5ResultEncoding`, reachable
-from `IAX2Client.Configuration.call`, plumbed end to end and covered by a test.
-`hamvoip-cli oq5` settles it in one session; see [`docs/CLI.md`](docs/CLI.md).
+The **registration and authentication paths have now been run against a real
+node** — an ASL3 node in a VM, on 2026-08-09 — which settled the one thing
+that had been an **unverified assumption**. RFC 5456 §8.6.15 does not state
+how `MD5_RESULT` is textually encoded, and the clean-room policy forbids
+reading an implementation to find out, so the library shipped lowercase
+32-character hex on the strength of an argument rather than an observation.
+`hamvoip-cli oq5` asked the node, and the answer was hexadecimal: nothing
+changed, and the assumption is now a measurement. See
+[`docs/CLI.md`](docs/CLI.md) §4 for the evidence and its limits.
+
+The **call and voice paths have still not been validated against a real
+node** — no audio has crossed a real link, and the M2 sign-off checklist in
+[`docs/CLI.md`](docs/CLI.md) §5 is untouched.
 
 | Module | State |
 |---|---|
@@ -117,7 +122,7 @@ let client = IAX2Client(clock: manualClock, transportFactory: { _ in mock })
 
 `hamvoip-cli` is a macOS harness for validating the stack against a real node
 before any GUI is involved — connect, monitor levels, key up, send DTMF, and
-settle OQ-5. See [`docs/CLI.md`](docs/CLI.md).
+settle OQ-5, which it has now done. See [`docs/CLI.md`](docs/CLI.md).
 
 ```sh
 swift run hamvoip-cli --help
