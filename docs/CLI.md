@@ -111,6 +111,29 @@ Event lines scroll; a status line stays on the bottom row:
 * `drop N` appears if captured frames were discarded because the sender could
   not keep up. Anything other than absent is a finding worth reporting.
 
+### The closing summary
+
+```
+Summary:
+  frames captured      2431  (microphone runs continuously)
+  frames transmitted   860  (PTT on)
+  frames dropped       0
+  DTMF sent/received   4/0
+  watchdog expiries    0
+```
+
+**Captured and transmitted are different numbers, and the gap is the point.**
+Capture runs for the whole session so that PTT edges are crisp, and the gate
+is in `IAX2Client.send(pcm:)`; `frames captured` therefore counts everything
+the microphone produced, keyed or not, while `frames transmitted` counts only
+what the gate let through. Captured greatly exceeding transmitted is the
+normal, correct shape of a session where you listened more than you talked.
+
+**`frames transmitted` non-zero while you never pressed SPACE would be a
+serious defect** — the client keying up on its own — so it is worth a glance
+every run. These two were reported as one number labelled "transmitted
+frames" until a live session made the ambiguity obvious.
+
 The watchdog gets a bell and a banner of its own when it fires:
 
 ```
@@ -359,7 +382,54 @@ on the CLI-1 pull request.
 may key a repeater. Announce yourself before testing on a busy node, and prefer
 a private or test node for the level-setting parts.
 
-1. **The call comes up.**
+### Doing it without keying anything
+
+Most of this list can be done alone, against your own node, with no RF at all
+— which is worth doing first, because a defect found here costs nobody any
+airtime. Point the account's `context=` in `iax.conf` at a plain Asterisk
+dialplan context rather than at an app_rpt node. Ordinary dialplan
+applications never enter the repeater or link path, so nothing is keyed and
+nothing reaches the network even from a node that is connected to it:
+
+```ini
+[hamvoip-test]
+exten => 100,1,Answer()          ; echo — hear yourself back
+ same => n,Wait(1)
+ same => n,Echo()
+ same => n,Hangup()
+exten => 101,1,Answer()          ; known speech — judge playback rate
+ same => n,Playback(demo-congrats)
+ same => n,Hangup()
+exten => 102,1,Answer()          ; 1004 Hz at 0 dBm0 — a level reference
+ same => n,Milliwatt()
+ same => n,Hangup()
+exten => 103,1,Answer()          ; DTMF in, digits read back
+ same => n,Read(digits,,4)
+ same => n,SayDigits(${digits})
+ same => n,Hangup()
+```
+
+The account also needs `disallow=all` / `allow=ulaw`: the client advertises
+G.711 µ-law as its entire CAPABILITY and FORMAT (`IAX2Client.swift`), so a node
+offering nothing else in common will refuse the call. It needs
+`requirecalltoken=no` as well — call token is an Asterisk extension, not part
+of RFC 5456, and IAX2Kit does not implement it.
+
+Not every Asterisk build loads every application. If the console says
+`No application 'Echo'`, the call is *accepted* and then dropped the moment the
+dialplan reaches that line, which looks like a client fault and is not one:
+
+```sh
+sudo asterisk -rx "module show like echo"
+sudo asterisk -rx "module load app_echo.so"
+```
+
+Keep `asterisk -rvvvv` open throughout. It is the difference between "the node
+hung up" and knowing why.
+
+1. **The call comes up.** ✅ *Observed 2026-08-09 against ASL3:*
+   `CONNECTED  codec G.711 µ-law`, reached with authentication, which confirms
+   OQ-5 for the `connect` path as well as the registration path.
    `hamvoip-cli connect …` reaches `CONNECTED` and names a codec. Note whether
    it needed auth; if it did, OQ-5 has just been confirmed for the `connect`
    path too.

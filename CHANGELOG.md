@@ -27,6 +27,20 @@ major version is 0, the API may change in any release.
 
 ### Fixed
 
+- **`hamvoip-cli connect` no longer reports captured frames as transmitted
+  ones.** The closing summary printed the audio bridge's *submitted* count
+  under the label `transmitted frames`; because capture runs continuously by
+  design, that number rises whether or not PTT is on, so a session with no
+  transmission at all reported 55 transmitted frames. It now reports `frames
+  captured` and `frames transmitted` separately, the latter counted at the PTT
+  gate itself. No behaviour changed — nothing was ever sent unkeyed — but a
+  summary that says the client keyed up when it did not is the most alarming
+  thing it could get wrong, and it would have been read into an M2 sign-off.
+- **`MediaFormat` names the codec instead of printing a bitmask.** A live
+  session showed `CONNECTED  codec MediaFormat(rawValue: 4)` where
+  `docs/CLI.md` §5 promises the harness names a codec; it now prints
+  `G.711 µ-law`, joins multiple bits with `+`, and surfaces unassigned bits
+  rather than dropping them.
 - `hamvoip-cli oq5` no longer reports a case-insensitive node as an impossible
   result. Accepting both hex renderings while refusing a non-hex one is now
   read as the answer it is; only genuinely contradictory combinations are

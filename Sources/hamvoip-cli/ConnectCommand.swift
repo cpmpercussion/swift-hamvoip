@@ -129,6 +129,14 @@ actor ConnectSession {
     private var watchdogExpiries = 0
     private var dtmfSent = 0
     private var dtmfReceived = 0
+    /// Frames that actually reached the wire — counted where `send(pcm:)`
+    /// returns a frame rather than `nil`, which is the PTT gate itself.
+    ///
+    /// Kept separate from the bridge's *submitted* count on purpose. Capture
+    /// runs continuously, so the submitted count rises whether or not PTT is
+    /// on; reporting it as "transmitted" says the client keyed up when it did
+    /// not, which is the single most alarming thing a summary could get wrong.
+    private var transmittedFrames = 0
     private var finished = false
 
     init(
@@ -295,6 +303,7 @@ actor ConnectSession {
         for await frame in bridge.frames {
             do {
                 if try await client.send(pcm: frame) != nil {
+                    transmittedFrames += 1
                     txMeter.push(frame)
                 } else {
                     txMeter.idle()
@@ -489,7 +498,8 @@ actor ConnectSession {
     private func printSummary() async {
         await console.log("""
             Summary:
-              transmitted frames   \(bridge.submittedFrameCount)
+              frames captured      \(bridge.submittedFrameCount)  (microphone runs continuously)
+              frames transmitted   \(transmittedFrames)  (PTT on)
               frames dropped       \(bridge.droppedFrameCount)
               DTMF sent/received   \(dtmfSent)/\(dtmfReceived)
               watchdog expiries    \(watchdogExpiries)
