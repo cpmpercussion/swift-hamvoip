@@ -1,0 +1,27 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  spdx:
+    name: SPDX headers (LP-5)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check every Swift file carries an SPDX identifier
+        run: |
+          missing=0
+          while IFS= read -r f; do
+            if ! head -3 "$f" | grep -q 'SPDX-License-Identifier'; then
+              echo "::error file=$f::missing SPDX identifier"
+              missing=1
+            fi
+          done < <(find Sources Tests -name '*.swift')
+          exit $missing
+
+  build:
+    name: Build and test
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift build
+      - run: swift test
