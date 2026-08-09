@@ -542,13 +542,22 @@ records a successful live connection (**Milestone M2**). CI only builds it.
 
 ---
 
-## Phase 4 — SwiftUI app ⛔ partially blocked
+## Phase 4 — Currawong, the SwiftUI app ✅ UNBLOCKED
 
-**Human decisions needed first:** OQ-3 (app name / bundle id) and OQ-4
-(separate repo — recommended and assumed here). Do not start APP tasks
-until the maintainer answers; then create the app repo with **xcodegen**
-(`project.yml`, no checked-in `.xcodeproj`) per the repo's Apple
-development procedures.
+**The app is called Currawong** — a bird with a distinctive, far-carrying
+call, locally notable in VK1. Trademark checked clear in class 9.
+
+- **Repository:** a separate `currawong` repo (OQ-4), depending on
+  `swift-hamvoip` via SPM. **This repo stays library-only.**
+- **Bundle identifier:** `au.charlesmartin.currawong`. Extensions extend it
+  (`au.charlesmartin.currawong.liveactivity`). Keychain access group
+  `$(TeamID).au.charlesmartin.currawong`.
+- **Project generation:** **xcodegen** (`project.yml`), no checked-in
+  `.xcodeproj`, per the repo's Apple development procedures.
+- The app talks to `IAX2Client` **only through the `NetworkClient`
+  protocol** — it must know nothing about IAX2, M17 or EchoLink specifics.
+  If the app needs a protocol-specific type, that is a signal `NetworkClient`
+  is missing something; fix it there rather than leaking the detail upward.
 
 - **APP-1** — xcodegen scaffold: iOS 16+ app depending on swift-hamvoip via
   SPM; background modes `audio` + `bluetooth-central` (PD-2); CI via
@@ -662,7 +671,9 @@ human validation.
 |---|---|---|
 | OQ-1 | EchoLink ToS permit third-party clients? | Phase 6 |
 | ~~OQ-2~~ | ~~Codec2 XCFramework builds all three slices?~~ **RESOLVED: yes.** All three slices build dynamic and sign cleanly; see `docs/reference/CODEC2-XCFRAMEWORK.md`. | — |
-| OQ-3 | App name + bundle id | Phase 4 |
+| ~~OQ-3~~ | ~~App name~~ **RESOLVED: "Currawong".** A bird with a distinctive, far-carrying call, and locally notable in VK1. Trademark databases checked: nothing in class 9 (the class that governs software); the hits are food/wine, tourism operators, and "Currawong Engineering" — no app. Derives from no existing product's branding, as OQ-3 required. Library naming is unaffected: the package stays `swift-hamvoip`. **Bundle identifier still open** — see OQ-3b. | — |
+| ~~OQ-3b~~ | ~~Bundle identifier~~ **RESOLVED: `au.charlesmartin.currawong`.** Extensions extend it (`…currawong.liveactivity`); the Keychain access group is `$(TeamID).au.charlesmartin.currawong`. | — |
+| ~~OQ-4~~ | ~~App in a separate repo?~~ **RESOLVED: yes**, a separate `currawong` repo depending on `swift-hamvoip` via SPM. Keeps the Apache-2.0 protocol libraries reusable, keeps app-only dependencies out of the library repo, and lets the two release independently. | — |
 | OQ-4 | App in separate repo? (plan assumes yes) | Phase 4 |
 | **OQ-5** | **How is MD5_RESULT represented on the wire?** §8.6.15 says the IE carries the UTF-8-encoded MD5 of `challenge ‖ password`, but the RFC never states the text encoding — hex or not, upper or lower case, padded or not. This cannot be resolved from the specification, and LP-2 forbids reading an implementation to find out. It has to be settled empirically against a real node. | IAX-4 ships lowercase 32-char hex as the documented assumption; **IAX-9/CLI-1 must confirm it against a live AllStar node before v1** |
 | **OQ-6** | **LGPL-2.1 relinking vs App Store code signing.** Shipping Codec2 as a dynamic framework satisfies LP-4's letter, but a signed iOS app cannot have its framework substituted by the user, which is what LGPL §6 relinking is for. A licensing judgement, not a technical blocker, and unchanged by the M17-1 spike — but it wants a conscious decision before App Store submission, not after. | App Store submission of M17 |
