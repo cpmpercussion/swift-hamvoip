@@ -120,9 +120,10 @@ public struct G711MuLawCodec: VoiceCodec, Sendable {
         let biased = (1 << (exponent + 7)) | (mantissa << (exponent + 3)) | (1 << (exponent + 2))
         let magnitude = biased - bias
 
-        if sign != 0 {
-            return magnitude == 0 ? -1 : Int16(-magnitude)
-        }
-        return Int16(magnitude)
+        // Both 0xFF and 0x7F decode to zero. µ-law has a positive and a
+        // negative zero code, so the decode map is deliberately NOT injective
+        // — do not "fix" this by making 0x7F return -1. Doing so would make
+        // decode→encode a round trip at the cost of no longer being G.711.
+        return Int16(sign != 0 ? -magnitude : magnitude)
     }
 }

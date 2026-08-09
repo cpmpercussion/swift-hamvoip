@@ -145,20 +145,81 @@ final class G711MuLawCodecTests: XCTestCase {
 
     // MARK: - Full byte-space properties
 
-    func testAll256BytesDecodeToDistinctValues() {
+    /// µ-law has both a positive and a negative zero code, so the decode map
+    /// is *not* injective: 0xFF and 0x7F both decode to 0, giving 255 distinct
+    /// outputs from 256 inputs. An implementation that produces 256 distinct
+    /// values has departed from G.711 somewhere.
+    func testDecodeIsInjectiveExceptForTheTwoZeroCodes() {
         var seen = Set<Int16>()
         for raw in 0...255 {
             seen.insert(G711MuLawCodec.decodeSample(UInt8(raw)))
         }
-        XCTAssertEqual(seen.count, 256)
+        XCTAssertEqual(seen.count, 255)
+        XCTAssertEqual(G711MuLawCodec.decodeSample(0xFF), 0, "positive zero")
+        XCTAssertEqual(G711MuLawCodec.decodeSample(0x7F), 0, "negative zero")
     }
 
-    func testDecodeThenEncodeIsExactForEveryByte() {
+    /// Every byte except negative zero re-encodes to itself. 0x7F is the sole
+    /// exception, and collapses onto the positive zero code.
+    func testDecodeThenEncodeIsExactForEveryByteExceptNegativeZero() {
         for raw in 0...255 {
             let byte = UInt8(raw)
             let decoded = G711MuLawCodec.decodeSample(byte)
             let reencoded = G711MuLawCodec.encodeSample(decoded)
-            XCTAssertEqual(reencoded, byte, "byte \(String(format: "0x%02X", byte)) did not round trip")
+            let expected: UInt8 = (byte == 0x7F) ? 0xFF : byte
+            XCTAssertEqual(reencoded, expected, "byte \(String(format: "0x%02X", byte)) did not round trip")
         }
+    }
+
+    // MARK: - Conformance to the classic 14-bit formulation
+
+    /// Pins this implementation against the textbook G.711 construction
+    /// (right-shift to 14 bits, clip 8159, bias 33, segment-end search).
+    ///
+    /// The two agree bit-for-bit on every non-negative sample. They diverge on
+    /// 381 negative samples for one reason only: shifting a negative value
+    /// right floors it, which rounds the *magnitude* away from zero, whereas
+    /// this implementation takes the magnitude first and truncates toward
+    /// zero. Ours is symmetric in sign; the textbook version's asymmetry is an
+    /// artefact of C's arithmetic shift, not something G.711 asks for. Both
+    /// are within one quantisation step, so both interoperate.
+    ///
+    /// This test locks in that story: exact agreement on non-negatives, and
+    /// exact agreement on negatives once the reference is given the same
+    /// magnitude-first treatment.
+    func testMatchesClassic14BitFormulation() {
+        let segmentEnds = [0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF]
+
+        func reference(_ pcm: Int16, magnitudeFirst: Bool) -> UInt8 {
+            let mask: Int
+            var value: Int
+            if magnitudeFirst {
+                mask = pcm < 0 ? 0x7F : 0xFF
+                value = abs(Int(pcm)) >> 2
+            } else {
+                value = Int(pcm) >> 2
+                if value < 0 { mask = 0x7F; value = -value } else { mask = 0xFF }
+            }
+            value = min(value, 8159)
+            value += 33
+            let segment = segmentEnds.firstIndex { value <= $0 } ?? 8
+            if segment >= 8 { return UInt8(0x7F ^ mask) }
+            return UInt8(((segment << 4) | ((value >> (segment + 1)) & 0x0F)) ^ mask)
+        }
+
+        var negativeDivergences = 0
+        for raw in Int(Int16.min)...Int(Int16.max) {
+            let sample = Int16(raw)
+            let ours = G711MuLawCodec.encodeSample(sample)
+
+            XCTAssertEqual(ours, reference(sample, magnitudeFirst: true),
+                           "diverged from the magnitude-first reference at \(sample)")
+
+            if ours != reference(sample, magnitudeFirst: false) {
+                XCTAssertLessThan(sample, 0, "diverged from the textbook reference at \(sample), which is not negative")
+                negativeDivergences += 1
+            }
+        }
+        XCTAssertEqual(negativeDivergences, 381, "the shift-direction divergence set changed size")
     }
 }
