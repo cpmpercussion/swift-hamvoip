@@ -1,0 +1,27 @@
+# client-connect.hex — the two inbound datagrams that bring an outbound call
+# up, hand-built from RFC 5456 §9.6 flow (a) (docs/reference/RFC5456-NOTES.md
+# §12) octet by octet from the RFC (provenance rule 1, Tests/FIXTURES.md).
+#
+#   NEW  ==>            (ours; not in this file)
+#        <== ACCEPT      FORMAT = G.711 µ-law
+#   ACK  ==>
+#        <== ANSWER      Control 0x04, §6.3.4
+#   ACK  ==>
+#
+# This is `call-basic-session.hex` without the trailing HANGUP: IAX-8's tests
+# need a call that stays up so that media can flow through it, and they inject
+# the teardown separately (client-hangup.hex) when they want one.
+#
+# Our source call number is 1 — the first `IAX2CallNumberAllocator` hands out,
+# deterministically — and the peer's is 0x0042. Every frame here is therefore
+# source 0x0042, destination 0x0001, with F = 1 in the top bit (§8.1.1).
+#
+# The peer's ISeqno stays at 1: our only non-exempt full frame so far is the
+# NEW (OSeqno 0), and ACKs "do not change the message count" (§7).
+
+# ACCEPT, ts 100, OSeq 0, ISeq 1, type 0x06 IAX, subclass 0x07 ACCEPT (§8.4).
+# Payload: FORMAT IE (0x09), 4 octets, G.711 µ-law = 0x00000004 (§8.6.8, §8.7).
+8042 0001 00000064 00 01 06 07  09 04 00000004
+
+# ANSWER, ts 200, OSeq 1, ISeq 1, type 0x04 Control, subclass 0x04 (§8.3).
+8042 0001 000000c8 01 01 04 04
