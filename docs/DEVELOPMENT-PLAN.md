@@ -90,10 +90,11 @@ Phase 0  Bootstrap        BOOT-1             (blocks everything)
 Phase 1  RadioCore        RC-1 … RC-8        (needs BOOT-1)
 Phase 2  IAX2Kit          IAX-1 … IAX-9      (needs RC-1..RC-4)
 Phase 3  CLI harness      CLI-1              (needs IAX-8)
-Phase 4  SwiftUI app      APP-1 … APP-4      (BLOCKED on OQ-3, OQ-4 — human)
+Phase 4  SwiftUI app      APP-1 … APP-4      (unblocked: OQ-3/3b/4 resolved)
 Phase 5  BLE PTT          BLE-1 … BLE-3      (needs APP-2)
-Phase 6  EchoLink         —                  (BLOCKED on OQ-1 — do not start)
-Phase 7  M17Kit           M17-1 … M17-5      (M17-1 blocked on OQ-2 spike result)
+Phase 6  EchoLink         —                  (BLOCKED on OQ-9 — do not start;
+                                              OQ-1 terms gate is cleared)
+Phase 7  M17Kit           M17-1 … M17-5      (M17-1 ✅ done, OQ-2 resolved)
 ```
 
 Within a phase, tasks are ordered; a task lists its hard dependencies. Tasks
@@ -585,13 +586,28 @@ call, locally notable in VK1. Trademark checked clear in class 9.
 - **BLE-3** — Runtime: apply learned mapping → press/release edges drive
   PTT; UI indicator for accessory link state.
 
-## Phase 6 — EchoLink ⛔ BLOCKED (OQ-1)
+## Phase 6 — EchoLink ⛔ BLOCKED (OQ-9)
 
-Do not write EchoLink code, capture EchoLink traffic, or design its API
-until the maintainer confirms Synergenics' terms permit third-party
-clients. When unblocked, this phase gets its own task breakdown (directory
-TCP 5200, RTP/GSM UDP 5198/5199, proxy transport default-on-cellular per
-FR-3.3, vendored BSD-licensed `libgsm` per LP-4).
+**The terms-of-service gate is cleared (OQ-1, resolved 2026-08-09).** The
+remaining block is a clean-room sourcing problem, and it is a harder one:
+EchoLink has no published protocol specification, and LP-2 forbids exactly the
+implementations that document it. Do not write EchoLink code or design its API
+until the maintainer settles OQ-9 — where the protocol knowledge comes from.
+
+Two things an agent must not do here, even though the phase is closer than it
+was. **Do not read SvxLink, EchoLib, thebridge, MicroLink or any other EchoLink
+implementation**, including any linked from the discussion that resolved OQ-1;
+those citations are evidence about the service's posture, not permitted
+sources (LP-1, LP-2). **Do not use "EchoLink" as a product name** — nominative,
+descriptive use only, per OQ-1b.
+
+Capturing the maintainer's *own* EchoLink traffic is a legitimate fixture source
+under LP-1 and is candidate (c) in OQ-9, but it is the maintainer's action to
+run, not an agent's.
+
+When unblocked, this phase gets its own task breakdown (directory TCP 5200,
+RTP/GSM UDP 5198/5199, proxy transport default-on-cellular per FR-3.3,
+vendored BSD-licensed `libgsm` per LP-4).
 
 ## Phase 7 — M17Kit
 
@@ -669,15 +685,17 @@ human validation.
 
 | ID | Question | Blocks |
 |---|---|---|
-| OQ-1 | EchoLink ToS permit third-party clients? | Phase 6 |
+| ~~OQ-1~~ | ~~EchoLink ToS permit third-party clients?~~ **RESOLVED: yes — the terms are not the blocker.** Maintainer's judgement, 2026-08-09. The terms govern *who may use the service* — a validated licensed amateur — not *what software they use to reach it*; they are written about the person and make no mention of the client. FR-3.4 already keeps us on the right side of that distinction: the operator supplies their own validated EchoLink credentials, the app performs no validation of its own, and it grants no access the operator did not already have. Nothing the terms protect is being circumvented. Supporting evidence: third-party clients have coexisted with the service for roughly two decades — SvxLink/EchoLib, thebridge, "Echo" on Android, MicroLink for microcontrollers, and more obscure or dead ones besides — with no visible enforcement against them. That is evidence about posture, not a licence grant. Underlying it is the amateur service's own norm: an operator reaches a band from whatever equipment they choose, and EchoLink has effectively established itself as a new band. **What this does not resolve:** trademark (OQ-1b) and clean-room sourcing (OQ-9). | **Phase 6 is still blocked — on OQ-9, no longer on the terms** |
+| **OQ-1b** | **"EchoLink" is a Synergenics trademark; resolving OQ-1 did not license the name.** Nominative use only. The mark may be used descriptively, to say what the app interoperates with — "EchoLink-compatible", a mode label in a picker. It MUST NOT appear in the app's name, icon, launch screen, App Store title or subtitle, or anywhere implying endorsement, affiliation or official status. The requirements table's single "Trademark / ToS" cell conflated this with OQ-1; they are separate questions and only one of them is now settled. | Phase 4 UI copy; App Store metadata for EchoLink support |
 | ~~OQ-2~~ | ~~Codec2 XCFramework builds all three slices?~~ **RESOLVED: yes.** All three slices build dynamic and sign cleanly; see `docs/reference/CODEC2-XCFRAMEWORK.md`. | — |
 | ~~OQ-3~~ | ~~App name~~ **RESOLVED: "Currawong".** A bird with a distinctive, far-carrying call, and locally notable in VK1. Trademark databases checked: nothing in class 9 (the class that governs software); the hits are food/wine, tourism operators, and "Currawong Engineering" — no app. Derives from no existing product's branding, as OQ-3 required. Library naming is unaffected: the package stays `swift-hamvoip`. **Bundle identifier still open** — see OQ-3b. | — |
 | ~~OQ-3b~~ | ~~Bundle identifier~~ **RESOLVED: `au.charlesmartin.currawong`.** Extensions extend it (`…currawong.liveactivity`); the Keychain access group is `$(TeamID).au.charlesmartin.currawong`. | — |
 | ~~OQ-4~~ | ~~App in a separate repo?~~ **RESOLVED: yes**, a separate `currawong` repo depending on `swift-hamvoip` via SPM. Keeps the Apache-2.0 protocol libraries reusable, keeps app-only dependencies out of the library repo, and lets the two release independently. | — |
-| OQ-4 | App in separate repo? (plan assumes yes) | Phase 4 |
 | **OQ-5** | ⏳ **Ready to settle — one session with a live node.** Run `hamvoip-cli oq5 --host … --node … --username … --callsign …`. It defaults to the **registration** flow (REGREQ → REGAUTH → REGREQ+MD5 → REGACK), so it settles the question with **no call placed, nothing ringing and no repeater keyed**; `--method call` places a real call if needed. It tries lowercase-hex (shipped), uppercase-hex, base64 and raw-bytes. Whatever wins, set `IAX2Call.Configuration.md5ResultEncoding` (reachable from `IAX2Client.Configuration.call`) — the encoding is plumbed end to end and covered by a test. **Original question:** how is MD5_RESULT represented on the wire? §8.6.15 says the IE carries the UTF-8-encoded MD5 of `challenge ‖ password`, but the RFC never states the text encoding — hex or not, upper or lower case, padded or not. This cannot be resolved from the specification, and LP-2 forbids reading an implementation to find out. It has to be settled empirically against a real node. | IAX-4 ships lowercase 32-char hex as the documented assumption; **IAX-9/CLI-1 must confirm it against a live AllStar node before v1** |
 | **OQ-6** | **LGPL-2.1 relinking vs App Store code signing.** Shipping Codec2 as a dynamic framework satisfies LP-4's letter, but a signed iOS app cannot have its framework substituted by the user, which is what LGPL §6 relinking is for. A licensing judgement, not a technical blocker, and unchanged by the M17-1 spike — but it wants a conscious decision before App Store submission, not after. | App Store submission of M17 |
 | **OQ-7** | **Is the M17 IP stream frame 56 bytes or 54?** The spec's Table 27 gives LICH as 240 bits, which is the full 30-byte LSF *including* its own CRC → 56 bytes. 54 is widely quoted elsewhere, and the difference is exactly whether that CRC is present. Implemented as 56 per the spec. Cannot be settled from the document. | **M17-4 — settle against a capture from a live reflector before building stream TX.** `M17StreamPacket.byteCount` is the single place to change |
 | **OQ-8** | **The M17 reflector specification is offline.** The chapter we implement against was published as HTML at a readthedocs host that now 404s; M17-3 worked from an Internet Archive capture. Should the repository keep a local copy of that archived chapter, licence permitting? Right now the only record of what we implemented against is a third-party archive that may itself disappear. | Nothing today; a maintenance risk |
+| **OQ-9** | ⛔ **Where does EchoLink protocol knowledge legitimately come from? This, not the terms, is what blocks Phase 6.** IAX2 has RFC 5456; M17 had a published spec (offline, but it existed — OQ-8). EchoLink has **no published protocol specification at all**, and LP-2 names SvxLink/EchoLib and thebridge — the projects that do document it, in code — as forbidden sources. Resolving OQ-1 therefore *moved* the block here rather than removing it, and the citations that support OQ-1 are precisely the sources an agent must not read. Candidate legitimate sources, for the maintainer to confirm before any Phase 6 task opens: (a) RFC 3550 for RTP framing; (b) the ETSI/ITU GSM 06.10 specification for the codec; (c) **packet captures of the maintainer's own EchoLink sessions**, under the same LP-1 fixture rule that governs IAX-9; (d) prose protocol write-ups that are documentation rather than source code, with provenance recorded per `docs/reference/PROVENANCE.md`. The directory protocol on TCP 5200 and the proxy transport are the parts least likely to fall out of (a)–(b) and most likely to need (c). | **Phase 6 — all of it** |
 | — | Packet capture of own AllStar session | IAX-9 |
+| — | Packet capture of own EchoLink session (directory + proxy especially) | OQ-9 / Phase 6 |
 | — | Capture from a live M17 reflector | OQ-7 / M17-4 |

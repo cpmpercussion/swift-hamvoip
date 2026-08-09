@@ -14,7 +14,7 @@ swift-hamvoip covers only modes with no patent encumbrance:
 
 - **AllStarLink** — IAX2 (RFC 5456), G.711 µ-law
 - **M17** — reflector protocol, Codec2 3200
-- **EchoLink** — RTP/GSM 06.10 *(planned, see OQ-1)*
+- **EchoLink** — RTP/GSM 06.10 *(planned, see OQ-9)*
 
 DMR, System Fusion, D-STAR, P25 and NXDN are permanently out of scope. All
 require AMBE or AMBE+2, which is patented.

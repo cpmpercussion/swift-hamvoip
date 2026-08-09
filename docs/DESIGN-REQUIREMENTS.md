@@ -24,7 +24,7 @@ licensed Swift implementation of IAX2 or M17 exists at all.
 |---|---|---|---|
 | AllStarLink | IAX2 (RFC 5456), UDP 4569 | G.711 µ-law | None |
 | M17 | Reflector protocol, UDP 17000 | Codec2 3200 | None |
-| EchoLink | RTP UDP 5198/5199, TCP 5200, proxy TCP | GSM 06.10 | Trademark / ToS — see OQ-1 |
+| EchoLink | RTP UDP 5198/5199, TCP 5200, proxy TCP | GSM 06.10 | Terms: cleared (OQ-1). Trademark: nominative use only (OQ-1b). No published spec — see OQ-9 |
 
 ### Explicit non-goals
 
@@ -81,7 +81,7 @@ after distribution has begun.
   in the UI. Encryption is not permitted in the amateur service in most
   jurisdictions including Australia.
 
-### 4.3 EchoLink — priority 2, gated on OQ-1
+### 4.3 EchoLink — priority 2, gated on OQ-9 (OQ-1 cleared)
 
 - **FR-3.1.** Directory login and station list over TCP 5200.
 - **FR-3.2.** Audio as GSM 06.10 in RTP on UDP 5198; station info and
@@ -150,9 +150,18 @@ failure mode for software clients. These requirements are not negotiable.
 
 ## 9. Open questions
 
-- **OQ-1.** Do Synergenics' current terms permit third-party EchoLink clients?
-  This gates all of §4.3 and must be resolved before reverse-engineering effort
-  is invested.
+- **OQ-1.** ~~Do Synergenics' current terms permit third-party EchoLink
+  clients?~~ **Resolved 2026-08-09: yes; the terms are not the blocker.** They
+  govern who may use the service, not what software reaches it, and FR-3.4
+  already has the operator authenticating with their own validated account. See
+  the open-questions table in `docs/DEVELOPMENT-PLAN.md` for the full reasoning.
+- **OQ-1b.** "EchoLink" is a Synergenics trademark. Descriptive use only —
+  never in the app name, icon or App Store title, and never implying
+  endorsement. This is what remains of the old "Trademark / ToS" cell in §2.
+- **OQ-9.** What are the permitted sources for EchoLink protocol knowledge?
+  There is no published specification, and LP-2 forbids the implementations
+  that document it. **This now gates all of §4.3** — resolving OQ-1 moved the
+  block here rather than removing it.
 - **OQ-2.** Codec2 as a dynamic XCFramework — confirm the build works for
   iOS device, iOS simulator and macOS arm64 slices before committing to M17.
 - **OQ-3.** Application name and bundle identifier. Library naming is settled
@@ -169,7 +178,7 @@ failure mode for software clients. These requirements are not negotiable.
    fault, not a codec fault.
 3. Minimal SwiftUI shell — on-screen PTT only.
 4. BLE PTT with learn mode.
-5. EchoLink, subject to OQ-1.
+5. EchoLink, subject to OQ-9.
 6. `M17Kit`.
 
 The ordering is deliberate. Building M17 first would mean debugging Codec2 and
