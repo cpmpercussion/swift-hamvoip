@@ -1,0 +1,44 @@
+# voice-mulaw-stream.hex — one full Voice frame followed by seven Mini
+# Frames: the mini-frame stream of RFC 5456 §9.6, hand-built octet by octet
+# from the RFC (provenance rule 1, Tests/FIXTURES.md).
+#
+# Direction: peer (source call number 0x0042) → us (0x0001).
+#
+# Datagram 1 — full Voice frame, 12-octet header, §8.1.1 Figure 5:
+#
+#   80 42        F = 1 + 15-bit source call number 0x0042            §8.1.1
+#   00 01        R = 0 + 15-bit destination call number 0x0001       §8.1.1
+#   00 00 00 14  32-bit time-stamp: 20 ms since the first
+#                transmission of the call                            §8.1.1
+#   02           OSeqno = 2                                          §8.1.1
+#   01           ISeqno = 1                                          §8.1.1
+#   02           Frame Type 0x02 = Voice                             §8.2, §8.2.2
+#   82           C = 1, field = 2, so the subclass value is 1 << 2 =
+#                0x00000004 = G.711 µ-law. This frame is what pins
+#                the codec for every Mini Frame after it     §8.1.1, §8.7, §8.1.2
+#
+# Datagrams 2–8 — Mini Frames, 4-octet header, §8.1.2 Figure 6:
+#
+#   00 42        F = 0 + 15-bit source call number 0x0042. A Mini
+#                Frame has no destination call number, no sequence
+#                numbers, no frame type and no subclass              §8.1.2
+#   xx xx        16-bit time-stamp: "the lower 16 bits of the
+#                transmitting peer's full 32-bit time-stamp"         §8.1.2
+#
+# Time-stamps step by 20 ms — 40, 60, 80, 100, 120, 140, 160 — which is one
+# G.711 frame at the default 8 kHz sampling rate (§8.6.32).
+#
+# Payloads are 160 octets each: µ-law is "1 byte per sample" (§8.7) and 20 ms
+# of 8 kHz audio is 160 samples. Every octet of frame k is 0xFF − k, so each
+# frame decodes to a constant PCM level and the eight frames form the ramp
+# 0, 8, 16, 24, 32, 40, 48, 56 — which makes an out-of-order playout obvious
+# in a test failure rather than subtle.
+#
+8042 0001 00000014 02 01 02 82 ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+0042 0028 fefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefe
+0042 003c fdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfd
+0042 0050 fcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfc
+0042 0064 fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb
+0042 0078 fafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafa
+0042 008c f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9
+0042 00a0 f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8

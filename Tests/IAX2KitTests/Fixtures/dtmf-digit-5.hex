@@ -1,0 +1,39 @@
+# dtmf-digit-5.hex — the DTMF digit '5' as this client transmits it.
+#
+# Hand-built octet by octet from RFC 5456 (provenance rule 1,
+# Tests/FIXTURES.md). Direction: us (source call number 0x0001) → peer
+# (0x0042), on a call that is up.
+#
+# A DTMF digit is a **Full Frame of frame type 0x01, one digit per frame**:
+#
+#   "The message carries a single digit of DTMF (Dual Tone Multi-Frequency)."
+#                                                                       §6.10.1
+#   "For DTMF frames, the subclass is the actual DTMF digit carried by the
+#    frame."                                                            §8.2.1
+#
+# 12-octet header, §8.1.1 Figure 5:
+#
+#   80 01        F = 1 + 15-bit source call number 0x0001              §8.1.1
+#   00 42        R = 0 + 15-bit destination call number 0x0042         §8.1.1
+#   00 00 03 e8  32-bit time-stamp 0x3E8 = 1000 ms since the first
+#                transmission of the call                              §8.1.1
+#   01           OSeqno = 1. The NEW carried OSeqno 0 (§7, §6.2.2) and
+#                the two ACKs since do not advance the counter — "the
+#                ACK, INVAL, TXCNT, TXACC, and VNAK messages… do not
+#                change the message count"                             §7
+#   02           ISeqno = 2, the next expected inbound sequence number
+#                after the peer's ACCEPT (OSeqno 0) and ANSWER
+#                (OSeqno 1)                                            §8.1.1
+#   01           Frame Type 0x01 = DTMF                          §8.2, §8.2.1
+#   35           C = 0, 7-bit subclass field = 0x35 = ASCII '5'. The
+#                §8.2 table gives the DTMF subclass domain as
+#                0-9, A-D, * and #. RFC ambiguous: the RFC says only
+#                "the actual DTMF digit" and never states that the
+#                digit is ASCII-coded, but all sixteen symbols fit the
+#                7-bit field with C = 0 (notes §14)             §8.1.1, §8.2.1
+#
+# **No payload.** The §8.2 table gives the DTMF Data field as "Undefined",
+# and RFC 5456 defines no duration field, no volume field, and no BEGIN or
+# END frame of any kind — one frame is one whole digit (notes §14).
+#
+8001 0042 000003e8 01 02 01 35
