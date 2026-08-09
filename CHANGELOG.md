@@ -54,6 +54,14 @@ major version is 0, the API may change in any release.
   over-long ones are split across consecutive slots, and only a genuinely
   empty payload is rejected (`Rejection.emptyPayload`). The playout contract
   is unchanged: every tick is still exactly `samplesPerFrame` samples.
+- **Quitting no longer announces that your call dropped.** Pressing `q` (or
+  `Ctrl-C`, or taking a signal) closes the transport, and the read loop then
+  reported it as `DISCONNECTED: the transport closed` — telling the operator
+  their call had failed at the exact moment they ended it themselves. The
+  banner is now suppressed once a quit is under way. A packet capture confirms
+  the HANGUP and its ACK were going out correctly all along, so this was
+  always cosmetic; it was also alarming, and it appeared in the middle of a
+  sign-off run.
 - **`hamvoip-cli connect` no longer reports captured frames as transmitted
   ones.** The closing summary printed the audio bridge's *submitted* count
   under the label `transmitted frames`; because capture runs continuously by

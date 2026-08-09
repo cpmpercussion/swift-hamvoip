@@ -533,9 +533,11 @@ shipped and this is now a symmetry/hygiene item rather than a defect. Thread
 `md5ResultEncoding` through `IAX2Registrar.Configuration` in the same shape
 when convenient. See `docs/CLI.md`.
 
-### IAX-9 — Capture-replay conformance test ⏳ HALF-UNBLOCKED
-**Depends on:** IAX-8. **Blocked on human:** requires a packet capture of
-the maintainer's own AllStar session (LP-1).
+### IAX-9 — Capture-replay conformance test ✅ UNBLOCKED — captures in hand
+**Depends on:** IAX-8. **No longer blocked:** three captures of the
+maintainer's own sessions against their own node now exist (LP-1) —
+`oq5-confirm.pcap`, `connect3.pcap` and `wrap.pcap`. The task is now purely
+"convert and write the test".
 
 **The signalling half now exists.** The OQ-5 session of 2026-08-09 produced a
 capture of the maintainer's own traffic against their own ASL3 node —
@@ -550,8 +552,23 @@ and 15.7 s, ~1100 datagrams, covering NEW → AUTHREQ → AUTHREP → ACCEPT →
 ANSWER, full VOICE frames and the switch to mini frames (§8.1.2), 1135 mini
 frames each way at 160 octets, DTMF out and echoed back, PING/PONG,
 LAGRQ/LAGRP, VNAK with the retransmission that recovered it, and a clean
-client-initiated HANGUP with cause IEs. **Still missing:** a 16-bit timestamp
-wrap, which needs a session longer than 65.5 s.
+client-initiated HANGUP with cause IEs.
+
+**The timestamp wrap is captured too.** `wrap.pcap` — a 77 s session, 3780
+datagrams, keyed throughout — crosses the 16-bit mini-frame boundary in *both*
+directions, and the two directions do it differently, which is what makes the
+fixture worth having:
+
+- **Outbound**, mini time-stamps run `65521 → 25`, and at the boundary the
+  client sends a **full VOICE frame carrying the 32-bit time-stamp 65541**,
+  which the node ACKs. That is the §8.1 re-anchoring, on the wire.
+- **Inbound**, the node's mini time-stamps run `65520 → 4` with **no full
+  frame at the boundary at all** — a bare wrap, which `IAX2MiniTimestamp`
+  must expand from context alone. It did: not one frame was rejected across
+  the boundary.
+
+A replay of the inbound half is therefore a direct regression test for the
+expander, and the outbound half pins the client's own resync obligation.
 
 Then, for both halves: convert to hex fixtures and replay the server-side
 datagrams through MockTransport, asserting the client's responses are
