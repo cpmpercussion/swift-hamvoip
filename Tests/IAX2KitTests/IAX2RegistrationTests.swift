@@ -420,22 +420,25 @@ final class IAX2RegistrationTests: XCTestCase {
             // renewal. Anything larger than 0 must pull the delay in.
             randomUnitInterval: { 0.999 })
 
-        var scheduled: Duration?
-        let collector = Task {
+        // The task returns the value rather than writing to a captured `var`:
+        // mutating one from inside a concurrently-executing closure is
+        // rejected by older toolchains than this was written on, and nothing
+        // here wanted shared state in the first place.
+        let collector = Task { () -> Duration? in
             for await event in registrar.events {
                 if case .refreshScheduled(let after, _) = event {
-                    scheduled = after
-                    return
+                    return after
                 }
             }
+            return nil
         }
 
         try await registrar.register()
         for _ in 0..<100_000 where transport.sentCount < 1 { await Task.yield() }
         transport.inject(try fixture("reg-inbound-unchallenged.hex")[0])
         _ = try await registrar.waitUntilRegistered()
-        _ = await collector.value
 
+        let scheduled = await collector.value
         let delay = try XCTUnwrap(scheduled)
         XCTAssertGreaterThan(delay, .seconds(41), "0.7 × 60 s is the floor with jitter 0.1")
         XCTAssertLessThan(delay, .seconds(48), "strictly earlier than the un-jittered 0.8 × 60 s")
@@ -572,21 +575,20 @@ final class IAX2RegistrationTests: XCTestCase {
         configuration.retry = .none
         let harness = try await makeHarness(configuration: configuration)
 
-        var gaveUp: IAX2RegistrationError?
-        let collector = Task {
+        let collector = Task { () -> IAX2RegistrationError? in
             for await event in harness.registrar.events {
                 if case .gaveUp(let error) = event {
-                    gaveUp = error
-                    return
+                    return error
                 }
             }
+            return nil
         }
 
         try await harness.registrar.register()
         await waitForSent(harness.transport, count: 1)
         harness.transport.inject(try fixture("reg-inbound-reject.hex")[0])
         await waitFor(harness.registrar, state: .rejected)
-        _ = await collector.value
+        let gaveUp = await collector.value
 
         XCTAssertEqual(gaveUp, .rejected(cause: "Registration Refused", causeCode: 21))
         harness.clock.advance(by: .seconds(3600))

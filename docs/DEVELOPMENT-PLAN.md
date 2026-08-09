@@ -127,7 +127,7 @@ because it changes `Package.swift`, which no parallel task may touch):
 
 ## Phase 1 — RadioCore
 
-### RC-1 — `DatagramTransport` abstraction + mock
+### RC-1 — `DatagramTransport` abstraction + mock ✅ DONE
 **Depends on:** nothing.
 **Files:** `Sources/RadioCore/DatagramTransport.swift`,
 `Sources/RadioCore/NWDatagramTransport.swift`,
@@ -174,7 +174,7 @@ timeout, fix this first**; doing so needs double-resume protection, since the
 real `NWConnection` completion can fire after a cancellation-triggered early
 resume.
 
-### RC-2 — G.711 µ-law codec
+### RC-2 — G.711 µ-law codec ✅ DONE
 **Depends on:** nothing. **Spec:** ITU-T G.711 (µ-law).
 **Files:** `Sources/RadioCore/Codecs/G711MuLawCodec.swift`,
 `Tests/RadioCoreTests/G711MuLawCodecTests.swift`.
@@ -189,7 +189,7 @@ elsewhere.
 within µ-law quantisation error for a sweep of values including ±32767 and
 ±1; encode is monotonic in |x| per sign; wrong-length input throws.
 
-### RC-3 — Jitter buffer, fixed depth
+### RC-3 — Jitter buffer, fixed depth ✅ DONE
 **Depends on:** nothing. **Files:** rewrite
 `Sources/RadioCore/JitterBuffer.swift`,
 `Tests/RadioCoreTests/JitterBufferTests.swift`.
@@ -223,7 +223,7 @@ first, drop rest.
 late, single-loss, burst-loss, and starvation sequences, asserting the exact
 `JitterOutput` sequence for each.
 
-### RC-4 — Jitter buffer, adaptive depth (AU-3)
+### RC-4 — Jitter buffer, adaptive depth (AU-3) ✅ DONE
 **Depends on:** RC-3.
 
 Add an inter-arrival variance estimator (running mean absolute deviation of
@@ -245,7 +245,7 @@ that, resuming after a long gap emits one concealment per missed slot.
 Timestamp wraparound at 2³² ms is explicitly out of scope here:
 **IAX-6 owns 16→32-bit timestamp expansion** before frames reach the buffer.
 
-### RC-5 — Transmit watchdog (SF-1)
+### RC-5 — Transmit watchdog (SF-1) ✅ DONE
 **Depends on:** nothing.
 **Files:** `Sources/RadioCore/TransmitWatchdog.swift` + tests.
 
@@ -256,7 +256,7 @@ Timestamp wraparound at 2³² ms is explicitly out of scope here:
 **Done when:** tests prove expiry fires exactly once, cancel prevents it,
 and restart resets the deadline.
 
-### RC-6 — Received-audio leveller (AU-4)
+### RC-6 — Received-audio leveller (AU-4) ✅ DONE
 **Depends on:** nothing.
 **Files:** `Sources/RadioCore/AudioLeveller.swift` + tests.
 
@@ -269,7 +269,7 @@ floor (default −55 dBFS RMS). Pure DSP on buffers — no AVFoundation.
 synthetic frames; a −60 dBFS noise frame is not boosted; a 0 dBFS input is
 attenuated without wrap-around clipping artifacts (output clamped).
 
-### RC-7 — Audio pipeline (AU-1, AU-2)
+### RC-7 — Audio pipeline (AU-1, AU-2) ✅ DONE
 **Depends on:** RC-2, RC-3, RC-6.
 **Files:** `Sources/RadioCore/AudioPipeline.swift`.
 
@@ -326,7 +326,7 @@ things that change how these tasks must be written:
 - **Retry limit is 4, and exhausting it tears the call down silently** — no
   HANGUP is sent to a peer that has stopped answering.
 
-### IAX-1 — Frame model: parse + serialize
+### IAX-1 — Frame model: parse + serialize ✅ DONE
 **Depends on:** RC-8.
 **Files:** `Sources/IAX2Kit/IAX2Frame.swift`,
 `Tests/IAX2KitTests/IAX2FrameTests.swift`.
@@ -354,7 +354,7 @@ identically); truncated/garbage input throws rather than crashes; a
 hand-written hex fixture of a NEW frame built field-by-field from the RFC
 parses to the expected values.
 
-### IAX-2 — Information elements
+### IAX-2 — Information elements ✅ DONE
 **Depends on:** IAX-1.
 **Files:** `Sources/IAX2Kit/InformationElement.swift` + tests.
 
@@ -370,7 +370,7 @@ failure. Codec bitmask: µ-law = 1<<2 (verify against §8.7).
 payload fixture with USERNAME+CALLED_NUMBER+CAPABILITY+FORMAT+VERSION
 parses correctly.
 
-### IAX-3 — Sequence/retransmission engine
+### IAX-3 — Sequence/retransmission engine ✅ DONE
 **Depends on:** IAX-1.
 **Files:** `Sources/IAX2Kit/ReliableChannel.swift` + tests.
 
@@ -388,7 +388,7 @@ retransmission; missing ACK retransmits with R bit set and correct backoff;
 exhausted retries surface an error; inbound frame ordering updates ISeqno
 correctly.
 
-### IAX-4 — MD5 challenge authentication
+### IAX-4 — MD5 challenge authentication ✅ DONE
 **Depends on:** IAX-2.
 **Files:** `Sources/IAX2Kit/IAX2Auth.swift` + tests.
 
@@ -412,7 +412,7 @@ a single named function so it can be changed in one place, and put a prominent
 a comment) pass; empty challenge/secret handled; the encoding assumption is
 isolated and commented.
 
-### IAX-5 — Call state machine
+### IAX-5 — Call state machine ✅ DONE
 **Depends on:** IAX-2, IAX-3.
 **Files:** `Sources/IAX2Kit/IAX2Call.swift` + tests.
 
@@ -427,7 +427,7 @@ sequence of a successful NEW→ACCEPT→ANSWER call, then HANGUP) drives the
 FSM to `up` and back to `dead`; REJECT path and auth path each have a test;
 PING receives PONG with matching timestamp.
 
-### IAX-6 — Voice path
+### IAX-6 — Voice path ✅ DONE
 **Depends on:** IAX-5, RC-2, RC-3.
 
 Wire audio through the call: outbound — first voice frame after format
@@ -441,7 +441,7 @@ are re-expanded against the call's 32-bit clock and pushed into
 boundary; full-frame-then-mini ordering on transmit; a fixture stream of
 mini frames plays out of the jitter buffer in correct order.
 
-### IAX-7 — DTMF (FR-1.5)
+### IAX-7 — DTMF (FR-1.5) ✅ DONE
 **Depends on:** IAX-5.
 
 `send(dtmf: Character)` on the call actor: full frame, type DTMF, subclass =
@@ -451,7 +451,7 @@ requires, RFC-level only). Validate character set `0-9*#A-D`.
 **Done when:** encoded frames match hand-built fixtures; invalid characters
 throw.
 
-### IAX-8 — `IAX2Client`: public API
+### IAX-8 — `IAX2Client`: public API ✅ DONE
 **Depends on:** IAX-4…IAX-7, RC-5.
 **Files:** `Sources/IAX2Kit/IAX2Client.swift` + tests.
 
@@ -500,7 +500,7 @@ numbers, sequence numbers, ACK discipline).
 
 ---
 
-### RC-9 — Real-time-safe capture path ⚠️ NEW, do before CLI-1 sign-off
+### RC-9 — Real-time-safe capture path ⚠️ NEW, do before CLI-1 sign-off ✅ DONE
 **Depends on:** RC-7. **Files:** `Sources/RadioCore/AudioPipeline.swift` + tests.
 
 The `AVAudioEngine` tap callback runs on a real-time thread and currently
@@ -525,7 +525,7 @@ as exact 160-sample buffers; existing tests still pass.
 
 ## Phase 3 — CLI harness
 
-### CLI-1 — `hamvoip-cli` (macOS)
+### CLI-1 — `hamvoip-cli` (macOS) ✅ DONE (build/run/CI; live-node sign-off tracked separately via OQ-5)
 **Depends on:** IAX-8, RC-7.
 **Files:** new executable target in `Package.swift`
 (`.executableTarget(name: "hamvoip-cli", dependencies: ["IAX2Kit", "RadioCore"])`),
@@ -595,7 +595,7 @@ FR-3.3, vendored BSD-licensed `libgsm` per LP-4).
 
 ## Phase 7 — M17Kit
 
-### M17-1 — Codec2 XCFramework spike ⛔ gate (OQ-2)
+### M17-1 — Codec2 XCFramework spike ⛔ gate (OQ-2) — RESOLVED ✅ DONE
 Build script (`scripts/build-codec2-xcframework.sh`) compiling codec2
 (LGPL-2.1, from drowe67/codec2 — building it is fine; it is not a protocol
 implementation) as a **dynamic** XCFramework for iOS device, iOS simulator,
@@ -603,7 +603,7 @@ macOS arm64, with licence text bundled (LP-4). Deliverable: script + a
 written result on whether all three slices link. **A human confirms the
 gate before M17-3 proceeds.**
 
-### M17-2 — Base-40 callsign codec (FR-2.3)
+### M17-2 — Base-40 callsign codec (FR-2.3) ✅ DONE
 **Depends on:** nothing — pure function, can run any time.
 Per M17 spec "Address Encoding": charset index 1…39 =
 `A–Z`, `0–9`, `-`, `/`, `.` (verify exact order in spec); value =
