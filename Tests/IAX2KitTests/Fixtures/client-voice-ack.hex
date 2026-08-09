@@ -1,0 +1,29 @@
+# client-voice-ack.hex — the peer acknowledging the two full Voice frames of
+# the Milestone M1 transmission. Hand-built from RFC 5456 §6.9.1 and §6.10.
+#
+# > "Upon receiving any media message, except the abbreviated audio and video
+# > Mini Frames, an ACK message MUST be sent." (§6.10)
+#
+# > "An ACK … MUST return the same time-stamp it received. This time-stamp
+# > allows the originating peer to determine to which message the ACK is
+# > responding." (§6.9.1)
+#
+# The M1 test transmits one second of tone on a 20 ms grid starting at call
+# time-stamp 32,700 ms. Two of those fifty frames go out as full Voice frames:
+# the first (the codec pin, §8.1.2) and the one whose time-stamp crosses the
+# 0x8000 resync boundary (§6.10). Their time-stamps — and therefore the
+# time-stamps echoed here — are 32,700 = 0x7FBC and 32,780 = 0x800C.
+#
+# Source 0x0042 (the peer), destination 0x0001 (us), type 0x06 IAX,
+# subclass 0x04 ACK.
+#
+# The peer's OSeqno stays at 2 in both: it sent ACCEPT (0) and ANSWER (1), and
+# an ACK "does not change the message count" (§7). Its ISeqno advances 2 -> 3
+# because each of our full Voice frames is a sequenced full frame (§8.1.1);
+# neither the Mini Frames between them nor our own ACKs move any counter.
+
+# ACK of the full Voice frame at 32,700 ms (0x7FBC).
+8042 0001 00007fbc 02 02 06 04
+
+# ACK of the full Voice frame at 32,780 ms (0x800C), the 0x8000 resync frame.
+8042 0001 0000800c 02 03 06 04
