@@ -139,12 +139,13 @@ struct OQ5Command: AsyncParsableCommand {
 ///
 /// ### Why this speaks the protocol directly instead of using `IAX2Client`
 ///
-/// `IAX2Call` calls `IAX2Auth.md5Response(challenge:secret:)` with the default
-/// encoding, and neither `IAX2Client.Configuration` nor
-/// `IAX2Call.Configuration` carries an encoding to override it. The swappable
-/// `TextDigestEncoding` exists on `IAX2Auth` but is not plumbed through the
-/// call layer, and CLI-1 does not own IAX2Kit, so it cannot be plumbed through
-/// from here.
+/// The probe varies the encoding per attempt, and one of the candidates —
+/// ``MD5ResultEncoding/rawBytes`` — is not a text rendering at all, so it
+/// cannot go through `IAX2Auth.md5Response` or the `md5ResultEncoding` seam on
+/// `IAX2Call.Configuration`: it needs the MD5 RESULT IE built by hand as
+/// `.unknown(id: 0x10, …)`. Driving the exchange here keeps all four
+/// candidates on one code path instead of splitting three through the client
+/// and one around it.
 ///
 /// Rather than leave OQ-5 unanswerable, this probe drives the exchange itself
 /// on the public primitives — `ReliableChannel` for sequence numbers,
@@ -153,9 +154,10 @@ struct OQ5Command: AsyncParsableCommand {
 /// It re-implements no protocol logic that IAX2Kit already owns; it composes
 /// the same pieces `IAX2Call` composes, and varies the one thing under test.
 ///
-/// **When the answer turns out not to be lowercase hex**, the fix is a
-/// one-line change at `IAX2Call.handleAuthenticationRequest`'s call to
-/// `md5Response` — see docs/CLI.md.
+/// **When the answer turns out not to be lowercase hex**, the `connect` path
+/// is a configuration change (`IAX2Call.Configuration.md5ResultEncoding`), but
+/// the registration path has no such seam and `rawBytes` has no text rendering
+/// to set — see docs/CLI.md for what each outcome costs.
 enum OQ5Probe {
     /// What a node said about one candidate.
     enum Outcome {

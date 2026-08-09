@@ -249,33 +249,48 @@ CONCLUSION: this node accepts MD5 RESULT as lowercase-hex …
 
 ### If the answer is not `lowercase-hex`
 
-⚠️ **The `connect` path cannot yet use any other encoding, and this is a real
-limitation, not an oversight.**
+How much work this is depends on which candidate won. There are three cases,
+and only the first is free.
 
-`IAX2Call.handleAuthenticationRequest` calls
-`IAX2Auth.md5Response(challenge:secret:)` with the default encoding, and
-neither `IAX2Client.Configuration` nor `IAX2Call.Configuration` carries an
-encoding to override. `IAX2Auth.TextDigestEncoding` is swappable, but the seam
-stops at `IAX2Auth`; it is not plumbed through the call layer. CLI-1 does not
-own `Sources/IAX2Kit/`, so it could not plumb it through — which is why the
-`oq5` probe drives the exchange itself, on the public primitives
-(`ReliableChannel`, `InformationElement`,
-`IAX2Auth.md5Response(challenge:secret:encoding:)`), rather than through
-`IAX2Client`.
-
-The fix, for whoever owns IAX2Kit next, is one line in
-`Sources/IAX2Kit/IAX2Auth.swift`:
+**A text encoding, on the `connect` path — configuration only.**
+`IAX2Call.Configuration.md5ResultEncoding` carries the encoding and
+`IAX2Call` uses it when it answers an AUTHREQ, so nothing needs recompiling
+but your own call site:
 
 ```swift
-public static let oq5Default = TextDigestEncoding { bytes in
-    bytes.map { String(format: "%02x", $0) }.joined()   // ← the rendering
+var call = IAX2Call.Configuration()
+call.md5ResultEncoding = IAX2Auth.TextDigestEncoding { bytes in
+    bytes.map { String(format: "%02X", $0) }.joined()   // e.g. uppercase hex
 }
+
+var configuration = IAX2Client.Configuration()
+configuration.call = call
+
+let client = IAX2Client(configuration: configuration)
 ```
 
-Change that closure — or, better, thread a `TextDigestEncoding` through
-`IAX2Call.Configuration` so it is selectable per call — and `connect` follows.
-Do **not** change the digest computation in `md5Response`: OQ-5 is a question
-about rendering only, and the concatenation rule is settled by §8.6.15.
+To change it for every caller rather than per client, edit the closure in
+`IAX2Auth.TextDigestEncoding.oq5Default` instead.
+
+**⚠️ The registration path is not configurable.**
+`IAX2Registrar` calls `IAX2Auth.md5Response(challenge:secret:)` with the
+default encoding (`Sources/IAX2Kit/IAX2Registration.swift:927`) and carries no
+override. If the answer is not lowercase hex, **registered node mode (FR-1.3)
+stays broken until `md5ResultEncoding` is threaded through
+`IAX2Registrar.Configuration` the same way it was threaded through
+`IAX2Call.Configuration`.** This is a real gap, not a matter of opinion.
+
+**⚠️ `raw-bytes` cannot be expressed at all.**
+`TextDigestEncoding` renders to a `String`, and `InformationElement.md5Result`
+takes a `String`, so a digest sent as sixteen raw bytes is not reachable
+through either configuration point — which is exactly why the `oq5` probe
+builds `.unknown(id: 0x10, …)` by hand for that candidate. Should raw bytes
+win, IAX2Kit needs a byte-valued MD5 RESULT path before either `connect` or
+registration can authenticate.
+
+Do **not** change the digest computation in `md5Response` in any of these
+cases: OQ-5 is a question about rendering only, and the concatenation rule is
+settled by §8.6.15.
 
 ---
 

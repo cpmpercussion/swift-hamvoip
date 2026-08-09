@@ -70,18 +70,26 @@ do not improvise a different design.
    anything more than one test target needs there — `FixtureLoader` is
    already in place; `MockTransport` joins it in RC-1.
 
-## 2. Current state (as of this plan)
+## 2. Current state
 
-- `Package.swift` defines `RadioCore`, `IAX2Kit`, `M17Kit` + two test targets.
-- `Sources/RadioCore/` has three stub files: `NetworkClient.swift` (protocol,
-  done enough for now), `JitterBuffer.swift` (empty shell), `VoiceCodec.swift`
-  (protocol, done enough for now).
-- **`swift build` currently FAILS on `main`**: `IAX2Kit`, `M17Kit` and both
-  test targets are declared but have no source directories
-  (`error: target 'IAX2Kit' referenced in product 'IAX2Kit' is empty`).
-  BOOT-1 fixes this and must land before anything else.
-- CI: SPDX check + `swift build` + `swift test` on macOS 14 (currently red
-  for the same reason).
+**Updated 2026-08-09, at v0.1.** Everything below is checked against the tree,
+not remembered; if it disagrees with the repository, the repository is right.
+
+- `Package.swift` defines three library products — `RadioCore`, `IAX2Kit`,
+  `M17Kit` — plus the `hamvoip-cli` executable, a test-only `TestSupport`
+  target and four test targets. One dependency, `swift-argument-parser`,
+  authorised by CLI-1.
+- `swift build` and `swift test` are green on `main`: **520 tests, no
+  failures.** CI runs the SPDX check on Ubuntu and build + test on macOS 14.
+- `RadioCore` and `IAX2Kit` are complete. `M17Kit` has reflector control,
+  base-40 callsigns and stream-packet parse/serialise, but **no codec wiring
+  and no `M17Client`** — M17-4 and M17-5 are the remaining work there.
+- Nothing in this repository has been exercised against a real node. The
+  authentication encoding is still the assumption described in OQ-5, and there
+  is no capture-replay conformance test (IAX-9).
+
+Per-task status is on the task headings themselves — `✅ DONE` where the work
+has merged and the code it describes exists.
 
 ## 3. Phase map and dependencies
 
@@ -490,6 +498,24 @@ Covers FR-1.2 (direct); registered-node/Web-Transceiver REGREQ flow
 transmits 1 s of synthetic tone (asserting emitted datagram shapes),
 receives fixture voice datagrams and yields decoded PCM; watchdog expiry
 forces stopTransmit. **This is Milestone M1.**
+
+### IAX-8b — Registration, registered node mode (FR-1.3) ✅ DONE
+**Depends on:** IAX-8 ✅. Written up after the fact: the work merged in
+`9794a8d` while the plan still mentioned it only as "a follow-up subtask"
+inside IAX-8, with no entry of its own.
+
+`IAX2Registrar` (`Sources/IAX2Kit/IAX2Registration.swift`) implements the
+REGREQ → REGAUTH → REGREQ+MD5 → REGACK exchange of §6.1, plus REGREL,
+refresh at a jittered fraction of the granted validity period (§7.2.2) and a
+geometric retry ladder with a configurable ceiling. Events surface as
+`refreshScheduled`, `retryScheduled` and `gaveUp`.
+
+⚠️ **One seam left open**, and OQ-5 is what will force it: the registrar calls
+`IAX2Auth.md5Response(challenge:secret:)` with the **default** encoding and
+carries no override, where `IAX2Call.Configuration` gained one in `c77ce86`.
+If OQ-5 resolves to anything other than lowercase hex, registered node mode
+stays broken until `md5ResultEncoding` is threaded through
+`IAX2Registrar.Configuration` in the same shape. See `docs/CLI.md`.
 
 ### IAX-9 — Capture-replay conformance test
 **Depends on:** IAX-8. **Blocked on human:** requires a packet capture of
