@@ -630,6 +630,51 @@ final class M17ReflectorClientTests: XCTestCase {
         await harness.client.shutdown()
     }
 
+    // MARK: Reentrancy
+
+    /// `connect()` must still return when `ACKN` is processed *during*
+    /// `transport.send`, before the continuation is parked.
+    ///
+    /// This is a regression test for a real hang. `connect()` awaits
+    /// `transport.send`, and an actor is reentrant across an await, so the
+    /// receive loop can handle `ACKN` in that window. The `ACKN` handler sets
+    /// `state = .linked` before delivering the outcome, and the delivery path
+    /// used to stash an early result only while `state == .connecting` — so in
+    /// this interleaving the success was dropped on the floor and `connect()`
+    /// waited forever.
+    ///
+    /// Against the real `MockTransport` the window is narrow: it showed up as a
+    /// whole-suite hang in roughly 4% of runs and never once in 60 runs of this
+    /// class alone. `ReplyDuringSendTransport` makes the interleaving
+    /// deterministic by yielding to the receive loop from inside `send`.
+    func testConnectReturnsWhenAcknIsProcessedDuringSend() async throws {
+        let transport = ReplyDuringSendTransport(reply: try fixture("reflector-ackn.hex"))
+        let client = try M17ReflectorClient(
+            callsign: Self.callsign,
+            transport: transport,
+            clock: ManualTestClock(),
+            connectTimeout: .seconds(5),
+            linkTimeout: .seconds(30))
+
+        let completed = Completion()
+        let connect = Task {
+            try await client.connect(module: "A")
+            await completed.signal()
+        }
+
+        // Bounded cooperative wait — a regression must fail this test, not hang it.
+        for _ in 0..<200_000 where await !completed.isSignalled {
+            await Task.yield()
+        }
+
+        let returned = await completed.isSignalled
+        connect.cancel()
+        XCTAssertTrue(returned, "connect() never returned: the ACKN outcome was dropped")
+
+        let state = await client.linkState
+        XCTAssertEqual(state, .linked)
+    }
+
     // MARK: Shared steps
 
     /// Connects and links, leaving the harness in `.linked`.
@@ -639,5 +684,45 @@ final class M17ReflectorClientTests: XCTestCase {
         try await connect.value
         let state = await harness.client.linkState
         XCTAssertEqual(state, .linked)
+    }
+}
+
+// MARK: - Reentrancy test doubles
+
+/// Signals completion without the observer having to `await` the task itself.
+private actor Completion {
+    private(set) var isSignalled = false
+    func signal() { isSignalled = true }
+}
+
+/// Delivers a canned reply to `incoming` from *inside* `send`, then yields
+/// enough times for the client's receive loop to process it before `send`
+/// returns — reproducing the actor-reentrancy window deterministically.
+private final class ReplyDuringSendTransport: DatagramTransport, @unchecked Sendable {
+    let incoming: AsyncStream<Data>
+    private let continuation: AsyncStream<Data>.Continuation
+    private let reply: Data
+    private let lock = NSLock()
+    private var sentDatagrams: [Data] = []
+
+    var sent: [Data] { lock.withLock { sentDatagrams } }
+
+    init(reply: Data) {
+        var escaped: AsyncStream<Data>.Continuation!
+        incoming = AsyncStream<Data>(bufferingPolicy: .unbounded) { escaped = $0 }
+        continuation = escaped
+        self.reply = reply
+    }
+
+    func send(_ datagram: Data) async throws {
+        lock.withLock { sentDatagrams.append(datagram) }
+        continuation.yield(reply)
+        // Hand the receive loop the cooperative thread while this send is still
+        // in flight, so the reply is fully handled before `connect()` resumes.
+        for _ in 0..<100 { await Task.yield() }
+    }
+
+    func close() async {
+        continuation.finish()
     }
 }

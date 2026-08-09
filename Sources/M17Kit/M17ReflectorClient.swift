@@ -197,6 +197,17 @@ public actor M17ReflectorClient {
     /// continuation — possible because `transport.send` is awaited first, and
     /// an actor is reentrant across that await.
     private var pendingConnectResult: Result<Void, Error>?
+    /// True from the moment `connect()` commits to sending `CONN` until its
+    /// outcome has been handed back to the caller.
+    ///
+    /// This exists because "is a connect in flight?" cannot be inferred from
+    /// `state`. The inbound `ACKN` handler moves `state` to `.linked` *before*
+    /// delivering the outcome, so a result arriving during the reentrancy
+    /// window around `transport.send` would find no parked continuation and a
+    /// state that is no longer `.connecting` — and be dropped, hanging
+    /// `connect()` forever. Tracking the in-flight call explicitly makes the
+    /// stash independent of whatever `state` happens to be.
+    private var connectInFlight = false
 
     // MARK: Init
 
@@ -272,6 +283,7 @@ public actor M17ReflectorClient {
         pendingConnectResult = nil
         pendingModule = module
         state = .connecting
+        connectInFlight = true
         startReceiveLoopIfNeeded()
         emit(.connecting)
         armDeadline(after: connectTimeout, isConnectDeadline: true)
@@ -280,6 +292,7 @@ public actor M17ReflectorClient {
             try await transport.send(M17ControlPacket.connect(from: address, module: module).data)
         } catch {
             pendingConnectResult = nil
+            connectInFlight = false
             teardown(reason: .transportClosed)
             throw error
         }
@@ -458,11 +471,17 @@ public actor M17ReflectorClient {
     /// and picked up the moment it does, which closes the reentrancy window
     /// around `transport.send`.
     private func finishConnect(_ result: Result<Void, Error>) {
+        guard connectInFlight else { return }
         if let continuation = pendingConnect {
             pendingConnect = nil
             pendingConnectResult = nil
+            connectInFlight = false
             continuation.resume(with: result)
-        } else if state == .connecting {
+        } else {
+            // `connect()` has not parked its continuation yet. Stash the result
+            // for `awaitConnectOutcome()` to pick up. The stash must NOT be
+            // conditional on `state` — the ACKN handler has already moved it to
+            // `.linked` by the time it calls this.
             pendingConnectResult = result
         }
     }
@@ -470,6 +489,7 @@ public actor M17ReflectorClient {
     private func awaitConnectOutcome() async throws {
         if let stored = pendingConnectResult {
             pendingConnectResult = nil
+            connectInFlight = false
             return try stored.get()
         }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
