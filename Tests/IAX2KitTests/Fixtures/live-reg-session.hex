@@ -1,0 +1,55 @@
+# IAX-9 — the *node's* half of a live registration exchange (RFC 5456 §6.1).
+#
+# Provenance (LP-1, `Tests/FIXTURES.md` rule 2): a capture of the maintainer's
+# own traffic against the maintainer's own ASL3 node (Asterisk + app_rpt in a
+# UTM VM), taken 2026-08-09 during the session that settled OQ-5. Nothing here
+# comes from anyone else's implementation; these are the octets that node put
+# on the wire in reply to us.
+#
+# Only the inbound direction is checked in. The node's half carries a
+# CHALLENGE and nothing derived from a secret; our half carried an MD5 RESULT
+# computed from the maintainer's real node password, and there is no reason to
+# keep a digest of a live credential in the repository when the test does not
+# need it.
+#
+# The exchange, as it happened:
+#
+#   REGREQ  ==>  USERNAME + REFRESH                           §6.1.2
+#           <==  ACK                                          §6.1.2
+#           <==  REGAUTH  USERNAME + AUTHMETHODS + CHALLENGE  §6.1.3
+#   ACK     ==>                                               §6.1.3
+#   REGREQ  ==>  USERNAME + MD5 RESULT + REFRESH              §6.1.2, §8.6.15
+#           <==  ACK
+#           <==  REGACK   USERNAME + DATETIME + APPARENT ADDRESS + REFRESH  §6.1.4
+#   ACK     ==>                                               §6.1.4
+#
+# Two things this live node settled that no hand-built fixture could have:
+#
+#  * It answers a REGREQ with a bare ACK *and then* a REGAUTH, as two frames a
+#    few hundred microseconds apart, rather than letting the REGAUTH stand as
+#    the acknowledgement. Our reliable channel has to tolerate both.
+#  * The MD5 RESULT it accepts is lowercase hex text, not sixteen raw octets.
+#    That is OQ-5, and this is the capture that resolved it.
+#
+# The node's source call number here is 0x10d1 (4305); ours was 0x3b36 (15158),
+# a random-looking number because the OQ-5 probe picked one per run. The replay
+# test constructs its `IAX2Registrar` with that same 15158 rather than an
+# allocated 1, so every octet below is injected exactly as captured.
+#
+# Machine-generated. The captures themselves are not in the repository —
+# they are the maintainer's own, and large. Regenerate with:
+#   scripts/pcap-to-fixture.py oq5-confirm.pcap --stream 0 --dir in
+# Capture SHA-256: e1f9143411d1b91cf16bda9c80e52a46e4a7d405b68d44ffe90d2a6d3e86e35c
+#
+# Each datagram is the UDP payload verbatim — the octets RFC 5456 §5
+# defines as an IAX2 frame. `[n]` is the datagram's index in the capture
+# stream, so a gap in the indices is a datagram deliberately left out.
+
+# [1] 0.001s <== full   4305->15158 ts         18 O  0 I  1  ACK    0B
+90d1 3b36 00000012 00 01 06 04
+# [2] 0.001s <== full   4305->15158 ts         21 O  0 I  1  REGAUTH   24B
+90d1 3b36 00000015 00 01 06 0e 0e020002 0f09343538333731343731 06076f713574657374
+# [5] 0.002s <== full   4305->15158 ts          2 O  1 I  2  ACK    0B
+90d1 3b36 00000002 01 02 06 04
+# [6] 0.003s <== full   4305->15158 ts         24 O  1 I  2  REGACK   37B
+90d1 3b36 00000018 01 02 06 0f 06076f713574657374 1f0435092a36 1302003c 12100200dadbc0a841010000000000000000

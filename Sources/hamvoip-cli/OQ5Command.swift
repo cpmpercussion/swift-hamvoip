@@ -314,12 +314,21 @@ enum OQ5Probe {
                 continue
             }
 
-            let inbound = await channel.receive(frame)
-            guard case .deliver(let full) = inbound else { continue }
-
-            if await channel.destinationCallNumber == 0, full.sourceCallNumber != 0 {
+            // Learn the peer's call number *before* the channel sees the frame,
+            // the way `IAX2Call` and `IAX2Registrar` both do it. The channel
+            // ACKs from inside `receive`, so anything learned afterwards is
+            // learned too late for that ACK — and doing it on `.deliver` alone
+            // never learns it from the node's opening bare ACK, which is
+            // `.consumed`. The IAX-9 captures show the cost: every ACK this
+            // probe sent for a REGAUTH went out with destination call number 0
+            // instead of the node's (§6.2.1, §8.1.1). Asterisk tolerated it.
+            if let full = frame.fullFrame, full.sourceCallNumber != 0,
+                await channel.destinationCallNumber == 0 {
                 await channel.setDestinationCallNumber(full.sourceCallNumber)
             }
+
+            let inbound = await channel.receive(frame)
+            guard case .deliver(let full) = inbound else { continue }
 
             let elements = (try? InformationElement.parseList(full.payload)) ?? []
 
@@ -413,6 +422,41 @@ enum OQ5Probe {
                     """
             }
             return text
+        }
+        // Both hex renderings and nothing else. This is not the contradiction
+        // it looks like: a node that decodes the IE text back to sixteen bytes
+        // before comparing, or that compares the text case-insensitively,
+        // accepts both by construction. Whether that reading holds turns
+        // entirely on the *rejections* — a non-hex candidate being refused is
+        // what proves the node checks the digest at all, and so is what
+        // separates "hex, case-insensitive" from "accepts whatever it is
+        // sent". Without one, the run genuinely cannot tell those apart.
+        if Set(accepted) == [.lowercaseHex, .uppercaseHex] {
+            let refusedNonHex = results.contains { candidate, outcome in
+                guard candidate == .base64 || candidate == .rawBytes else { return false }
+                if case .rejected = outcome { return true }
+                return false
+            }
+            if refusedNonHex {
+                return """
+                    CONCLUSION: this node wants MD5 RESULT as hexadecimal and does not care \
+                    about case — it accepted both renderings of the same digest, and refused \
+                    a non-hex candidate, so it is checking the digest rather than waving \
+                    everything through. It is decoding the text back to bytes, or comparing \
+                    it case-insensitively.
+
+                    lowercase-hex is what IAX2Kit ships, so no code changes. Record the \
+                    observation against OQ-5 — and record it as this node's behaviour, not \
+                    as a fact about the protocol. Another implementation may well compare \
+                    byte-for-byte, so keep sending lowercase.
+                    """
+            }
+            return """
+                CONCLUSION: both hex renderings were accepted, but no non-hex candidate was \
+                refused, so this run cannot tell a case-insensitive node from one that \
+                accepts anything it is sent. Run it again without --encoding, so that \
+                base64 and raw-bytes are tested too.
+                """
         }
         if accepted.count > 1 {
             return "CONCLUSION: more than one encoding was accepted (\(accepted.map(\.rawValue).joined(separator: ", "))). "

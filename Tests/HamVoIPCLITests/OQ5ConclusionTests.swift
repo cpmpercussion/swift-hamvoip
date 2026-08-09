@@ -39,10 +39,42 @@ final class OQ5ConclusionTests: XCTestCase {
         XCTAssertFalse(text.contains("NOT what IAX2Kit ships"))
     }
 
-    func testTwoAcceptancesAreReportedAsAnUnreliableRunRatherThanAnAnswer() {
+    /// Observed against a live ASL3 node on 2026-08-09: both hex renderings
+    /// accepted, base64 and raw bytes refused. Reporting that as a broken run
+    /// would have thrown away the answer, so it is pinned here.
+    func testBothHexCasesAcceptedWithANonHexRefusalIsAnAnswerNotAFailedRun() {
         let text = OQ5Probe.conclusion(for: [
             (.lowercaseHex, accepted()),
             (.uppercaseHex, accepted()),
+            (.base64, rejected()),
+            (.rawBytes, rejected()),
+        ])
+        XCTAssertTrue(text.contains("hexadecimal"))
+        XCTAssertTrue(text.contains("does not care about case"))
+        XCTAssertTrue(text.contains("no code changes"))
+        XCTAssertFalse(text.contains("should not be possible"),
+            "a case-insensitive node is an ordinary node, not an unreliable run")
+    }
+
+    /// The same two acceptances without a non-hex refusal prove much less: a
+    /// node that accepts everything looks identical from here.
+    func testBothHexCasesAcceptedWithNothingRefusedAsksForTheFullRun() {
+        let text = OQ5Probe.conclusion(for: [
+            (.lowercaseHex, accepted()),
+            (.uppercaseHex, accepted()),
+        ])
+        XCTAssertTrue(text.contains("cannot tell"))
+        XCTAssertTrue(text.contains("--encoding"))
+        XCTAssertFalse(text.contains("no code changes"),
+            "this run has not established that the shipped encoding is checked at all")
+    }
+
+    /// A pair that no digest check can produce still has to read as broken.
+    func testAnImpossiblePairOfAcceptancesIsStillReportedAsUnreliable() {
+        let text = OQ5Probe.conclusion(for: [
+            (.lowercaseHex, accepted()),
+            (.base64, accepted()),
+            (.uppercaseHex, rejected()),
         ])
         XCTAssertTrue(text.contains("should not be possible"))
         XCTAssertTrue(text.contains("repeat it"))

@@ -461,4 +461,42 @@ final class InformationElementTests: XCTestCase {
         XCTAssertEqual(list.first(withID: 0x09), .format(.g711MuLaw))
         XCTAssertNil(list.first(withID: 0xEE))
     }
+
+    // MARK: MediaFormat description
+
+    /// A live session printed `CONNECTED  codec MediaFormat(rawValue: 4)`
+    /// where `docs/CLI.md` §5 promises the harness names a codec.
+    func testTheNegotiatedCodecIsNamedRatherThanPrintedAsABitmask() {
+        XCTAssertEqual("\(MediaFormat.g711MuLaw)", "G.711 µ-law")
+        XCTAssertFalse("\(MediaFormat.g711MuLaw)".contains("rawValue"))
+    }
+
+    func testEveryDefinedFormatHasAName() {
+        let defined: [MediaFormat] = [
+            .g723_1, .gsmFullRate, .g711MuLaw, .g711ALaw, .g726, .imaADPCM,
+            .linear16LittleEndian, .lpc10, .g729, .speex, .ilbc, .g726AAL2,
+            .g722, .amr, .jpeg, .png, .h261, .h263, .h263p, .h264,
+        ]
+        for format in defined {
+            XCTAssertFalse("\(format)".contains("unassigned"), "\(format.rawValue) is unnamed")
+            XCTAssertFalse("\(format)".contains("rawValue"))
+        }
+    }
+
+    func testAMultiCodecCapabilityListsEveryBit() {
+        let both: MediaFormat = [.g711MuLaw, .gsmFullRate]
+        XCTAssertEqual("\(both)", "GSM+G.711 µ-law")
+    }
+
+    /// An unrecognised codec is precisely when the raw bits matter, so they
+    /// are shown rather than dropped.
+    func testUnassignedBitsAreSurfacedNotSwallowed() {
+        let exotic = MediaFormat(rawValue: MediaFormat.g711MuLaw.rawValue | (1 << 14))
+        XCTAssertTrue("\(exotic)".contains("G.711 µ-law"))
+        XCTAssertTrue("\(exotic)".contains("unassigned(0x4000)"))
+    }
+
+    func testAnEmptyFormatSaysSoRatherThanPrintingNothing() {
+        XCTAssertEqual("\(MediaFormat(rawValue: 0))", "none")
+    }
 }

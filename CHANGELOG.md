@@ -8,6 +8,123 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+### Milestone
+
+- **M2 passed on 2026-08-09 — a human held a two-way audio conversation
+  through this stack.** Against an ASL3 node (Asterisk + app_rpt in a UTM VM),
+  via `Echo()` in a plain dialplan context so nothing was keyed. Speech was
+  intelligible in both directions with no pitch or rate problem, DTMF was sent
+  and echoed back, the SF-1 transmit watchdog stopped transmission at exactly
+  its 10 s limit (500 frames × 20 ms), teardown was clean, and no frames were
+  dropped. Also exercised live for the first time: PING/PONG, LAGRQ/LAGRP, the
+  full-frame-then-mini transmit ordering of §8.1.2, and the retransmission
+  engine recovering from a peer `VNAK`. Two checklist items want a re-run
+  before v1 — PTT edge timing needs a half-duplex target rather than `Echo()`,
+  and the `Ctrl-C`/`kill` teardown paths were not re-confirmed — and the
+  transmit-burst wart is tracked as IAX-10. Full result table in
+  `docs/CLI.md` §5.
+
+### Resolved
+
+- **OQ-5 — the MD5 RESULT encoding is hexadecimal.** Settled against a live
+  ASL3 node on 2026-08-09 with `hamvoip-cli oq5 --method register
+  --exhaustive`: lowercase and uppercase hex both accepted, base64 and raw
+  bytes both refused with cause code 29. The node decodes the IE back to bytes
+  or compares case-insensitively; the refusals prove it checks the digest at
+  all. **What IAX2Kit already sent was right, so no behaviour changed** — the
+  §8.6.15 encoding is now an observation rather than an assumption. It remains
+  an observation about one implementation: `oq5Default` stays lowercase hex,
+  because another peer may compare byte-for-byte.
+- **The IAX2 registration path has run against a real node.** Four complete
+  §6.1 exchanges — REGREQ → REGAUTH → REGREQ+MD5 → REGACK/REGREJ — with
+  correct call numbers, sequence progression and ACK discipline in both
+  directions. Previously it had only ever been exercised against fixtures.
+  The call and voice paths still have not: M2 sign-off remains outstanding.
+
+### Added
+
+- **Capture-replay conformance tests (IAX-9).** Six fixtures cut from packet
+  captures of the maintainer's own sessions against their own ASL3 node, and
+  `IAX2ConformanceTests`, which replays the *node's* datagrams through
+  `MockTransport` and asserts our side is protocol-valid — frames that parse,
+  the peer's call number on every frame after it identifies itself, §7
+  sequence numbering with ACKs exempt from the message count, and one ACK per
+  acknowledgeable inbound frame echoing its time-stamp (§6.9.1). Covered:
+  registration and rejection (§6.1), a full call setup with the node's
+  mid-call PING/LAGRQ/DTMF traffic (§6.2, §6.3, §6.7), an inbound over
+  switching to mini frames (§8.1.2), and both `0x8000` time-stamp boundaries
+  of a 77-second call (§6.10). `scripts/pcap-to-fixture.py` cuts a fixture out
+  of a capture; `Tests/FIXTURES.md` records the rules these follow.
+
+  Nothing in `IAX2Kit` had to change to pass them. What they add is a
+  regression pin on the parts of the protocol where the RFC leaves room and
+  this node took its own path: a Control subclass, an information element and
+  a frame type that RFC 5456 does not define, all of which we ACK and carry
+  through untouched; a media format written literally where we write it as a
+  power of two; and — the one that would be hardest to find any other way — an
+  inbound 16-bit time-stamp wrap with no full frame at the boundary, which
+  §6.10 says the peer MUST send and this node does not.
+
+### Fixed
+
+- **`hamvoip-cli oq5` addressed its ACKs to call number 0.** Found by the
+  IAX-9 replay: in every captured registration, the probe's ACK of the REGAUTH
+  went out with destination call number 0 rather than the node's (§6.2.1,
+  §8.1.1). It called `channel.receive` — which is what emits the ACK — before
+  `setDestinationCallNumber`, and learned the peer's number only from a
+  `.deliver`, so the node's opening bare ACK never taught it anything. The
+  library was never affected: `IAX2Call` and `IAX2Registrar` both learn the
+  number before the channel sees the frame, and the replay tests assert that.
+  Asterisk had tolerated the malformed ACK, so OQ-5's conclusion is unchanged.
+
+- **Received audio shorter than 20 ms is played instead of dropped.** A live
+  ASL3 node sent a 44-octet media payload — the tail of a playback, 5.5 ms of
+  ordinary speech — and `IAX2VoiceReceiver` rejected it for not being exactly
+  160 octets. Nothing in RFC 5456 promises a media frame is exactly one 20 ms
+  slot: §8.7 gives µ-law as one byte per sample and stops there, and 160 is a
+  consequence of 20 ms at 8 kHz rather than a rule about what a peer may send.
+  Because µ-law is sample-wise, a partial frame is a shorter frame and not a
+  corrupt one. Short payloads are now padded to the slot with encoded silence,
+  over-long ones are split across consecutive slots, and only a genuinely
+  empty payload is rejected (`Rejection.emptyPayload`). The playout contract
+  is unchanged: every tick is still exactly `samplesPerFrame` samples.
+- **Quitting no longer announces that your call dropped.** Pressing `q` (or
+  `Ctrl-C`, or taking a signal) closes the transport, and the read loop then
+  reported it as `DISCONNECTED: the transport closed` — telling the operator
+  their call had failed at the exact moment they ended it themselves. The
+  banner is now suppressed once a quit is under way. A packet capture confirms
+  the HANGUP and its ACK were going out correctly all along, so this was
+  always cosmetic; it was also alarming, and it appeared in the middle of a
+  sign-off run.
+- **`hamvoip-cli connect` no longer reports captured frames as transmitted
+  ones.** The closing summary printed the audio bridge's *submitted* count
+  under the label `transmitted frames`; because capture runs continuously by
+  design, that number rises whether or not PTT is on, so a session with no
+  transmission at all reported 55 transmitted frames. It now reports `frames
+  captured` and `frames transmitted` separately, the latter counted at the PTT
+  gate itself. No behaviour changed — nothing was ever sent unkeyed — but a
+  summary that says the client keyed up when it did not is the most alarming
+  thing it could get wrong, and it would have been read into an M2 sign-off.
+- **`MediaFormat` names the codec instead of printing a bitmask.** A live
+  session showed `CONNECTED  codec MediaFormat(rawValue: 4)` where
+  `docs/CLI.md` §5 promises the harness names a codec; it now prints
+  `G.711 µ-law`, joins multiple bits with `+`, and surfaces unassigned bits
+  rather than dropping them.
+- `hamvoip-cli oq5` no longer reports a case-insensitive node as an impossible
+  result. Accepting both hex renderings while refusing a non-hex one is now
+  read as the answer it is; only genuinely contradictory combinations are
+  reported as unreliable. Accepting both hex forms with *nothing* refused is
+  reported as inconclusive rather than as an answer, since a node that accepts
+  anything is indistinguishable from that angle.
+
+### Changed
+
+- The `IAX2Registrar` MD5-encoding seam is downgraded from a defect to a
+  hygiene item: it hard-codes the default encoding, and the default turned out
+  to be correct, so FR-1.3 registered node mode works as shipped.
+- `docs/CLI.md` gains one-shot and Keychain forms for supplying the secret,
+  and an explanation of why `HAMVOIP_SECRET` can appear not to take effect.
+
 ## [0.1.0] — 2026-08-09
 
 First release. The AllStarLink/IAX2 path is complete and tested against

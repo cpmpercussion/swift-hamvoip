@@ -546,17 +546,86 @@ final class IAX2VoiceStreamTests: XCTestCase {
             receiver.receive(mini), .rejected(.unsupportedFormat(MediaFormat.gsmFullRate.rawValue)))
     }
 
-    func testWrongPayloadLengthIsRejected() {
+    /// A live ASL3 node sent a 44-octet payload — the tail of a playback —
+    /// and the receiver dropped it as malformed. It is not malformed: µ-law is
+    /// sample-wise (§8.7), so 44 octets is 5.5 ms of real audio.
+    func testAShortPayloadIsPlayedRatherThanDropped() {
         var receiver = makeReceiver()
         receiver.pinFormat(.g711MuLaw)
         let short = IAX2Frame.mini(
             IAX2MiniFrame(
                 sourceCallNumber: peerCallNumber, timestamp: 0x0014,
-                payload: [UInt8](repeating: 0xFF, count: 40)))
-        XCTAssertEqual(
-            receiver.receive(short), .rejected(.wrongPayloadLength(expected: 160, got: 40)),
-            "µ-law is 1 byte per sample (§8.7); 20 ms at 8 kHz (§8.6.32) is 160 octets")
+                payload: [UInt8](repeating: 0x00, count: 44)))
+        XCTAssertEqual(receiver.receive(short), .queued(timestamp: 20))
+        XCTAssertEqual(receiver.queuedFrameCount, 1, "the audio in it is kept, not discarded")
+    }
+
+    /// The audio that was actually sent must survive; only the padding is
+    /// invented, and it has to be silence rather than whatever was in memory.
+    func testAShortPayloadKeepsItsAudioAndPadsTheRestWithSilence() throws {
+        var receiver = makeReceiver()
+        receiver.pinFormat(.g711MuLaw)
+        // 0x00 is µ-law's most-negative code; 0xFF is its code for PCM zero.
+        // So the real audio is unmistakable and the padding is unmistakable.
+        _ = receiver.receive(
+            IAX2Frame.mini(
+                IAX2MiniFrame(
+                    sourceCallNumber: peerCallNumber, timestamp: 0x0014,
+                    payload: [UInt8](repeating: 0x00, count: 44))))
+        // Two more slots, only so the jitter buffer primes and plays.
+        for timestamp in [UInt16(0x0028), UInt16(0x003c)] {
+            _ = receiver.receive(
+                IAX2Frame.mini(
+                    IAX2MiniFrame(
+                        sourceCallNumber: peerCallNumber, timestamp: timestamp,
+                        payload: [UInt8](repeating: 0xFF, count: 160))))
+        }
+
+        var first: IAX2VoicePlayout?
+        for _ in 0..<16 where first == nil {
+            let playout = receiver.pop()
+            if playout.kind == .audio { first = playout }
+        }
+        let pcm = try XCTUnwrap(first?.pcm, "the short frame should have played")
+
+        XCTAssertEqual(pcm.count, 160, "the playout contract is still exactly one slot")
+        XCTAssertTrue(pcm.prefix(44).allSatisfy { $0 != 0 }, "the real audio survived")
+        XCTAssertTrue(pcm.dropFirst(44).allSatisfy { $0 == 0 }, "the padding is silence")
+    }
+
+    /// The mirror case: a peer batching more than a slot's worth must not have
+    /// the excess thrown away.
+    func testAnOverLongPayloadIsSplitAcrossConsecutiveSlots() {
+        var receiver = makeReceiver()
+        receiver.pinFormat(.g711MuLaw)
+        let twoAndAHalf = IAX2Frame.mini(
+            IAX2MiniFrame(
+                sourceCallNumber: peerCallNumber, timestamp: 0x0014,
+                payload: [UInt8](repeating: 0xFF, count: 400)))
+        XCTAssertEqual(receiver.receive(twoAndAHalf), .queued(timestamp: 20))
+        XCTAssertEqual(receiver.queuedFrameCount, 3, "160 + 160 + 80-padded-to-160")
+    }
+
+    /// No audio in it at all is the one case with nothing to salvage.
+    func testAnEmptyPayloadIsRejected() {
+        var receiver = makeReceiver()
+        receiver.pinFormat(.g711MuLaw)
+        let empty = IAX2Frame.mini(
+            IAX2MiniFrame(sourceCallNumber: peerCallNumber, timestamp: 0x0014, payload: []))
+        XCTAssertEqual(receiver.receive(empty), .rejected(.emptyPayload))
         XCTAssertEqual(receiver.queuedFrameCount, 0)
+    }
+
+    /// The ordinary case must not have regressed into the padding path.
+    func testAnExactlySizedPayloadIsStillOneUntouchedSlot() {
+        var receiver = makeReceiver()
+        receiver.pinFormat(.g711MuLaw)
+        let exact = IAX2Frame.mini(
+            IAX2MiniFrame(
+                sourceCallNumber: peerCallNumber, timestamp: 0x0014,
+                payload: [UInt8](repeating: 0xFF, count: 160)))
+        XCTAssertEqual(receiver.receive(exact), .queued(timestamp: 20))
+        XCTAssertEqual(receiver.queuedFrameCount, 1)
     }
 
     func testTimestampBeforeTheCallOriginIsRejected() {

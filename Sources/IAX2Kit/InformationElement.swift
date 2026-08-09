@@ -64,6 +64,40 @@ public struct MediaFormat: OptionSet, Sendable, Hashable {
     public static let h264 = MediaFormat(rawValue: 1 << 21)
 }
 
+extension MediaFormat: CustomStringConvertible {
+    /// The RFC's own names for the bits that are set.
+    ///
+    /// An `OptionSet` gets `MediaFormat(rawValue: 4)` from the compiler, which
+    /// is what a live session printed where `docs/CLI.md` §5 promises the
+    /// harness "names a codec". A bitmask nobody can read at a glance is a bad
+    /// thing to hand someone who is mid-call and deciding whether the
+    /// negotiation went the way they meant it to.
+    ///
+    /// Unassigned bits are not silently dropped — an unrecognised codec is
+    /// exactly the case where the raw value is what you need to see.
+    public var description: String {
+        guard rawValue != 0 else { return "none" }
+        let names: [(MediaFormat, String)] = [
+            (.g723_1, "G.723.1"), (.gsmFullRate, "GSM"), (.g711MuLaw, "G.711 µ-law"),
+            (.g711ALaw, "G.711 a-law"), (.g726, "G.726"), (.imaADPCM, "IMA ADPCM"),
+            (.linear16LittleEndian, "linear16"), (.lpc10, "LPC10"), (.g729, "G.729"),
+            (.speex, "Speex"), (.ilbc, "iLBC"), (.g726AAL2, "G.726 AAL2"),
+            (.g722, "G.722"), (.amr, "AMR"), (.jpeg, "JPEG"), (.png, "PNG"),
+            (.h261, "H.261"), (.h263, "H.263"), (.h263p, "H.263+"), (.h264, "H.264"),
+        ]
+        var described: [String] = []
+        var remaining = rawValue
+        for (format, name) in names where contains(format) {
+            described.append(name)
+            remaining &= ~format.rawValue
+        }
+        if remaining != 0 {
+            described.append("unassigned(0x\(String(remaining, radix: 16)))")
+        }
+        return described.joined(separator: "+")
+    }
+}
+
 // MARK: - Small bitmask/structure IE payloads (RFC 5456 §8.6 sub-tables)
 
 /// AUTHMETHODS IE (`0x0e`) 2-octet bitmask (§8.6.13).

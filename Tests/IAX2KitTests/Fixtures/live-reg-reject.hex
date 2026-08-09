@@ -1,0 +1,42 @@
+# IAX-9 — the node's half of a live registration *rejection* (RFC 5456 §6.1.5).
+#
+# Same capture, same node, same session as `live-reg-session.hex`; this is the
+# third of the four OQ-5 probes, the one that offered an MD5 RESULT the node
+# would not accept. Provenance and the reason only the inbound direction is
+# checked in are both explained there.
+#
+#   REGREQ  ==>  USERNAME + REFRESH
+#           <==  ACK
+#           <==  REGAUTH  USERNAME + AUTHMETHODS + CHALLENGE
+#   ACK     ==>
+#   REGREQ  ==>  USERNAME + MD5 RESULT + REFRESH        (a digest it rejects)
+#           <==  ACK
+#           <==  REGREJ   CAUSE + CAUSECODE             §6.1.5, §8.6.21, §8.6.33
+#   ACK     ==>                                         §6.1.5
+#
+# The detail worth having a fixture for: **the node took a full second to
+# answer**, at time-stamp 1012 against the REGAUTH's 12. A real registrar
+# rate-limits a bad credential, so anything that assumes a rejection comes back
+# as promptly as an acceptance is wrong about live nodes. The retransmission
+# timer must not fire into that gap and turn a clean REGREJ into a retry storm.
+#
+# Our source call number was 0x40ae (16558) and the node's 0x3b5f (15199); the
+# replay test builds its registrar with that same 16558.
+#
+# Machine-generated. The captures themselves are not in the repository —
+# they are the maintainer's own, and large. Regenerate with:
+#   scripts/pcap-to-fixture.py oq5-confirm.pcap --stream 2 --dir in
+# Capture SHA-256: e1f9143411d1b91cf16bda9c80e52a46e4a7d405b68d44ffe90d2a6d3e86e35c
+#
+# Each datagram is the UDP payload verbatim — the octets RFC 5456 §5
+# defines as an IAX2 frame. `[n]` is the datagram's index in the capture
+# stream, so a gap in the indices is a datagram deliberately left out.
+
+# [1] 0.002s <== full  15199->16558 ts          9 O  0 I  1  ACK    0B
+bb5f 40ae 00000009 00 01 06 04
+# [2] 0.002s <== full  15199->16558 ts         12 O  0 I  1  REGAUTH   24B
+bb5f 40ae 0000000c 00 01 06 0e 0e020002 0f09393639323434313133 06076f713574657374
+# [5] 0.003s <== full  15199->16558 ts          8 O  1 I  2  ACK    0B
+bb5f 40ae 00000008 01 02 06 04
+# [6] 1.004s <== full  15199->16558 ts       1012 O  1 I  2  REGREJ   25B
+bb5f 40ae 000003f4 01 02 06 10 1614526567697374726174696f6e2052656675736564 2a011d

@@ -1,0 +1,54 @@
+# IAX-9 — the node's first over: a full Voice frame and the mini frames that
+# follow it (RFC 5456 §8.1.2).
+#
+# Cut from the same session as `live-call-signalling.hex` — `connect3.pcap`,
+# the maintainer's own capture against their own ASL3 node, 2026-08-09; the
+# provenance note there covers this file too.
+#
+# This is the §8.1.2 switch on the wire: one full Voice frame naming µ-law and
+# carrying a 32-bit time-stamp, then a run of mini frames that carry only the
+# low 16 bits and no codec at all. The receiver has to pin the format from the
+# full frame and expand every time-stamp after it against that anchor.
+#
+# The node's mini frames arrive one per 20 ms of media, at 20 ms intervals of
+# wall clock — unlike ours, which leave in bursts of five (that is IAX-10).
+#
+# The gaps in the indices are our own outbound datagrams, which this file does
+# not carry; the node's stream itself is unbroken, 2980 ms then 3000, 3020, …
+# 3220, one frame per 20 ms with nothing missing.
+#
+# Machine-generated. The captures themselves are not in the repository —
+# they are the maintainer's own, and large. Regenerate with:
+#   scripts/pcap-to-fixture.py connect3.pcap --stream 0 --dir in --range 20:43
+# Capture SHA-256: c9a1cbd6a973a94720086b3f22d6d996544693056db5c827f07533b873e6000d
+#
+# Each datagram is the UDP payload verbatim — the octets RFC 5456 §5
+# defines as an IAX2 frame. `[n]` is the datagram's index in the capture
+# stream, so a gap in the indices is a datagram deliberately left out.
+
+# [20] 2.962s <== full  15069->1     ts       2980 O  4 I  4  VOICE fmt 4  160B
+badd 0001 00000ba4 04 04 02 04 7b7b7c7c7c7c7b7b7c7c7d7d7d7d7d7d7d7d7c7a7a7a7a7a7a7a7a7b7c7c7d7e7d7c7e7e7e7e7e7e7e7d7d7c7d7d7d7d7efffffffffefefdfdfefefefefefdfcfdfdfdfdfdfcfcfcfdfdfdfdfdfcfcfdfcfcfcfdfefdfcfdfdfefefefeffff7f7e7e7e7f7f7ffffefefefefefefe7f7e7efefeff7f7fff7f7e7e7e7e7e7e7e7e7e7e7e7e7e7e7fffff7e7e7f7f7e7e7e7d7e7ffffefdfdfefffffefefefefffe
+# [22] 2.983s <== mini  call 15069  ts  3000  160B audio
+3add 0bb8 fdfdfefefefefefefdfdfdfefefdfdfeff7ffefeff7e7e7e7e7fff7f7d7d7fffff7fff7e7e7e7f7e7d7d7d7c7b7c7d7d7c7c7d7d7d7d7d7d7d7d7c7c7c7c7d7d7e7e7d7d7d7d7d7d7d7d7e7e7f7f7ffefe7efffefefdfdfefefdfcfdfefefdfcfcfdfdfdfcfcfbfcfcfcfcfcfcfcfbfbfcfdfdfdfcfdfdfdfdfdfcfdfdfdfdfdfdfdfefefefefe7f7ffefefefffefefefdfeffffff7f7f7e7e7d7c7d7d7c7c7d
+# [23] 3.004s <== mini  call 15069  ts  3020  160B audio
+3add 0bcc 7c7c7c7d7d7d7d7c7b7c7d7d7d7d7d7e7d7e7d7d7d7d7d7d7e7e7d7e7ffeff7ffffefefefdfefffefefefefefefefefefefefefdfdfefefefefdfdfdfefefdfdfefffefefefefe7f7e7d7e7e7d7e7e7e7e7e7e7e7f7e7e7e7e7d7c7c7c7c7d7c7b7c7c7b7b7b7b7b7c7d7d7c7c7c7d7d7d7d7c7d7e7e7e7f7e7fff7f7e7e7ffffefefffefefefefdfdfefefdfdfcfdfdfcfcfbfbfcfcfafafcfbfbfcfdfdfcfb
+# [29] 3.023s <== mini  call 15069  ts  3040  160B audio
+3add 0be0 fcfcfcfcfdfdfcfcfcfdfdfdfdfdfefefdfdfefdfdfefdfefefeff7f7e7e7e7f7f7f7e7d7e7e7f7e7d7d7d7c7c7c7c7c7d7d7d7c7b7b7c7d7b7b7a7b7c7d7d7c7c7d7e7e7e7e7e7e7e7d7e7e7e7d7d7e7f7e7e7f7f7efffdfcfdfdfdfdfefdfdfdfdfefdfdfcfcfdfefdfcfcfcfdfdfefefefefefefefefefdfefe7f7f7f7e7d7eff7f7e7efffffffeff7eff7f7f7e7e7e7e7e7e7e7d7d7fff7f7e7e7e7f7f7f
+# [30] 3.042s <== mini  call 15069  ts  3060  160B audio
+3add 0bf4 ffffff7f7e7e7e7efefefefefefffffdfefefefefdfdfdfefefefefefefefefefcfcfcfcfdfdfdfdfdfdfdfdfdfdfcfdfdfcfefefefeff7e7e7e7e7f7e7e7e7d7d7d7e7e7d7d7d7d7e7e7d7d7d7c7b7b7b7b7c7b7b7c7b7b7b7b7b7b7b7b7c7c7b7b7c7c7c7b7c7b7c7c7c7c7c7c7d7e7d7d7ffefefefe7ffffefefffffefefffffefeff7ffffefdfefefdfdfdfdfcfbfbfcfcfcfcfcfdfefefdfcfcfcfcfcfc
+# [31] 3.063s <== mini  call 15069  ts  3080  160B audio
+3add 0c08 fbfcfcfdfdfcfcfcfdfefdfefefdfdfdfdfefefdfe7f7efffefe7ffffefdfefffffefefdfffefefefcfdfe7f7c7b7b7b7b7a78797b7c7d7bfefaf8f1f1eff3eff2eefef4f37670f6f9f06e67615f6b5bfe6452687a5e65dfe75e5ddadc5fecd6756fe0e66ffbe37a637ae1f079efe5e9f4f6deddebf0f0e1ece2ced6dae6e7dbfc6d655b6557424e564a6fcde43a3cd9c4cadb574f5cf465797653413f5fcbe5
+# [32] 3.084s <== mini  call 15069  ts  3100  160B audio
+3add 0c1c 596eddddd9cfc4cadeecdacecfdddfdf736ce5e8f0eae8d8d1d3dad8cfcdced5dbdcdfe3e2e77f5e595d5f59514e4d4c4d4d4c4b4b4e515553515053585d5e5e5d5d5f61666b6ffbeae4dfdcdbd9d6d5d3d6dadcdee0e6f176727770707071716f79faf2f2f3ece2dfe4e6e7e7e2e6e5e2ecefe9eaedf2fcfffbf9f8fb7d797b7c7c7975726e6e6f6e6d6e6e73787a7cfefaf3eff1f9f8f3efefefeeeff1f2f4
+# [33] 3.103s <== mini  call 15069  ts  3120  160B audio
+3add 0c30 f3f5fcfffcfbfdfafbfefcfefdfbfbfd7d787a7a736f717575747676727173716d6c6a6b6d6c6b6c6b6d6f6e6e6f6f6c6d7073716f6f7274797b7676747bfcfdff7e7b7d7e7e7efb7f7afcf9fcfe7efefafafbfdf8f5f5f2f2f1edeeefefedeeefececebebecebe9ebecedeeeff2f6fbfcfcfe7e7d7a757174797976716f737676777b79777b7d7d7efdfdfaf7fbfdfcfbfaf9f8f8f7f6f5f4f4f5f5f2f3f6f9
+# [39] 3.123s <== mini  call 15069  ts  3140  160B audio
+3add 0c44 f9f9faf8faf8fafbf8f8f9fbfeff7f7f7c78787a7a7c7b7a7c7b7977777776716f6f6f706f6e6f6e6e6f6e6e6e6f6f6e706e6e71706f717576787a7a7a7a7b7bfefcfefbfafaf8f5f1f1f1f2f3f1f2f2f1f3f3f5f9f8f7f9f9faf9f8fcfcf9fafdfeff7e7e7f7b7b7c7c7c7c7e7d7c7efdff7d7b7a7c7efdfcfcfcfbfbf9fafcfbfbfaf8f7fafaf7f4f3f6f9fcfbf9f7f9fdfdfefbfaf9f8f9fcfffcfbfcfdfd
+# [40] 3.142s <== mini  call 15069  ts  3160  160B audio
+3add 0c58 fcfcfe7e7e7f7e7dfffe7e7d7e7efefcfe7f7e7c7c7c7c7c7c7978797b797776787b7a79797979797a7b7b7a78797b7b7b7b7a7b7c7d7c7c7d7d7e7e7c7a7c7c7c7b7c7d7c7c7c7b7b7d7eff7e7d7c7d7e7d7c7c7dfffffe7e7d7e7f7e7ffefe7e7d7efefdfcfd7ffffefcfcfdfdfbfcfcfcfbfbfbfcfdfdfcfbfbfcfcfcfbfaf9fafbf9f8f8f9fafafaf9fafbfafbfcfcfdfdfdfcfcfcfdfefefefefefefdfd
+# [41] 3.163s <== mini  call 15069  ts  3180  160B audio
+3add 0c6c fefffffffefeff7f7e7e7d7e7f7e7e7e7e7e7e7f7f7f7f7f7f7e7effff7e7e7e7ffffefeff7efffe7e7f7f7e7d7d7d7e7d7c7e7e7d7efeff7d7c7d7e7d7b7b7a797876757677777476797a7c7d7c7b7dfeff7e7d7c7b7b7c7a7877777576767474727275777676787b7dfdf7f4f4f3f2f2efedeef5eeeef7fbf1f2f8f7f4f6f6f0f2f3f1f2faf8f7f5fa7f7dfcf0f97b7afefffb797e78756b77fb6d676f6f72
+# [42] 3.183s <== mini  call 15069  ts  3200  160B audio
+3add 0c80 6e6a6f7072706d6e6c696c706d6c6f7271787d7dfef7f4f5f0ededeeececedeef0f1efefededeff0f0eff1f5f8f9fc7f7e7d7e7efffefffdfcfcfaf9f9f9f7f8f9fbfbf9f9fafbfcfe7efffcfd7f7c7b7a7877777674757475747576777879787879787a7b7a7b7a7a7a7b7efdfdfefcfcfaf9f9fbfbfcfcfcfdfdfd7f7ffefe7e7d7e7e7e7d7c7b7a7c7b7a7a7a7a797a7c7c7b7a7a7b7b7a7b7c7b797a7c7c
+# [43] 3.202s <== mini  call 15069  ts  3220  160B audio
+3add 0c94 7c7d7e7e7d7d7e7e7d7d7e7d7c7d7e7f7e7e7e7e7e7e7d7d7f7e7e7f7e7ffeffff7e7efffefdfcfcfdfcfcfbfbfbfbfbfcfbfbf9f9f9f9fafafafbfbfbfafafbfcfbfbfbfcfcfdfdfdfdfefdfcfdfdfefffdfe7ffffefefefefefdfdfdfefefdfefefefefffffefe7f7e7f7e7eff7e7d7e7fff7f7efffe7e7d7e7d7d7e7d7d7e7e7e7e7e7e7d7d7d7d7d7d7e7e7e7d7d7d7e7d7c7d7d7d7d7e7e7d7c7c7d7e7c

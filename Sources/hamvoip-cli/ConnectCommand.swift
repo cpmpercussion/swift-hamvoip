@@ -129,6 +129,17 @@ actor ConnectSession {
     private var watchdogExpiries = 0
     private var dtmfSent = 0
     private var dtmfReceived = 0
+    /// Frames that actually reached the wire — counted where `send(pcm:)`
+    /// returns a frame rather than `nil`, which is the PTT gate itself.
+    ///
+    /// Kept separate from the bridge's *submitted* count on purpose. Capture
+    /// runs continuously, so the submitted count rises whether or not PTT is
+    /// on; reporting it as "transmitted" says the client keyed up when it did
+    /// not, which is the single most alarming thing a summary could get wrong.
+    private var transmittedFrames = 0
+    /// Set the moment a quit is requested, so the disconnection our own
+    /// teardown causes is not reported as though the call had dropped.
+    private var isQuitting = false
     private var finished = false
 
     init(
@@ -241,7 +252,11 @@ actor ConnectSession {
         await client.disconnect()
     }
 
+    /// Every quit path goes through here — the `q`/`Ctrl-C`/`Ctrl-D`
+    /// keystrokes and the signal handlers alike — so this is the one place the
+    /// flag needs setting.
     private func requestQuit() async {
+        isQuitting = true
         await teardown()
     }
 
@@ -295,6 +310,7 @@ actor ConnectSession {
         for await frame in bridge.frames {
             do {
                 if try await client.send(pcm: frame) != nil {
+                    transmittedFrames += 1
                     txMeter.push(frame)
                 } else {
                     txMeter.idle()
@@ -435,6 +451,14 @@ actor ConnectSession {
         case .mediaRejected(let rejection):
             await console.log("RX media dropped: \(rejection)")
         case .disconnected(let reason):
+            // Quitting closes the transport ourselves, so the read loop reports
+            // a disconnection a moment later. Alarming somebody with
+            // "DISCONNECTED: the transport closed" immediately after they
+            // pressed `q` is telling them their call dropped when in fact they
+            // ended it, so the banner is suppressed once a quit is under way.
+            // The packet capture of the 75 s session shows the HANGUP and its
+            // ACK going out perfectly while that banner was on screen.
+            guard !isQuitting else { break }
             if let reason {
                 await console.alert("DISCONNECTED: \(reason)")
             } else {
@@ -489,7 +513,8 @@ actor ConnectSession {
     private func printSummary() async {
         await console.log("""
             Summary:
-              transmitted frames   \(bridge.submittedFrameCount)
+              frames captured      \(bridge.submittedFrameCount)  (microphone runs continuously)
+              frames transmitted   \(transmittedFrames)  (PTT on)
               frames dropped       \(bridge.droppedFrameCount)
               DTMF sent/received   \(dtmfSent)/\(dtmfReceived)
               watchdog expiries    \(watchdogExpiries)

@@ -111,6 +111,29 @@ Event lines scroll; a status line stays on the bottom row:
 * `drop N` appears if captured frames were discarded because the sender could
   not keep up. Anything other than absent is a finding worth reporting.
 
+### The closing summary
+
+```
+Summary:
+  frames captured      2431  (microphone runs continuously)
+  frames transmitted   860  (PTT on)
+  frames dropped       0
+  DTMF sent/received   4/0
+  watchdog expiries    0
+```
+
+**Captured and transmitted are different numbers, and the gap is the point.**
+Capture runs for the whole session so that PTT edges are crisp, and the gate
+is in `IAX2Client.send(pcm:)`; `frames captured` therefore counts everything
+the microphone produced, keyed or not, while `frames transmitted` counts only
+what the gate let through. Captured greatly exceeding transmitted is the
+normal, correct shape of a session where you listened more than you talked.
+
+**`frames transmitted` non-zero while you never pressed SPACE would be a
+serious defect** — the client keying up on its own — so it is worth a glance
+every run. These two were reported as one number labelled "transmitted
+frames" until a live session made the ambiguity obvious.
+
 The watchdog gets a bell and a banner of its own when it fires:
 
 ```
@@ -155,8 +178,31 @@ hamvoip-cli connect --host … --node … --username vk1xyz --callsign VK1XYZ
 read -rs HAMVOIP_SECRET && export HAMVOIP_SECRET
 hamvoip-cli connect --host … --node … --username vk1xyz --callsign VK1XYZ
 
+# 2a. One-shot, from a file or the Keychain. Nothing persists, nothing
+#     reaches argv, and only the path reaches your shell history.
+HAMVOIP_SECRET="$(cat ~/.config/hamvoip/secret)" hamvoip-cli connect …
+HAMVOIP_SECRET="$(security find-generic-password -a hamvoip -s <account> -w)" \
+    hamvoip-cli connect …
+
 # 3. --secret. Scripting only, and it costs you the hazard above.
 hamvoip-cli connect … --secret "$(cat ~/.config/hamvoip/secret)"
+```
+
+**If it prompts when you expected it not to, the variable was not in the
+process environment** — the tool checks `HAMVOIP_SECRET` and treats an empty
+value as absent, so a prompt means nothing was there to find. An `export`
+lives only in the shell that ran it: a new tab, a new terminal, a `sudo`, or a
+runner that starts a fresh shell per command all lose it. Confirm with
+`printenv HAMVOIP_SECRET | wc -c` in the *same* shell you are about to run
+from, or sidestep the question entirely with the one-shot form above. Note
+also that `read` takes its input from stdin — paste a whole multi-line block
+at once and `read` will silently swallow the next line of the block as the
+secret.
+
+To put a secret in the Keychain rather than a plaintext file:
+
+```sh
+security add-generic-password -a hamvoip -s <account> -w
 ```
 
 Precedence is `--secret` → `$HAMVOIP_SECRET` → prompt. The banner names the
@@ -185,6 +231,35 @@ tempting shortcut.
 
 IAX-4 shipped **lowercase 32-character hex** as a documented assumption. This
 subcommand turns the assumption into an observation by asking a real node.
+
+### The answer, 2026-08-09
+
+**Hexadecimal. Keep sending lowercase.** Asked of an ASL3 node (Asterisk +
+app_rpt, in a UTM VM) with `--method register --exhaustive`:
+
+| Candidate | Node's answer |
+|---|---|
+| `lowercase-hex` | **REGACK** — accepted |
+| `uppercase-hex` | **REGACK** — accepted |
+| `base64` | REGREJ, `CAUSE "Registration Refused"`, `CAUSE CODE 29` |
+| `raw-bytes` | REGREJ, `CAUSE "Registration Refused"`, `CAUSE CODE 29` |
+
+Two acceptances, and the run is still sound. Each probe ran on its own UDP
+association and drew its own fresh CHALLENGE, so these are four independent
+verifications rather than one result echoed. A node that decodes the IE text
+back to sixteen bytes before comparing — or that compares case-insensitively —
+accepts both hex renderings by construction. The refusals are what make the
+reading safe: a node that waved everything through would have taken base64
+too, so this one is genuinely checking the digest. The capture corroborates
+it — REGACK came back immediately, while both REGREJs were held for about a
+second, which is the pacing of a credential check that failed rather than of a
+parse error.
+
+**What this does not license.** It is an observation about one implementation.
+Case-insensitivity is that node's business, not the protocol's; the RFC still
+does not say. Another peer may compare byte-for-byte, so
+`IAX2Auth.TextDigestEncoding.oq5Default` stays lowercase hex and no call site
+changes.
 
 ### Running it
 
@@ -242,7 +317,9 @@ CONCLUSION: this node accepts MD5 RESULT as lowercase-hex …
 | Result | What it means |
 |---|---|
 | Exactly one accepted | **That is the answer to OQ-5.** Record it in the open-questions table in `docs/DEVELOPMENT-PLAN.md`, with the node and the date — it is now an observation about one implementation, not a fact about the protocol. |
-| More than one accepted | Impossible for a node that checks the digest. Treat the run as unreliable and repeat it. |
+| Both hex cases accepted, a non-hex candidate refused | **Also an answer, and the one a real node gave.** The node decodes the IE back to sixteen bytes, or compares the text case-insensitively; either way it is checking the digest, which the non-hex refusal is what proves. The answer is "hex", and case is that node's business rather than the protocol's. Keep sending lowercase — the next implementation may well compare byte-for-byte. |
+| Both hex cases accepted, nothing refused | Not enough to conclude anything: a node that accepts whatever it is sent looks exactly like this. Re-run without `--encoding` so base64 and raw bytes are tested too. |
+| Some other combination accepted | Impossible for a node that checks the digest. Treat the run as unreliable and repeat it. |
 | All four rejected | Almost certainly a wrong username or secret, not an exotic encoding. Check those first. |
 | Accepted with no challenge | The node does not authenticate this account, so it cannot answer the question. Configure a secret for the account on the node and try again. |
 | Nothing answered | Reachability, not encoding. No candidate was actually tested. |
@@ -272,13 +349,15 @@ let client = IAX2Client(configuration: configuration)
 To change it for every caller rather than per client, edit the closure in
 `IAX2Auth.TextDigestEncoding.oq5Default` instead.
 
-**⚠️ The registration path is not configurable.**
+**ℹ️ The registration path is not configurable — which turned out not to matter.**
 `IAX2Registrar` calls `IAX2Auth.md5Response(challenge:secret:)` with the
 default encoding (`Sources/IAX2Kit/IAX2Registration.swift:927`) and carries no
-override. If the answer is not lowercase hex, **registered node mode (FR-1.3)
-stays broken until `md5ResultEncoding` is threaded through
-`IAX2Registrar.Configuration` the same way it was threaded through
-`IAX2Call.Configuration`.** This is a real gap, not a matter of opinion.
+override. Had the answer been anything other than lowercase hex, registered
+node mode (FR-1.3) would have stayed broken until `md5ResultEncoding` was
+threaded through `IAX2Registrar.Configuration` the same way it was threaded
+through `IAX2Call.Configuration`. The 2026-08-09 run resolved OQ-5 to
+lowercase hex, so FR-1.3 works as shipped and threading the override through
+is now a symmetry item rather than a defect.
 
 **⚠️ `raw-bytes` cannot be expressed at all.**
 `TextDigestEncoding` renders to a `String`, and `InformationElement.md5Result`
@@ -296,6 +375,38 @@ settled by §8.6.15.
 
 ## 5. Milestone M2 sign-off checklist
 
+### Result — 2026-08-09, ASL3 node in a UTM VM ✅ PASSED
+
+Run against `Echo()` in a plain dialplan context, so nothing was keyed. Packet
+captures retained (`connect3.pcap`, two sessions of 36.7 s and 15.7 s).
+
+| # | Item | Result |
+|---|---|---|
+| 1 | Call comes up | ✅ `CONNECTED  codec G.711 µ-law`, authenticated |
+| 2 | Inbound intelligible | ✅ words understood; no pitch or rate problem |
+| 3 | Outbound intelligible | ✅ own words understood coming back |
+| 4 | Levels sane | ⚠️ rx −18 dBFS, tx −29 dBFS — usable, tx a little below the −20…−12 target |
+| 5 | PTT edges crisp | ⚠️ not cleanly assessable: `Echo()` is full duplex with ~0.5 s round trip, so there is no unkey-then-hear boundary to judge. No clipping reported |
+| 6 | **Watchdog fires** | ✅ `--transmit-timeout 10`: banner, `TX OFF`, `watchdog expiries 1`, and **exactly 500 frames transmitted** — 500 × 20 ms = 10.000 s, so it cut on the limit and not a frame later |
+| 7 | DTMF reaches the node | ✅ `DTMF '3'` sent, ACKed, echoed back |
+| 8 | Teardown clean | ✅ `q` path verified on the wire (HANGUP + cause IEs, ACKed). `Ctrl-C` and `kill` paths not re-confirmed this session |
+| 9 | Nothing dropped | ✅ `frames dropped 0` on every run |
+
+Also validated live, beyond the checklist: PING/PONG and LAGRQ/LAGRP
+(the node polled at 10, 20, 21 and 30 s and every one was answered), the
+full-frame-then-mini transmit ordering of §8.1.2, and 1135 mini frames each
+way all exactly 160 octets.
+
+**Open wart:** on one session the node sent `VNAK` ×3 at our first voice
+frame; retransmission recovered it and the call was unaffected. It correlates
+with the client emitting a burst of frames in a single millisecond rather than
+pacing them at 20 ms. Tracked as IAX-10.
+
+Re-run items 5 and 8 before v1: item 5 needs a half-duplex target rather than
+`Echo()`, and item 8's signal paths need one pass each.
+
+---
+
 Run against a real node, by a licensed operator, on hardware. Record the result
 on the CLI-1 pull request.
 
@@ -303,7 +414,54 @@ on the CLI-1 pull request.
 may key a repeater. Announce yourself before testing on a busy node, and prefer
 a private or test node for the level-setting parts.
 
-1. **The call comes up.**
+### Doing it without keying anything
+
+Most of this list can be done alone, against your own node, with no RF at all
+— which is worth doing first, because a defect found here costs nobody any
+airtime. Point the account's `context=` in `iax.conf` at a plain Asterisk
+dialplan context rather than at an app_rpt node. Ordinary dialplan
+applications never enter the repeater or link path, so nothing is keyed and
+nothing reaches the network even from a node that is connected to it:
+
+```ini
+[hamvoip-test]
+exten => 100,1,Answer()          ; echo — hear yourself back
+ same => n,Wait(1)
+ same => n,Echo()
+ same => n,Hangup()
+exten => 101,1,Answer()          ; known speech — judge playback rate
+ same => n,Playback(demo-congrats)
+ same => n,Hangup()
+exten => 102,1,Answer()          ; 1004 Hz at 0 dBm0 — a level reference
+ same => n,Milliwatt()
+ same => n,Hangup()
+exten => 103,1,Answer()          ; DTMF in, digits read back
+ same => n,Read(digits,,4)
+ same => n,SayDigits(${digits})
+ same => n,Hangup()
+```
+
+The account also needs `disallow=all` / `allow=ulaw`: the client advertises
+G.711 µ-law as its entire CAPABILITY and FORMAT (`IAX2Client.swift`), so a node
+offering nothing else in common will refuse the call. It needs
+`requirecalltoken=no` as well — call token is an Asterisk extension, not part
+of RFC 5456, and IAX2Kit does not implement it.
+
+Not every Asterisk build loads every application. If the console says
+`No application 'Echo'`, the call is *accepted* and then dropped the moment the
+dialplan reaches that line, which looks like a client fault and is not one:
+
+```sh
+sudo asterisk -rx "module show like echo"
+sudo asterisk -rx "module load app_echo.so"
+```
+
+Keep `asterisk -rvvvv` open throughout. It is the difference between "the node
+hung up" and knowing why.
+
+1. **The call comes up.** ✅ *Observed 2026-08-09 against ASL3:*
+   `CONNECTED  codec G.711 µ-law`, reached with authentication, which confirms
+   OQ-5 for the `connect` path as well as the registration path.
    `hamvoip-cli connect …` reaches `CONNECTED` and names a codec. Note whether
    it needed auth; if it did, OQ-5 has just been confirmed for the `connect`
    path too.
