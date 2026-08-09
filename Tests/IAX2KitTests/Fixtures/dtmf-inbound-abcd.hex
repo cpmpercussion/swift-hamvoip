@@ -1,0 +1,30 @@
+# dtmf-inbound-abcd.hex — four inbound DTMF digits, 'A' 'B' 'C' 'D'.
+#
+# Hand-built octet by octet from RFC 5456 (provenance rule 1,
+# Tests/FIXTURES.md). Direction: peer (source call number 0x0042) → us
+# (0x0001), on a call that is up.
+#
+# The A–D digits exist in DTMF and are in the §8.2 subclass domain
+# ("0-9, A-D, *, #") even though a telephone keypad does not show them, so
+# they are the interesting inbound case. Their ASCII codes are 0x41–0x44.
+#
+# Each datagram is a 12-octet Full Frame header and nothing else (§8.1.1,
+# §8.2.1); the Data field is "Undefined" for DTMF, so there is no payload:
+#
+#   80 42        F = 1 + source call number 0x0042                     §8.1.1
+#   00 01        R = 0 + destination call number 0x0001                §8.1.1
+#   00 00 xx xx  the peer's own 32-bit call clock: 1000, 1200, 1400
+#                and 1600 ms                                           §8.1.1
+#   02..05       OSeqno, incrementing once per reliable Full Frame     §7
+#   01           ISeqno = 1 throughout                                 §8.1.1
+#   01           Frame Type 0x01 = DTMF                          §8.2, §8.2.1
+#   41..44       C = 0, subclass field = ASCII 'A'…'D'          §8.1.1, §8.2.1
+#
+# Each of the four is a complete digit on its own: RFC 5456 has no DTMF
+# BEGIN, no END, no duration and no volume (notes §14), so a receiver that
+# waits for a second frame to close a digit waits for ever.
+#
+8042 0001 000003e8 02 01 01 41
+8042 0001 000004b0 03 01 01 42
+8042 0001 00000578 04 01 01 43
+8042 0001 00000640 05 01 01 44

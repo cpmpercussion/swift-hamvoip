@@ -1,0 +1,25 @@
+# dtmf-digit-hash.hex — the DTMF digit '#' as this client transmits it,
+# immediately after `dtmf-digit-5.hex` on the same call.
+#
+# Hand-built octet by octet from RFC 5456 (provenance rule 1,
+# Tests/FIXTURES.md). Direction: us (0x0001) → peer (0x0042).
+#
+#   80 01        F = 1 + source call number 0x0001                     §8.1.1
+#   00 42        R = 0 + destination call number 0x0042                §8.1.1
+#   00 00 07 d0  32-bit time-stamp 0x7D0 = 2000 ms                     §8.1.1
+#   02           OSeqno = 2. A DTMF frame is a media message carried in
+#                a Full Frame, so it is reliable and "each reliable
+#                message that is sent increments the message count by
+#                one" — the previous digit was OSeqno 1                §7
+#   02           ISeqno = 2, unchanged: nothing has been received in
+#                between                                               §8.1.1
+#   01           Frame Type 0x01 = DTMF                          §8.2, §8.2.1
+#   23           C = 0, subclass field 0x23 = ASCII '#'. Note 0x23 is
+#                also the value of IAX subclass 0x23 (Reserved, §8.4) —
+#                a subclass octet means nothing without its frame type
+#                                                               §8.1.1, §8.2.1
+#
+# Two digits, two frames, and nothing else: the RFC has no begin/end
+# semantics to send in between (notes §14).
+#
+8001 0042 000007d0 02 02 01 23
