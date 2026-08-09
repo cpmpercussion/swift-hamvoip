@@ -492,4 +492,571 @@ final class AudioPipelineConstructionTests: XCTestCase {
         let next = await iterator.next()
         XCTAssertNil(next, "signals stream should finish (yield nil) once the pipeline is deallocated")
     }
+
+    func testCaptureCountersAreZeroBeforeCaptureStarts() {
+        let pipeline = AudioPipeline()
+        XCTAssertEqual(pipeline.droppedCaptureFrameCount, 0)
+        XCTAssertEqual(pipeline.pendingCaptureFrameCount, 0)
+        pipeline.stop()
+        XCTAssertEqual(pipeline.droppedCaptureFrameCount, 0, "stop() before start must not invent a drop count")
+    }
+
+    func testCaptureConstantsAreCoherent() {
+        // 160 samples at 8 kHz is 20 ms; the ring must therefore hold two
+        // seconds, and the drain interval must be well under one frame.
+        XCTAssertEqual(AudioPipeline.captureFrameSize, 160)
+        XCTAssertEqual(AudioPipeline.wireSampleRate, 8_000)
+        let frameDuration = Double(AudioPipeline.captureFrameSize) / AudioPipeline.wireSampleRate
+        XCTAssertEqual(frameDuration, 0.020, accuracy: 1e-9)
+        XCTAssertEqual(Double(AudioPipeline.captureRingCapacityFrames) * frameDuration, 2.0, accuracy: 1e-9)
+        XCTAssertLessThan(
+            Double(AudioPipeline.captureDrainInterval) / 1e9, frameDuration,
+            "the drain task must wake up more often than frames arrive"
+        )
+    }
+}
+
+// MARK: - Real-time capture path (RC-9)
+
+/// The capture path that RC-9 rewrote, exercised end to end **without an
+/// `AVAudioEngine`, a microphone, or a permission prompt**.
+///
+/// That is the whole point of ``CaptureTapProcessor`` exposing a pointer-level
+/// entry point: the code the tap callback runs is ordinary code operating on a
+/// pointer, so a test can call exactly what the render thread calls and check
+/// both what it produces and what it costs. What is left for CLI-1 to confirm
+/// on real hardware is only whether audio flows at all — not whether the
+/// conversion, the chunking, the ring, or the allocation behaviour are right.
+final class RealTimeCapturePathTests: XCTestCase {
+    private let wireRate = 8_000.0
+    private let frameSize = AudioPipeline.captureFrameSize // 160
+
+    private func sine(frequency: Double, sampleRate: Double, amplitude: Float, count: Int) -> [Float] {
+        let w = 2 * Double.pi * frequency / sampleRate
+        return (0..<count).map { amplitude * Float(sin(w * Double($0))) }
+    }
+
+    /// Zero-crossing frequency estimate — deliberately independent of any
+    /// production spectral code, so a bug there cannot hide a bug here.
+    private func estimatedFrequency(_ samples: [Int16], sampleRate: Double) -> Double {
+        guard samples.count > 1 else { return 0 }
+        var crossings = 0
+        var previousSign = 0
+        for sample in samples {
+            let sign = sample > 0 ? 1 : (sample < 0 ? -1 : 0)
+            if sign == 0 { continue }
+            if previousSign != 0, sign != previousSign { crossings += 1 }
+            previousSign = sign
+        }
+        return Double(crossings) / (2 * Double(samples.count) / sampleRate)
+    }
+
+    private func converted(_ converter: RealTimeDownConverter, _ input: [Float]) -> [Int16] {
+        input.withUnsafeBufferPointer { source in
+            let output = converter.convert(from: source.baseAddress!, count: source.count)
+            return Array(output)
+        }
+    }
+
+    // MARK: RealTimeDownConverter
+
+    func testDownConverterRejectsUnusableRates() {
+        XCTAssertNil(RealTimeDownConverter(sourceSampleRate: 0))
+        XCTAssertNil(RealTimeDownConverter(sourceSampleRate: -48_000))
+        XCTAssertNil(RealTimeDownConverter(sourceSampleRate: .nan))
+        XCTAssertNil(RealTimeDownConverter(sourceSampleRate: 48_000, wireSampleRate: 0))
+        XCTAssertNil(RealTimeDownConverter(sourceSampleRate: 48_000, maxInputFrames: 0))
+    }
+
+    func testDownConverterConstructsForEveryPlausibleInputRate() throws {
+        for rate in [8_000.0, 16_000, 22_050, 32_000, 44_100, 48_000, 96_000, 192_000] {
+            let converter = try XCTUnwrap(
+                RealTimeDownConverter(sourceSampleRate: rate),
+                "no converter for a \(rate) Hz input device"
+            )
+            XCTAssertEqual(converter.sourceSampleRate, rate)
+            XCTAssertEqual(converter.wireSampleRate, wireRate)
+            // Output storage must be able to hold a whole input chunk's worth
+            // of wire samples; if it cannot, the tap silently truncates audio.
+            XCTAssertGreaterThanOrEqual(
+                Double(converter.outputCapacity),
+                Double(converter.maxInputFrames) * wireRate / rate,
+                "output storage is too small for one full input chunk at \(rate) Hz"
+            )
+        }
+    }
+
+    func testDownConverterProducesTheExpectedFrameCountAndPreservesFrequency() throws {
+        let converter = try XCTUnwrap(RealTimeDownConverter(sourceSampleRate: 48_000))
+        let input = sine(frequency: 1_000, sampleRate: 48_000, amplitude: 0.5, count: 4_096)
+
+        // Prime the resampler, then measure steady state.
+        _ = converted(converter, input)
+        let output = converted(converter, input)
+
+        XCTAssertEqual(
+            Double(output.count), Double(input.count) * wireRate / 48_000, accuracy: 4,
+            "48 kHz → 8 kHz should be a 6:1 decimation"
+        )
+        XCTAssertEqual(
+            estimatedFrequency(output, sampleRate: wireRate), 1_000, accuracy: 100,
+            "the downsampled tone drifted off frequency"
+        )
+        let peak = output.map { abs(Int32($0)) }.max() ?? 0
+        let expectedPeak = 0.5 * Double(Int16.max)
+        XCTAssertGreaterThan(Double(peak), expectedPeak * 0.5, "amplitude collapsed")
+        XCTAssertLessThan(Double(peak), expectedPeak * 1.5, "amplitude overshot")
+    }
+
+    /// The real-time converter drops to `AudioConverterFillComplexBuffer` to
+    /// avoid the per-call block allocation `AVAudioConverter` forces in Swift.
+    /// That is only a safe trade if it is the *same* conversion, so: same
+    /// input, same rates, and the two must produce the same samples.
+    ///
+    /// The two differ only in how much they drain per call — the real-time
+    /// converter's output storage is sized with more headroom, so it flushes a
+    /// few more samples of the resampler's tail before returning. That is a
+    /// difference in buffering, not in the audio, which is why the comparison
+    /// is over the common prefix with a bound on the length difference rather
+    /// than a whole-array equality that would fail for the wrong reason.
+    func testDownConverterAgreesWithPCMFormatConverter() throws {
+        for rate in [44_100.0, 48_000] {
+            let realTime = try XCTUnwrap(RealTimeDownConverter(sourceSampleRate: rate))
+            let reference = try XCTUnwrap(PCMFormatConverter(sourceSampleRate: rate, wireSampleRate: wireRate))
+            let input = sine(frequency: 440, sampleRate: rate, amplitude: 0.5, count: 4_096)
+
+            let realTimeOutput = converted(realTime, input)
+            let referenceOutput = reference.downsample(input)
+
+            XCTAssertFalse(realTimeOutput.isEmpty, "no output at \(rate) Hz")
+            XCTAssertEqual(
+                Double(realTimeOutput.count), Double(referenceOutput.count), accuracy: 64,
+                "wildly different output lengths at \(rate) Hz"
+            )
+
+            let shared = min(realTimeOutput.count, referenceOutput.count)
+            var firstDifference = -1
+            for index in 0..<shared where realTimeOutput[index] != referenceOutput[index] {
+                firstDifference = index
+                break
+            }
+            XCTAssertEqual(
+                firstDifference, -1,
+                """
+                the real-time converter and AVAudioConverter produced different \
+                audio at \(rate) Hz, first differing at sample \(firstDifference)
+                """
+            )
+        }
+    }
+
+    func testDownConverterReadsChannelZeroOfAnInterleavedBuffer() throws {
+        let converter = try XCTUnwrap(RealTimeDownConverter(sourceSampleRate: 48_000))
+        let mono = sine(frequency: 1_000, sampleRate: 48_000, amplitude: 0.5, count: 2_048)
+
+        // Interleave the tone into channel 0 and full-scale noise-ish garbage
+        // into channel 1; reading with stride 2 must ignore channel 1 entirely.
+        var interleaved = [Float](repeating: 0, count: mono.count * 2)
+        for index in 0..<mono.count {
+            interleaved[index * 2] = mono[index]
+            interleaved[index * 2 + 1] = (index % 2 == 0) ? 1.0 : -1.0
+        }
+
+        let strided: [Int16] = interleaved.withUnsafeBufferPointer { source in
+            _ = converter.convert(from: source.baseAddress!, count: mono.count, stride: 2)
+            let output = converter.convert(from: source.baseAddress!, count: mono.count, stride: 2)
+            return Array(output)
+        }
+
+        let planar = try XCTUnwrap(RealTimeDownConverter(sourceSampleRate: 48_000))
+        _ = converted(planar, mono)
+        let expected = converted(planar, mono)
+
+        XCTAssertEqual(strided, expected, "strided reads pulled in the wrong channel")
+    }
+
+    // MARK: CaptureTapProcessor
+
+    private func makeProcessor(
+        inputRate: Double = 48_000,
+        ringCapacity: Int = AudioPipeline.captureRingCapacityFrames,
+        maxInputFrames: Int = 4_096
+    ) throws -> CaptureTapProcessor {
+        let converter = try XCTUnwrap(
+            RealTimeDownConverter(sourceSampleRate: inputRate, maxInputFrames: maxInputFrames)
+        )
+        let ring = RealTimeRingBuffer(frameSize: frameSize, capacity: ringCapacity)
+        return CaptureTapProcessor(converter: converter, ring: ring)
+    }
+
+    private func drain(_ ring: RealTimeRingBuffer) -> [[Int16]] {
+        var frames: [[Int16]] = []
+        while let frame = ring.readFrame() { frames.append(frame) }
+        return frames
+    }
+
+    func testEveryEmittedFrameIsExactly160Samples() throws {
+        let processor = try makeProcessor()
+        // 1023 is deliberately not a multiple of anything relevant, so the
+        // chunker's remainder-carrying is exercised on every buffer.
+        let buffer = sine(frequency: 900, sampleRate: 48_000, amplitude: 0.4, count: 1_023)
+
+        var frames: [[Int16]] = []
+        for _ in 0..<60 {
+            buffer.withUnsafeBufferPointer { source in
+                processor.process(channelZero: source.baseAddress!, frameCount: source.count)
+            }
+            frames.append(contentsOf: drain(processor.ring))
+        }
+
+        XCTAssertFalse(frames.isEmpty)
+        for frame in frames {
+            XCTAssertEqual(frame.count, frameSize, "a frame left the tap that was not 160 samples")
+        }
+        XCTAssertEqual(processor.ring.droppedFrameCount, 0)
+    }
+
+    func testFrameRateMatchesRealTime() throws {
+        let processor = try makeProcessor()
+        // Exactly one second of 48 kHz audio, delivered in 1024-frame buffers
+        // the way an engine tap would. 20 ms frames ⇒ 50 of them.
+        let block = sine(frequency: 1_000, sampleRate: 48_000, amplitude: 0.4, count: 1_024)
+        var frameCount = 0
+        var delivered = 0
+        while delivered < 48_000 {
+            block.withUnsafeBufferPointer { source in
+                processor.process(channelZero: source.baseAddress!, frameCount: source.count)
+            }
+            delivered += block.count
+            frameCount += drain(processor.ring).count
+        }
+        let expected = Double(delivered) / 48_000 * 50
+        XCTAssertEqual(Double(frameCount), expected, accuracy: 2, "the tap is not producing 50 frames a second")
+    }
+
+    /// `installTap(bufferSize:)` is a request, not a promise. A buffer larger
+    /// than the converter's preallocated input must still be handled — in
+    /// chunks, never by growing anything.
+    func testBuffersLargerThanTheConverterChunkAreProcessedWhole() throws {
+        let processor = try makeProcessor(maxInputFrames: 512)
+        let big = sine(frequency: 1_000, sampleRate: 48_000, amplitude: 0.4, count: 4_800) // 100 ms
+
+        big.withUnsafeBufferPointer { source in
+            processor.process(channelZero: source.baseAddress!, frameCount: source.count)
+        }
+        let frames = drain(processor.ring)
+        // 100 ms is five 20 ms frames; allow one for resampler priming latency.
+        XCTAssertGreaterThanOrEqual(frames.count, 4)
+        XCTAssertLessThanOrEqual(frames.count, 5)
+        for frame in frames { XCTAssertEqual(frame.count, frameSize) }
+    }
+
+    func testZeroLengthBufferIsIgnored() throws {
+        let processor = try makeProcessor()
+        let empty = [Float]()
+        empty.withUnsafeBufferPointer { source in
+            processor.process(channelZero: source.baseAddress ?? UnsafePointer(bitPattern: 0x1000)!, frameCount: 0)
+        }
+        XCTAssertEqual(processor.ring.availableFrames, 0)
+        XCTAssertEqual(processor.ring.droppedFrameCount, 0)
+    }
+
+    func testAnAVAudioPCMBufferTakesTheSamePathAsThePointerEntryPoint() throws {
+        let format = try XCTUnwrap(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)
+        )
+        let samples = sine(frequency: 1_000, sampleRate: 48_000, amplitude: 0.4, count: 1_024)
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1_024))
+        buffer.frameLength = 1_024
+        let channel = try XCTUnwrap(buffer.floatChannelData)
+        samples.withUnsafeBufferPointer { channel[0].update(from: $0.baseAddress!, count: $0.count) }
+
+        let viaBuffer = try makeProcessor()
+        let viaPointer = try makeProcessor()
+        for _ in 0..<10 {
+            viaBuffer.process(buffer)
+            samples.withUnsafeBufferPointer { source in
+                viaPointer.process(channelZero: source.baseAddress!, frameCount: source.count)
+            }
+        }
+
+        XCTAssertEqual(drain(viaBuffer.ring), drain(viaPointer.ring))
+    }
+
+    /// The honest half of the overrun story: when the consumer stops draining,
+    /// audio *is* lost — and the number says exactly how much.
+    func testAStalledConsumerCausesCountedDropsAndNeverBlocksTheTap() throws {
+        let capacity = 4
+        let processor = try makeProcessor(ringCapacity: capacity)
+        let block = sine(frequency: 1_000, sampleRate: 48_000, amplitude: 0.4, count: 4_800) // 100 ms each
+
+        // Never drain. Ten blocks is one second of audio into a 80 ms ring.
+        for _ in 0..<10 {
+            block.withUnsafeBufferPointer { source in
+                processor.process(channelZero: source.baseAddress!, frameCount: source.count)
+            }
+        }
+
+        XCTAssertEqual(processor.ring.availableFrames, capacity, "the ring must stop at capacity, not grow")
+        XCTAssertGreaterThan(processor.ring.droppedFrameCount, 40, "a full second of overrun must be reported")
+        XCTAssertEqual(
+            processor.ring.writtenFrameCount + processor.ring.droppedFrameCount,
+            capacity + processor.ring.droppedFrameCount,
+            "accepted + dropped must account for every frame the tap produced"
+        )
+
+        // Drop-newest: what survived is the *oldest* audio, contiguous.
+        let frames = drain(processor.ring)
+        XCTAssertEqual(frames.count, capacity)
+        for frame in frames { XCTAssertEqual(frame.count, frameSize) }
+    }
+
+    // MARK: Allocation behaviour — the point of RC-9
+
+    /// The claim RC-9 exists to make, measured rather than asserted. See
+    /// ``AllocationCounter`` for how the counting works.
+    func testTapProcessorDoesNotAllocate() throws {
+        try XCTSkipUnless(AllocationCounter.isAvailable, "malloc_logger unavailable")
+
+        let processor = try makeProcessor()
+        let block = sine(frequency: 1_000, sampleRate: 48_000, amplitude: 0.4, count: 1_024)
+        var sink = [Int16](repeating: 0, count: frameSize)
+
+        block.withUnsafeBufferPointer { source in
+            let base = source.baseAddress!
+            // Warm up: first-touch lazy initialisation is a genuine allocation,
+            // but it happens once per process, not once per callback.
+            for _ in 0..<200 {
+                processor.process(channelZero: base, frameCount: source.count)
+                while sink.withUnsafeMutableBufferPointer({ processor.ring.read(into: $0) }) {}
+            }
+
+            let allocations = AllocationCounter.measure {
+                var iteration = 0
+                while iteration < 2_000 {
+                    processor.process(channelZero: base, frameCount: source.count)
+                    while sink.withUnsafeMutableBufferPointer({ processor.ring.read(into: $0) }) {}
+                    iteration += 1
+                }
+            }
+            XCTAssertEqual(
+                allocations, 0,
+                "the microphone tap allocated — that is a priority inversion waiting to happen"
+            )
+        }
+    }
+
+    /// The same measurement through the exact entry point `installTap` calls,
+    /// `AVAudioPCMBuffer` and all. This is what actually runs on the render
+    /// thread, including the two Objective-C property reads
+    /// (`floatChannelData`, `frameLength`) the pointer test above skips.
+    func testTapProcessorDoesNotAllocateWhenDrivenFromAnAVAudioPCMBuffer() throws {
+        try XCTSkipUnless(AllocationCounter.isAvailable, "malloc_logger unavailable")
+
+        let format = try XCTUnwrap(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)
+        )
+        let samples = sine(frequency: 1_000, sampleRate: 48_000, amplitude: 0.4, count: 1_024)
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1_024))
+        buffer.frameLength = 1_024
+        let channel = try XCTUnwrap(buffer.floatChannelData)
+        samples.withUnsafeBufferPointer { channel[0].update(from: $0.baseAddress!, count: $0.count) }
+
+        let processor = try makeProcessor()
+        var sink = [Int16](repeating: 0, count: frameSize)
+        for _ in 0..<200 {
+            processor.process(buffer)
+            while sink.withUnsafeMutableBufferPointer({ processor.ring.read(into: $0) }) {}
+        }
+
+        let allocations = AllocationCounter.measure {
+            var iteration = 0
+            while iteration < 2_000 {
+                processor.process(buffer)
+                while sink.withUnsafeMutableBufferPointer({ processor.ring.read(into: $0) }) {}
+                iteration += 1
+            }
+        }
+        XCTAssertEqual(allocations, 0, "the installed tap closure's body allocated")
+    }
+
+    /// The counter-example that justifies the deviation from the RC-9 brief.
+    /// `AVAudioConverter`'s block-based API is not declared `NS_NOESCAPE`, so
+    /// Swift must heap-allocate a block on every call — with preallocated input
+    /// and output buffers, which removes every allocation the *caller* controls.
+    /// If a future SDK marks it `NS_NOESCAPE` this test will start failing, at
+    /// which point the capture path can go back to `AVAudioConverter`.
+    func testAVAudioConverterStillAllocatesEvenWithPreallocatedBuffers() throws {
+        try XCTSkipUnless(AllocationCounter.isAvailable, "malloc_logger unavailable")
+
+        let sourceFormat = try XCTUnwrap(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)
+        )
+        let wireFormat = try XCTUnwrap(
+            AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 8_000, channels: 1, interleaved: false)
+        )
+        let converter = try XCTUnwrap(AVAudioConverter(from: sourceFormat, to: wireFormat))
+        let input = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: 1_024))
+        input.frameLength = 1_024
+        let output = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: wireFormat, frameCapacity: 256))
+
+        // Everything preallocated; the only thing left per call is the block.
+        var provided = false
+        func convertOnce() {
+            provided = false
+            output.frameLength = 0
+            _ = converter.convert(to: output, error: nil) { _, status in
+                if provided {
+                    status.pointee = .noDataNow
+                    return nil
+                }
+                provided = true
+                status.pointee = .haveData
+                return input
+            }
+        }
+        for _ in 0..<200 { convertOnce() }
+
+        let allocations = try XCTUnwrap(AllocationCounter.measure {
+            var iteration = 0
+            while iteration < 1_000 {
+                convertOnce()
+                iteration += 1
+            }
+        })
+        XCTAssertGreaterThan(
+            allocations, 0,
+            """
+            AVAudioConverter no longer allocates per call — the capture path can \
+            drop RealTimeDownConverter and go back to it
+            """
+        )
+    }
+}
+
+/// Collects frames delivered by the drain task, from whatever thread it runs
+/// on. A plain lock is right here: this is test bookkeeping at ordinary
+/// priority, not the render thread.
+private final class FrameCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [[Int16]] = []
+
+    func append(_ frame: [Int16]) {
+        lock.lock()
+        defer { lock.unlock() }
+        storage.append(frame)
+    }
+
+    var frames: [[Int16]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+}
+
+/// The consumer half of the RC-9 handoff.
+///
+/// After RC-9 nothing reaches the caller except through this task, so a silent
+/// failure here is a radio that hears nothing. `startCapture` cannot be called
+/// without a microphone, so the loop is exercised through the internal test
+/// hook — the same function, the same ring, the same `FrameSink`.
+final class CaptureDrainTaskTests: XCTestCase {
+    private func frame(_ index: Int) -> [Int16] {
+        (0..<4).map { Int16(truncatingIfNeeded: index &* 31 &+ $0) }
+    }
+
+    /// Polls until `condition` holds or the deadline passes. Bounded, so a
+    /// broken drain loop fails the test instead of hanging the suite.
+    private func waitUntil(
+        _ condition: () -> Bool,
+        timeout: TimeInterval = 5
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return condition()
+    }
+
+    func testDrainTaskDeliversEveryFrameInOrder() async {
+        let ring = RealTimeRingBuffer(frameSize: 4, capacity: 64)
+        let collector = FrameCollector()
+        let task = AudioPipeline.makeCaptureDrainTaskForTesting(ring: ring) { collector.append($0) }
+        defer { task.cancel() }
+
+        let expected = (0..<40).map { frame($0) }
+        for payload in expected {
+            XCTAssertTrue(ring.write(payload))
+        }
+
+        let delivered = await waitUntil { collector.frames.count == expected.count }
+        XCTAssertTrue(delivered, "the drain task delivered \(collector.frames.count) of \(expected.count) frames")
+        XCTAssertEqual(collector.frames, expected, "frames arrived out of order or corrupted")
+        XCTAssertEqual(ring.droppedFrameCount, 0)
+    }
+
+    func testDrainTaskKeepsUpWithFramesArrivingWhileItRuns() async {
+        let ring = RealTimeRingBuffer(frameSize: 4, capacity: 8)
+        let collector = FrameCollector()
+        let task = AudioPipeline.makeCaptureDrainTaskForTesting(ring: ring) { collector.append($0) }
+        defer { task.cancel() }
+
+        // More frames than the ring can hold at once, fed in while the task is
+        // already draining — the case a single "write then drain" test misses.
+        var written: [[Int16]] = []
+        for index in 0..<60 {
+            let payload = frame(index)
+            var accepted = false
+            let deadline = Date().addingTimeInterval(5)
+            while !accepted, Date() < deadline {
+                accepted = ring.write(payload)
+                if !accepted { try? await Task.sleep(nanoseconds: 1_000_000) }
+            }
+            XCTAssertTrue(accepted, "ring never drained enough to accept frame \(index)")
+            written.append(payload)
+        }
+
+        let delivered = await waitUntil { collector.frames.count == written.count }
+        XCTAssertTrue(delivered, "the drain task fell permanently behind")
+        XCTAssertEqual(collector.frames, written)
+    }
+
+    func testCancellingTheDrainTaskStopsDelivery() async {
+        let ring = RealTimeRingBuffer(frameSize: 4, capacity: 64)
+        let collector = FrameCollector()
+        let task = AudioPipeline.makeCaptureDrainTaskForTesting(ring: ring) { collector.append($0) }
+
+        XCTAssertTrue(ring.write(frame(0)))
+        _ = await waitUntil { collector.frames.count == 1 }
+
+        task.cancel()
+        _ = await task.value // the loop has now exited
+
+        let countAtCancellation = collector.frames.count
+        for index in 1..<10 {
+            XCTAssertTrue(ring.write(frame(index)))
+        }
+        try? await Task.sleep(nanoseconds: 50_000_000) // ten drain intervals
+
+        XCTAssertEqual(
+            collector.frames.count, countAtCancellation,
+            "frames were delivered after the drain task was cancelled"
+        )
+    }
+
+    func testDrainTaskIdlesQuietlyOnAnEmptyRing() async {
+        let ring = RealTimeRingBuffer(frameSize: 4, capacity: 8)
+        let collector = FrameCollector()
+        let task = AudioPipeline.makeCaptureDrainTaskForTesting(ring: ring) { collector.append($0) }
+        defer { task.cancel() }
+
+        try? await Task.sleep(nanoseconds: 40_000_000)
+        XCTAssertTrue(collector.frames.isEmpty, "the drain task invented frames from an empty ring")
+
+        XCTAssertTrue(ring.write(frame(7)))
+        let delivered = await waitUntil { collector.frames.count == 1 }
+        XCTAssertTrue(delivered, "the drain task did not wake up after idling")
+        XCTAssertEqual(collector.frames.first, frame(7))
+    }
 }
