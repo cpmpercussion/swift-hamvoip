@@ -414,6 +414,41 @@ enum OQ5Probe {
             }
             return text
         }
+        // Both hex renderings and nothing else. This is not the contradiction
+        // it looks like: a node that decodes the IE text back to sixteen bytes
+        // before comparing, or that compares the text case-insensitively,
+        // accepts both by construction. Whether that reading holds turns
+        // entirely on the *rejections* — a non-hex candidate being refused is
+        // what proves the node checks the digest at all, and so is what
+        // separates "hex, case-insensitive" from "accepts whatever it is
+        // sent". Without one, the run genuinely cannot tell those apart.
+        if Set(accepted) == [.lowercaseHex, .uppercaseHex] {
+            let refusedNonHex = results.contains { candidate, outcome in
+                guard candidate == .base64 || candidate == .rawBytes else { return false }
+                if case .rejected = outcome { return true }
+                return false
+            }
+            if refusedNonHex {
+                return """
+                    CONCLUSION: this node wants MD5 RESULT as hexadecimal and does not care \
+                    about case — it accepted both renderings of the same digest, and refused \
+                    a non-hex candidate, so it is checking the digest rather than waving \
+                    everything through. It is decoding the text back to bytes, or comparing \
+                    it case-insensitively.
+
+                    lowercase-hex is what IAX2Kit ships, so no code changes. Record the \
+                    observation against OQ-5 — and record it as this node's behaviour, not \
+                    as a fact about the protocol. Another implementation may well compare \
+                    byte-for-byte, so keep sending lowercase.
+                    """
+            }
+            return """
+                CONCLUSION: both hex renderings were accepted, but no non-hex candidate was \
+                refused, so this run cannot tell a case-insensitive node from one that \
+                accepts anything it is sent. Run it again without --encoding, so that \
+                base64 and raw-bytes are tested too.
+                """
+        }
         if accepted.count > 1 {
             return "CONCLUSION: more than one encoding was accepted (\(accepted.map(\.rawValue).joined(separator: ", "))). "
                 + "That should not be possible for a node that checks the digest, so treat this "

@@ -242,7 +242,9 @@ CONCLUSION: this node accepts MD5 RESULT as lowercase-hex …
 | Result | What it means |
 |---|---|
 | Exactly one accepted | **That is the answer to OQ-5.** Record it in the open-questions table in `docs/DEVELOPMENT-PLAN.md`, with the node and the date — it is now an observation about one implementation, not a fact about the protocol. |
-| More than one accepted | Impossible for a node that checks the digest. Treat the run as unreliable and repeat it. |
+| Both hex cases accepted, a non-hex candidate refused | **Also an answer, and the one a real node gave.** The node decodes the IE back to sixteen bytes, or compares the text case-insensitively; either way it is checking the digest, which the non-hex refusal is what proves. The answer is "hex", and case is that node's business rather than the protocol's. Keep sending lowercase — the next implementation may well compare byte-for-byte. |
+| Both hex cases accepted, nothing refused | Not enough to conclude anything: a node that accepts whatever it is sent looks exactly like this. Re-run without `--encoding` so base64 and raw bytes are tested too. |
+| Some other combination accepted | Impossible for a node that checks the digest. Treat the run as unreliable and repeat it. |
 | All four rejected | Almost certainly a wrong username or secret, not an exotic encoding. Check those first. |
 | Accepted with no challenge | The node does not authenticate this account, so it cannot answer the question. Configure a secret for the account on the node and try again. |
 | Nothing answered | Reachability, not encoding. No candidate was actually tested. |
