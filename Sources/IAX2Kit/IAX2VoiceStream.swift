@@ -400,10 +400,17 @@ public struct IAX2VoiceReceiver: Sendable {
         /// decoded subclass, or `nil` if the subclass named no 32-bit format.
         case unsupportedFormat(UInt32?)
 
-        /// The payload is not one frame of the negotiated codec. µ-law at the
-        /// default 8 kHz (§8.6.32) is 1 byte per sample (§8.7), so a 20 ms
-        /// frame is exactly 160 octets; anything else does not fit the playout
-        /// grid and is dropped rather than half-played.
+        /// The payload carried no octets at all, so there is no audio in it to
+        /// play. Short and over-long payloads are **not** rejected — see
+        /// ``IAX2VoiceReceiver`` on partial frames.
+        case emptyPayload
+
+        /// The payload is not one frame of the negotiated codec.
+        ///
+        /// **No longer raised for G.711**, and kept only so that a future
+        /// block codec — one where a partial frame really is undecodable — has
+        /// somewhere to report it. µ-law is sample-wise, so it has no such
+        /// failure mode. See ``IAX2VoiceReceiver`` for what happens instead.
         case wrongPayloadLength(expected: Int, got: Int)
 
         /// The mini frame's 16-bit time-stamp expands to before the call's zero
@@ -421,6 +428,8 @@ public struct IAX2VoiceReceiver: Sendable {
             case .unsupportedFormat(let value):
                 let text = value.map { "0x\(String(format: "%08x", $0))" } ?? "an unusable subclass"
                 return "media format \(text) is not decodable; G.711 µ-law only (RFC 5456 §8.7)"
+            case .emptyPayload:
+                return "media frame carried no payload octets"
             case .wrongPayloadLength(let expected, let got):
                 return "media payload is \(got) octets; one frame of this codec is \(expected)"
             case .timestampPrecedesCallOrigin(let short):
@@ -565,19 +574,65 @@ public struct IAX2VoiceReceiver: Sendable {
         return queue(payload: mini.payload, timestamp: timestamp, arrivedAt: arrivedAt)
     }
 
+    /// µ-law's negative zero. Both `0xFF` and `0x7F` decode to zero
+    /// (`G711MuLawCodec`); `0xFF` is what `encodeSample(0)` produces, so
+    /// padding with it is indistinguishable from encoded silence.
+    private static let silenceOctet: UInt8 = G711MuLawCodec.encodeSample(0)
+
+    /// Files a payload of **any** length onto the 20 ms playout grid.
+    ///
+    /// ## Why not simply require 160 octets
+    ///
+    /// It used to, and a live ASL3 node broke it on the first call:
+    ///
+    /// ```
+    /// RX media dropped: media payload is 44 octets; one frame of this codec is 160
+    /// ```
+    ///
+    /// Nothing in RFC 5456 promises that a media frame is exactly one 20 ms
+    /// frame's worth. §8.7 gives µ-law as "1 byte per sample" and stops there;
+    /// the 160-octet figure is a consequence of 20 ms at 8 kHz, not a rule
+    /// about what a peer may send. Asterisk emits a short frame at the tail of
+    /// a playback — whatever is left when the file ends — and 44 octets is
+    /// 5.5 ms of perfectly good audio. Dropping it discards real speech to
+    /// protect a grid that G.711 does not have: it is sample-wise, so a
+    /// partial frame is not a corrupt frame, just a shorter one.
+    ///
+    /// So: short payloads are padded to the slot with encoded silence, and
+    /// over-long ones are split across consecutive slots, the last padded if
+    /// it needs it. Only a genuinely empty payload is rejected, because there
+    /// is no audio in it. A block codec added later would need the old strict
+    /// behaviour — hence ``Rejection/wrongPayloadLength`` still exists.
     private mutating func queue(
         payload: [UInt8],
         timestamp: UInt32,
         arrivedAt: Duration?
     ) -> Reception {
-        guard payload.count == codec.bytesPerFrame else {
-            return .rejected(.wrongPayloadLength(expected: codec.bytesPerFrame, got: payload.count))
-        }
-        let timed = TimedFrame(timestamp: timestamp, payload: payload)
-        if let arrivedAt {
-            buffer.push(timed, arrivedAt: arrivedAt)
-        } else {
-            buffer.push(timed)
+        guard !payload.isEmpty else { return .rejected(.emptyPayload) }
+
+        let octetsPerSlot = codec.bytesPerFrame
+        // µ-law is one octet per sample at 8 kHz (§8.6.32, §8.7), so a slot's
+        // worth of octets is a slot's worth of milliseconds ÷ 8.
+        let millisecondsPerSlot = UInt32(codec.samplesPerFrame / 8)
+
+        var offset = 0
+        var slot = timestamp
+        while offset < payload.count {
+            let end = min(offset + octetsPerSlot, payload.count)
+            var chunk = Array(payload[offset..<end])
+            if chunk.count < octetsPerSlot {
+                chunk.append(
+                    contentsOf: repeatElement(
+                        Self.silenceOctet, count: octetsPerSlot - chunk.count))
+            }
+            let timed = TimedFrame(timestamp: slot, payload: chunk)
+            if let arrivedAt {
+                buffer.push(timed, arrivedAt: arrivedAt)
+            } else {
+                buffer.push(timed)
+            }
+            offset = end
+            slot &+= millisecondsPerSlot
         }
         return .queued(timestamp: timestamp)
     }

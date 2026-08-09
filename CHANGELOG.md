@@ -27,6 +27,17 @@ major version is 0, the API may change in any release.
 
 ### Fixed
 
+- **Received audio shorter than 20 ms is played instead of dropped.** A live
+  ASL3 node sent a 44-octet media payload — the tail of a playback, 5.5 ms of
+  ordinary speech — and `IAX2VoiceReceiver` rejected it for not being exactly
+  160 octets. Nothing in RFC 5456 promises a media frame is exactly one 20 ms
+  slot: §8.7 gives µ-law as one byte per sample and stops there, and 160 is a
+  consequence of 20 ms at 8 kHz rather than a rule about what a peer may send.
+  Because µ-law is sample-wise, a partial frame is a shorter frame and not a
+  corrupt one. Short payloads are now padded to the slot with encoded silence,
+  over-long ones are split across consecutive slots, and only a genuinely
+  empty payload is rejected (`Rejection.emptyPayload`). The playout contract
+  is unchanged: every tick is still exactly `samplesPerFrame` samples.
 - **`hamvoip-cli connect` no longer reports captured frames as transmitted
   ones.** The closing summary printed the audio bridge's *submitted* count
   under the label `transmitted frames`; because capture runs continuously by
