@@ -22,7 +22,25 @@ let package = Package(
         // M17 reflector protocol. Priority 3 — needs Codec2 XCFramework (OQ-2).
         .target(name: "M17Kit", dependencies: ["RadioCore"]),
 
-        .testTarget(name: "RadioCoreTests", dependencies: ["RadioCore"]),
-        .testTarget(name: "IAX2KitTests", dependencies: ["IAX2Kit"]),
+        // Test-only helpers shared by every test target: fixture loading and
+        // the mock transport. Deliberately not exposed as a product — nothing
+        // outside this package's tests should depend on it.
+        .target(name: "TestSupport", dependencies: ["RadioCore"], path: "Tests/TestSupport"),
+
+        .testTarget(
+            name: "RadioCoreTests",
+            dependencies: ["RadioCore", "TestSupport"],
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "IAX2KitTests",
+            dependencies: ["IAX2Kit", "RadioCore", "TestSupport"],
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "M17KitTests",
+            dependencies: ["M17Kit", "RadioCore", "TestSupport"],
+            resources: [.copy("Fixtures")]
+        ),
     ]
 )

@@ -41,6 +41,14 @@ do not improvise a different design.
 8. **Style:** Swift 5.9, `async/await`, actors for stateful components,
    value types for frames/parsers, XCTest. No third-party Swift dependencies
    without a task that says so.
+9. **Do not edit `Package.swift`** unless your task explicitly says to. Every
+   target, test target and resource directory later tasks need already
+   exists. Tasks that do need a manifest change: CLI-1 (executable target),
+   M17-4 (codec2 shim target).
+10. **Shared test helpers live in `Tests/TestSupport/`** (target `TestSupport`,
+   depended on by all three test targets, deliberately not a product). Put
+   anything more than one test target needs there — `FixtureLoader` is
+   already in place; `MockTransport` joins it in RC-1.
 
 ## 2. Current state (as of this plan)
 
@@ -80,20 +88,22 @@ AllStar node using the CLI harness on macOS.
 
 ## Phase 0 — Bootstrap
 
-### BOOT-1 — Make the package build and test green
+### BOOT-1 — Make the package build and test green ✅ DONE
 **Depends on:** nothing. **Blocks:** every other task.
 
-Create the missing source directories so every declared target is non-empty,
-each with a minimal SPDX-stamped file:
+Created the missing source directories so every declared target is non-empty,
+plus the fixture infrastructure originally scoped as RC-8 (folded in here
+because it changes `Package.swift`, which no parallel task may touch):
 
-- `Sources/IAX2Kit/IAX2Kit.swift` and `Sources/M17Kit/M17Kit.swift` — a
-  doc-comment and an empty public enum namespace is enough for now.
-- `Tests/RadioCoreTests/RadioCoreTests.swift` and
-  `Tests/IAX2KitTests/IAX2KitTests.swift` — one real assertion each against
-  the existing stubs (e.g. `JitterBuffer` default depths are 60/200 ms;
-  `TransmitState` equality).
+- `Sources/IAX2Kit/IAX2Kit.swift`, `Sources/M17Kit/M17Kit.swift` — namespace
+  enums holding the default ports.
+- `TestSupport` target at `Tests/TestSupport/` with `FixtureLoader`
+  (hex-dump fixtures, `#` comments, loaded via a passed-in `Bundle`).
+- Three test targets — `RadioCoreTests`, `IAX2KitTests`, `M17KitTests` —
+  each with a `Fixtures/` resource directory.
+- `Tests/FIXTURES.md` records the fixture provenance rule (LP-1).
 
-**Done when:** `swift build && swift test` pass locally and in CI on `main`.
+**RC-8 is therefore complete**; later tasks just add fixture files.
 
 ## Phase 1 — RadioCore
 
@@ -115,9 +125,11 @@ public protocol DatagramTransport: Sendable {
 ```
 
 Provide `NWDatagramTransport` (final class wrapping `NWConnection`, UDP,
-per PD-1 — `Network.framework`, never BSD sockets) and, inside the test
-target, `MockTransport`: records sent datagrams into an array, exposes a
-method to inject inbound datagrams into `incoming`.
+per PD-1 — `Network.framework`, never BSD sockets) and, in
+`Tests/TestSupport/MockTransport.swift`, `MockTransport`: records sent
+datagrams into an array, exposes a method to inject inbound datagrams into
+`incoming`. It goes in `TestSupport`, not a test target, because IAX-3,
+IAX-5, IAX-8 and M17-3 all need it.
 
 **Done when:** tests prove MockTransport round-trips injected datagrams in
 order and captures sends; `NWDatagramTransport` compiles (no live-network
@@ -226,19 +238,7 @@ itself is exercised later by CLI-1, not by unit tests.
 unit tests (e.g. 48 k→8 k of a known sine preserves frequency, output frames
 are exactly 160 samples).
 
-### RC-8 — Fixture infrastructure
-**Depends on:** nothing.
-**Files:** `Tests/RadioCoreTests/Support/FixtureLoader.swift`,
-`Tests/Fixtures/README.md`.
-
-Loader for hex-dump fixtures: one datagram per line, `#` comments allowed,
-loaded via `Bundle.module` (add `resources:` to test targets in
-`Package.swift`). `Tests/Fixtures/README.md` states the provenance rule:
-fixtures are hand-written from the spec or captured from the maintainer's
-own sessions (LP-1); never imported from other projects.
-
-**Done when:** a sample fixture loads in tests on macOS and Linux-style
-paths (use `Bundle.module`, no hardcoded paths).
+### RC-8 — Fixture infrastructure ✅ DONE (folded into BOOT-1)
 
 ---
 

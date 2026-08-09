@@ -1,0 +1,7 @@
+# Not a protocol frame — exercises FixtureLoader parsing only.
+# Comments, blank lines and intra-line whitespace must all be ignored.
+
+de ad be ef
+
+0001020304050607   # trailing comment
+ff
