@@ -102,12 +102,26 @@ public enum Base40Callsign {
     /// A.2, reproduced in the tests): for callsign "AB1CD" the value is
     /// `((((D * 40 + C) * 40 + '1') * 40 + B) * 40 + A)`.
     ///
-    /// Case-insensitive: the callsign is uppercased before encoding.
+    /// Case-insensitive: ASCII `a`-`z` are treated as their uppercase
+    /// equivalents.
+    ///
+    /// Deliberately does **not** call `String.uppercased()` on the whole
+    /// string first. Unicode case mapping can *expand* a single character
+    /// into several — `"ß".uppercased() == "SS"`, `"ﬁ".uppercased() ==
+    /// "FI"` — which would let characters outside Table A.1 silently turn
+    /// into valid encodable text instead of being rejected. Each input
+    /// character is instead checked against the alphabet (or, for ASCII
+    /// `a`-`z` only, its single-character uppercase form) before it can
+    /// contribute to the address; anything else throws `.invalidCharacter`
+    /// with the character exactly as the caller wrote it.
     public static func encode(_ callsign: String) throws -> UInt64 {
         guard !callsign.isEmpty else {
             throw Base40CallsignError.empty
         }
-        let characters = Array(callsign.uppercased())
+        // Length is checked against the caller's original characters, not
+        // a case-mapped (and potentially longer) version of them, so the
+        // error message reports the length the caller actually typed.
+        let characters = Array(callsign)
         guard characters.count <= maxLength else {
             throw Base40CallsignError.tooLong(count: characters.count, max: maxLength)
         }
@@ -116,12 +130,30 @@ public enum Base40Callsign {
         // Walk from the last character to the first (spec A.2), so the
         // first character ends up least significant.
         for character in characters.reversed() {
-            guard let value = valueByCharacter[character] else {
-                throw Base40CallsignError.invalidCharacter(character)
-            }
+            let value = try alphabetValue(of: character)
             address = address * 40 + value
         }
         return address
+    }
+
+    /// Maps one caller-supplied character to its base-40 alphabet value
+    /// (1...39), accepting ASCII `a`-`z` as the lowercase form of `A`-`Z`.
+    /// Validation is against `character` exactly as supplied — see the
+    /// doc comment on `encode` for why this must not go through Unicode
+    /// case mapping first.
+    private static func alphabetValue(of character: Character) throws -> UInt64 {
+        if let value = valueByCharacter[character] {
+            return value
+        }
+        // ASCII lowercase letters only: a fixed 0x20 subtraction, unlike
+        // `Character.uppercased()`, never changes the number of characters.
+        if let ascii = character.asciiValue, (0x61...0x7A).contains(ascii) {
+            let upper = Character(UnicodeScalar(ascii - 0x20))
+            if let value = valueByCharacter[upper] {
+                return value
+            }
+        }
+        throw Base40CallsignError.invalidCharacter(character)
     }
 
     /// Decodes a 48-bit base-40 address back into an uppercase callsign

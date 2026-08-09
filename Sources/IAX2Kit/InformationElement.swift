@@ -236,7 +236,12 @@ public struct ApparentAddress: Sendable, Equatable {
     public static let addressFamilyINET6: UInt16 = 10
 
     /// The 2 family-field bytes, exactly as they appeared on the wire.
-    public let familyBytes: [UInt8]
+    /// Stored as a fixed pair rather than `[UInt8]` so that a family field
+    /// of the wrong length is unrepresentable: a public initialiser should
+    /// not be able to construct a value whose public accessors
+    /// (`familyAsBigEndian`/`familyAsLittleEndian`) can trap.
+    public let familyByte0: UInt8
+    public let familyByte1: UInt8
     /// `sin_port` — unambiguously network byte order (big-endian): it is the
     /// only reading that makes the RFC's own `0x11d9` example equal 4569.
     public let port: UInt16
@@ -251,14 +256,16 @@ public struct ApparentAddress: Sendable, Equatable {
     public let ipv4TrailingPadding: [UInt8]?
 
     public init(
-        familyBytes: [UInt8],
+        familyByte0: UInt8,
+        familyByte1: UInt8,
         port: UInt16,
         addressBytes: [UInt8],
         ipv6FlowInfo: UInt32? = nil,
         ipv6ScopeID: UInt32? = nil,
         ipv4TrailingPadding: [UInt8]? = nil
     ) {
-        self.familyBytes = familyBytes
+        self.familyByte0 = familyByte0
+        self.familyByte1 = familyByte1
         self.port = port
         self.addressBytes = addressBytes
         self.ipv6FlowInfo = ipv6FlowInfo
@@ -266,15 +273,20 @@ public struct ApparentAddress: Sendable, Equatable {
         self.ipv4TrailingPadding = ipv4TrailingPadding
     }
 
+    /// The 2 family-field bytes, exactly as they appeared on the wire, as
+    /// an array — for callers that want to treat it like the other
+    /// variable-length byte fields on this type (e.g. re-serializing).
+    public var familyBytes: [UInt8] { [familyByte0, familyByte1] }
+
     /// `familyBytes` read as a big-endian `UInt16`.
     public var familyAsBigEndian: UInt16 {
-        (UInt16(familyBytes[0]) << 8) | UInt16(familyBytes[1])
+        (UInt16(familyByte0) << 8) | UInt16(familyByte1)
     }
 
     /// `familyBytes` read as a little-endian `UInt16` — the reading
     /// consistent with the RFC's own worked example (see the type doc).
     public var familyAsLittleEndian: UInt16 {
-        (UInt16(familyBytes[1]) << 8) | UInt16(familyBytes[0])
+        (UInt16(familyByte1) << 8) | UInt16(familyByte0)
     }
 
     public var isIPv6Layout: Bool { addressBytes.count == 16 }
@@ -286,7 +298,8 @@ public struct ApparentAddress: Sendable, Equatable {
     /// originate, not a claim about what a peer will send us.
     public static func ipv4(address: (UInt8, UInt8, UInt8, UInt8), port: UInt16) -> ApparentAddress {
         ApparentAddress(
-            familyBytes: [0x02, 0x00],
+            familyByte0: 0x02,
+            familyByte1: 0x00,
             port: port,
             addressBytes: [address.0, address.1, address.2, address.3],
             ipv4TrailingPadding: Array(repeating: 0, count: 8)
@@ -704,7 +717,8 @@ public enum InformationElement: Sendable, Equatable {
         switch data.count {
         case 16: // IPv4 layout (§8.6.17)
             return ApparentAddress(
-                familyBytes: [data[0], data[1]],
+                familyByte0: data[0],
+                familyByte1: data[1],
                 port: (UInt16(data[2]) << 8) | UInt16(data[3]),
                 addressBytes: Array(data[4..<8]),
                 ipv4TrailingPadding: Array(data[8..<16])
@@ -713,7 +727,8 @@ public enum InformationElement: Sendable, Equatable {
             let flowInfo = (UInt32(data[4]) << 24) | (UInt32(data[5]) << 16) | (UInt32(data[6]) << 8) | UInt32(data[7])
             let scopeID = (UInt32(data[24]) << 24) | (UInt32(data[25]) << 16) | (UInt32(data[26]) << 8) | UInt32(data[27])
             return ApparentAddress(
-                familyBytes: [data[0], data[1]],
+                familyByte0: data[0],
+                familyByte1: data[1],
                 port: (UInt16(data[2]) << 8) | UInt16(data[3]),
                 addressBytes: Array(data[8..<24]),
                 ipv6FlowInfo: flowInfo,

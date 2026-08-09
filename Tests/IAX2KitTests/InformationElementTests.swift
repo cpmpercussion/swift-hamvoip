@@ -311,6 +311,30 @@ final class InformationElementTests: XCTestCase {
         XCTAssertEqual(reserialized, bytes)
     }
 
+    /// Regression test for the reviewer's exact repro: previously,
+    /// `ApparentAddress(familyBytes: [], port: 4569, addressBytes: [1, 2,
+    /// 3, 4]).familyAsBigEndian` crashed with "Fatal error: Index out of
+    /// range", because `familyBytes` was an `[UInt8]` the public
+    /// initialiser accepted at any length, but `familyAsBigEndian`/
+    /// `familyAsLittleEndian` unconditionally indexed elements 0 and 1.
+    ///
+    /// `familyBytes` is now a fixed pair of `UInt8` (`familyByte0`,
+    /// `familyByte1`), so the invalid state the crash depended on -- a
+    /// family field of the wrong length -- is unrepresentable: there is no
+    /// longer any `ApparentAddress` value whose family-order accessors can
+    /// trap, for *any* input, which is what this test demonstrates by
+    /// exercising the boundary byte values (0x00 and 0xFF) that would
+    /// previously have been the first two bytes examined.
+    func testApparentAddressFamilyAccessorsNeverTrapForAnyConstructedValue() {
+        let edgeCases: [(UInt8, UInt8)] = [(0x00, 0x00), (0xFF, 0xFF), (0x02, 0x00), (0x00, 0xFF), (0xFF, 0x00)]
+        for (byte0, byte1) in edgeCases {
+            let addr = ApparentAddress(familyByte0: byte0, familyByte1: byte1, port: 4569, addressBytes: [1, 2, 3, 4])
+            XCTAssertEqual(addr.familyBytes, [byte0, byte1])
+            XCTAssertEqual(addr.familyAsBigEndian, (UInt16(byte0) << 8) | UInt16(byte1))
+            XCTAssertEqual(addr.familyAsLittleEndian, (UInt16(byte1) << 8) | UInt16(byte0))
+        }
+    }
+
     // MARK: - Hand-built NEW payload fixture
 
     func testNewFramePayloadFixtureParsesToExpectedIEs() throws {

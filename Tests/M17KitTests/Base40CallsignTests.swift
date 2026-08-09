@@ -87,15 +87,66 @@ final class Base40CallsignTests: XCTestCase {
         XCTAssertEqual(try Base40Callsign.decode(try Base40Callsign.encode("vk1xyz")), "VK1XYZ")
     }
 
-    func testTrailingSpacesDoNotAffectEncodedValue() throws {
-        // Spec A.2: "Since the space character has a value of zero,
-        // trailing spaces will not affect the encoded value." We reject
-        // space as an *input* character (see Base40Callsign's doc
-        // comment), but padding a shorter callsign into a longer field is
-        // exactly what the decoder should reproduce without trailing
-        // artifacts.
-        let value = try Base40Callsign.encode("ABC")
-        XCTAssertEqual(try Base40Callsign.decode(value), "ABC")
+    /// Reference (independent-of-implementation) base-40 arithmetic that,
+    /// unlike `Base40Callsign.encode`, *does* accept the space character
+    /// at value 0 -- exactly the alphabet spec A.2 and
+    /// `docs/reference/PROVENANCE.md` describe: index 0 is space, encoding
+    /// runs from the least significant digit (the first character of
+    /// `text`) outward. Used only to exercise the "trailing spaces don't
+    /// affect the value" claim, which the public `encode` API cannot
+    /// exercise directly (see below).
+    private func referenceBase40ValueIncludingSpace(_ text: String) -> UInt64 {
+        var address: UInt64 = 0
+        for character in text.reversed() {
+            let index = character == " " ? 0 : Self.alphabet.firstIndex(of: character)! + 1
+            address = address * 40 + UInt64(index)
+        }
+        return address
+    }
+
+    /// Spec A.2: "Since the space character has a value of zero, trailing
+    /// spaces will not affect the encoded value."
+    ///
+    /// The original version of this test only round-tripped `"ABC"` --
+    /// a string containing no space at all -- so it exercised nothing
+    /// about trailing spaces and would have passed against any
+    /// implementation whatsoever, correct or not.
+    ///
+    /// On inspection, the property as literally stated is **not
+    /// observable through this type's public `encode` API**: `encode`
+    /// deliberately throws `.invalidCharacter` for space at *any*
+    /// position (see the type's doc comment, FR-2.3) -- so you cannot ask
+    /// it to encode `"ABC "` and compare, because the trailing space
+    /// itself throws before "does it affect the value" is even
+    /// answerable. What genuinely holds, and is what makes `decode` safe
+    /// to write the way it is, is the underlying base-40 *arithmetic*:
+    /// since encoding runs from the least significant digit (spec A.2),
+    /// trailing spaces land in the most-significant digit positions,
+    /// where a zero-valued digit contributes nothing regardless of how
+    /// many of them there are. This test exercises that arithmetic
+    /// directly (via `referenceBase40ValueIncludingSpace`, which -- unlike
+    /// `encode` -- does accept space) and then confirms the flip side:
+    /// `decode` never reconstructs trailing spaces, for any of the
+    /// (identical) addresses padding would have produced.
+    func testTrailingSpacesDoNotAffectTheEncodedValue() throws {
+        let unpadded = referenceBase40ValueIncludingSpace("ABC")
+        XCTAssertEqual(
+            unpadded, try Base40Callsign.encode("ABC"),
+            "sanity check: the reference arithmetic must agree with the real encoder on space-free input"
+        )
+
+        for paddingLength in 1...(Base40Callsign.maxLength - 3) {
+            let padded = "ABC" + String(repeating: " ", count: paddingLength)
+            XCTAssertEqual(
+                referenceBase40ValueIncludingSpace(padded), unpadded,
+                "\(paddingLength) trailing space(s) must not change the encoded value"
+            )
+        }
+
+        // The flip side of the same property: decode never reconstructs
+        // trailing spaces, because nothing in the address distinguishes
+        // "ABC" from "ABC   ".
+        XCTAssertEqual(try Base40Callsign.decode(unpadded), "ABC")
     }
 
     private func assertRoundTrips(_ callsign: String, file: StaticString = #filePath, line: UInt = #line) throws {
@@ -182,6 +233,106 @@ final class Base40CallsignTests: XCTestCase {
         XCTAssertEqual(tooLong.count, 9)
         let overLength = tooLong + "G" // 10 characters
         XCTAssertThrowsError(try Base40Callsign.encode(overLength)) { error in
+            XCTAssertEqual(error as? Base40CallsignError, .tooLong(count: 10, max: 9))
+        }
+    }
+
+    // MARK: - Unicode case mapping must not smuggle characters past validation
+    //
+    // `String.uppercased()` performs full Unicode case mapping, which for
+    // some characters *expands* one character into several: "ß" -> "SS",
+    // "ﬁ" -> "FI". If `encode` uppercases before validating, a single
+    // character outside the M17 alphabet turns into two-or-more characters
+    // that pass validation, and the callsign that goes on the air is not
+    // the one the operator typed. Each of these must instead throw
+    // `.invalidCharacter` naming the *original* character.
+
+    func testEszettDoesNotExpandIntoTwoSCharacters() {
+        // "ß".uppercased() == "SS", which is 779 under this alphabet
+        // (verified independently: value('S')=19, so "SS" encodes to
+        // 19*40+19 = 779). Before the fix, encode("ß") silently returned
+        // 779 -- identical to encode("SS") -- instead of throwing.
+        let eszett = "\u{00DF}" // "ß"
+        XCTAssertThrowsError(try Base40Callsign.encode(eszett)) { error in
+            guard case Base40CallsignError.invalidCharacter(let ch) = error else {
+                return XCTFail("expected invalidCharacter, got \(error)")
+            }
+            XCTAssertEqual(ch, Character(eszett), "the error must name the character as typed, not an uppercased/expanded form")
+        }
+    }
+
+    func testFiLigatureDoesNotExpandIntoFAndI() {
+        // "ﬁ".uppercased() == "FI" (366 = value('F')=6, value('I')=9 ->
+        // 9*40+6 = 366). Before the fix this collided with encode("FI").
+        let fiLigature = "\u{FB01}" // "ﬁ"
+        XCTAssertThrowsError(try Base40Callsign.encode(fiLigature)) { error in
+            guard case Base40CallsignError.invalidCharacter(let ch) = error else {
+                return XCTFail("expected invalidCharacter, got \(error)")
+            }
+            XCTAssertEqual(ch, Character(fiLigature))
+        }
+    }
+
+    func testFfiLigatureExpandsToThreeCharactersAndMustStillThrow() {
+        // "ﬃ".uppercased() == "FFI" -- a single character expanding to
+        // *three*, the most aggressive case. Also two extra characters
+        // longer than the input, which the length check must not be
+        // fooled by either (see testTooLongCountIsPreExpansion below).
+        let ffiLigature = "\u{FB03}" // "ﬃ"
+        XCTAssertThrowsError(try Base40Callsign.encode(ffiLigature)) { error in
+            guard case Base40CallsignError.invalidCharacter(let ch) = error else {
+                return XCTFail("expected invalidCharacter, got \(error)")
+            }
+            XCTAssertEqual(ch, Character(ffiLigature))
+        }
+    }
+
+    func testApostropheNCharacterExpandsAndMustStillThrow() {
+        // U+0149 LATIN SMALL LETTER N PRECEDED BY APOSTROPHE uppercases to
+        // U+02BC (modifier letter apostrophe) + "N" -- an expansion where
+        // neither resulting character is even a plain ASCII letter.
+        let apostropheN = "\u{0149}" // "ŉ"
+        XCTAssertThrowsError(try Base40Callsign.encode(apostropheN)) { error in
+            guard case Base40CallsignError.invalidCharacter(let ch) = error else {
+                return XCTFail("expected invalidCharacter, got \(error)")
+            }
+            XCTAssertEqual(ch, Character(apostropheN))
+        }
+    }
+
+    func testNonExpandingNonASCIICharacterStillThrows() {
+        // A plain sanity check that ordinary (non-expanding) non-ASCII
+        // input is still rejected -- this already worked before the fix,
+        // and must keep working after it.
+        XCTAssertThrowsError(try Base40Callsign.encode("\u{03C9}")) { error in // "ω" (Greek small omega)
+            guard case Base40CallsignError.invalidCharacter = error else {
+                return XCTFail("expected invalidCharacter, got \(error)")
+            }
+        }
+    }
+
+    func testAsciiLowercaseLettersStillEncodeToTheirUppercaseValue() throws {
+        // The fix must not regress the intended, tested a-z case folding:
+        // only ASCII a-z gets the case-mapping treatment, and only ever
+        // one-character-for-one-character.
+        for lower in "abcdefghijklmnopqrstuvwxyz" {
+            let upper = Character(String(lower).uppercased())
+            XCTAssertEqual(
+                try Base40Callsign.encode(String(lower)),
+                try Base40Callsign.encode(String(upper)),
+                "'\(lower)' should encode the same as '\(upper)'"
+            )
+        }
+    }
+
+    func testTooLongCountIsPreExpansion() {
+        // A 10-character callsign containing an expanding character (each
+        // of which would balloon under naive uppercasing) must still be
+        // reported as having exactly 10 characters -- the count the
+        // operator typed -- not some larger post-expansion count.
+        let tenCharsWithLigature = "VK1ABCDEF\u{FB01}" // 9 valid + "ﬁ" = 10 chars
+        XCTAssertEqual(tenCharsWithLigature.count, 10)
+        XCTAssertThrowsError(try Base40Callsign.encode(tenCharsWithLigature)) { error in
             XCTAssertEqual(error as? Base40CallsignError, .tooLong(count: 10, max: 9))
         }
     }
