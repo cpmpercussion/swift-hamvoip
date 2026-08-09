@@ -1,0 +1,14 @@
+# PING — reflector to client keepalive.
+#
+# Source: "M17 Internet Protocol (IP) Networking", "Control Packets",
+# Table 31 "Bytes of PING packet".
+#
+#   bytes 0-3   50 49 4E 47   Magic, ASCII "PING"
+#   bytes 4-9   00 00 00 27 E8 ED
+#                             6-byte 'From' callsign "including module in last
+#                             character (e.g. "A1BCD D")" (Table 31). Here the
+#                             encoded text is "M17 A" — reflector "M17",
+#                             space, module 'A' — base-40 value 0x27E8ED.
+#
+# Total 10 bytes: unlike ACKN/NACK, PING does carry the address field.
+50494E47 00000027E8ED

@@ -1,0 +1,17 @@
+# M17 stream packet whose TYPE field flags encryption (FR-2.5).
+#
+# Identical to reflector-stream.hex except for the TYPE field. Present so the
+# tests can prove an encrypted stream parses and is reported UNPLAYABLE — this
+# library never decrypts, and exposes no key material or cipher selection.
+#
+#   bytes 18-19  00 15         TYPE, 16 bits (M17 spec Part I Table 3.2):
+#                                bit  0    = 1  stream mode
+#                                bits 1-2  = 10 voice
+#                                bits 3-4  = 10 AES (Part I Table 3.5)
+#                                bits 5-6  = 00 128-bit key (Table 3.6)
+#                                bits 7-10 = 0  CAN
+#                                bit  11   = 0  not signed
+#                              0x0015 = 0b0000_0000_0001_0101.
+#
+# Every other byte is as documented in reflector-stream.hex. Total 56 bytes.
+4D313720 1234 FFFFFFFFFFFF 0000009FDD51 0015 0000000000000000000000000000 ABCD 0001 000102030405060708090A0B0C0D0E0F BEEF

@@ -1,0 +1,33 @@
+# M17 stream packet — IP framing.
+#
+# Source: "M17 Internet Protocol (IP) Networking", section "Standard IP
+# Framing", Table 27 "Internet frame fields". LSF sub-fields: M17 spec Part I
+# v2.0.4 Table 3.1 (LSF contents) and Table 3.2 (Stream LSF TYPE layout).
+#
+#   bytes 0-3    4D 31 37 20   MAGIC — "Magic bytes 0x4d313720 ("M17 ")".
+#                              Note the trailing SPACE, 0x20.
+#   bytes 4-5    12 34         StreamID (SID), 16 bits, big endian.
+#   bytes 6-35   LICH, 240 bits — "the meaningful contents of a LICH frame
+#                (dst, src, streamtype, META field, CRC16)", i.e. the whole
+#                30-byte LSF of Part I Table 3.1:
+#     bytes 6-11   FF FF FF FF FF FF   DST, 48 bits. All-ones = BROADCAST
+#                                      (Part I Table A.2).
+#     bytes 12-17  00 00 00 9F DD 51   SRC, 48 bits. "AB1CD" (Part I §A.2).
+#     bytes 18-19  00 05               TYPE, 16 bits (Part I Table 3.2):
+#                                        bit  0    = 1  stream mode (Table 3.3)
+#                                        bits 1-2  = 10 voice        (Table 3.4)
+#                                        bits 3-4  = 00 no encryption (Table 3.5)
+#                                        bits 5-6  = 00 subtype
+#                                        bits 7-10 = 0  CAN (§3.2.3)
+#                                        bit  11   = 0  not signed (§3.2.5)
+#     bytes 20-33  00 x14              META, 112 bits (Part I §3.1.3).
+#     bytes 34-35  AB CD               LSF CRC, 16 bits (Part I §3.1.4).
+#                                      Arbitrary here — M17-3 carries it
+#                                      through without verifying; M17-4 owns CRC.
+#   bytes 36-37  00 01         FN, 16 bits. Bit 15 clear, so not the last frame
+#                              ("the last frame indicator at (FN & 0x8000)").
+#   bytes 38-53  16 bytes      Payload, 128 bits. Opaque to M17-3.
+#   bytes 54-55  BE EF         CRC16 "for the entire packet". Not verified here.
+#
+# Total 4 + 2 + 30 + 2 + 16 + 2 = 56 bytes.
+4D313720 1234 FFFFFFFFFFFF 0000009FDD51 0005 0000000000000000000000000000 ABCD 0001 000102030405060708090A0B0C0D0E0F BEEF

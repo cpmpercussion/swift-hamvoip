@@ -1,0 +1,11 @@
+# A whole inbound reflector session, one datagram per line, in arrival order.
+# Injected into MockTransport to drive M17ReflectorClient end to end.
+#
+# Source: "M17 Internet Protocol (IP) Networking", "Control Packets"
+# (Tables 29, 31 and 33). Per-field breakdowns are in the single-packet
+# fixtures reflector-ackn.hex, reflector-ping.hex and reflector-disc.hex.
+
+41434B4E                        # 1. ACKN  — reflector accepts the CONN
+50494E47 00000027E8ED           # 2. PING  — keepalive from "M17 A"
+50494E47 00000027E8ED           # 3. PING  — keepalive from "M17 A"
+44495343 00000027E8ED           # 4. DISC  — reflector drops the link

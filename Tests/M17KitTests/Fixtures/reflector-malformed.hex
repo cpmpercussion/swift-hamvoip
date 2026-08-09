@@ -1,0 +1,15 @@
+# Datagrams that must all be REJECTED, one per line. None of these may ever be
+# misparsed into a valid packet or move the connection state machine.
+#
+# Layouts checked against "M17 Internet Protocol (IP) Networking",
+# "Control Packets" (Tables 28-33) and "Standard IP Framing" (Table 27).
+
+434F                            # 1. two bytes — shorter than the 4-byte magic
+584D4954                        # 2. "XMIT" — a magic no M17 packet defines
+434F4E4E 0000009FDD             # 3. CONN truncated to 9 bytes (needs 11)
+434F4E4E 0000009FDD51 41 00     # 4. CONN with a trailing byte (12, needs 11)
+434F4E4E 0000009FDD51 61        # 5. CONN with module 0x61 = 'a', not A-Z
+41434B4E 0000009FDD51           # 6. ACKN with a callsign field (10, needs 4)
+50494E47                        # 7. PING with no callsign field (4, needs 10)
+44495343 0000009FDD51 41        # 8. DISC of 11 bytes (only 4 and 10 are legal)
+4D313720 1234 FFFFFFFFFFFF      # 9. "M17 " stream truncated to 12 (needs 56)

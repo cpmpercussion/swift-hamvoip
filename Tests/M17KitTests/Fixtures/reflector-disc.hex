@@ -1,0 +1,11 @@
+# DISC — long form, sent by either end "to force a disconnection".
+#
+# Source: "M17 Internet Protocol (IP) Networking", "Control Packets",
+# Table 33 "Bytes of DISC packet".
+#
+#   bytes 0-3   44 49 53 43   Magic, ASCII "DISC"
+#   bytes 4-9   00 00 00 9F DD 51
+#                             6-byte 'From' callsign, "AB1CD" (Part I §A.2).
+#
+# Total 10 bytes.
+44495343 0000009FDD51

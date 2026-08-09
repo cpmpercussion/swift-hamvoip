@@ -1,0 +1,10 @@
+# ACKN — reflector to client, "acknowledge connection".
+#
+# Source: "M17 Internet Protocol (IP) Networking", "Control Packets",
+# Table 29 "Bytes of ACKN packet".
+#
+#   bytes 0-3   41 43 4B 4E   Magic, ASCII "ACKN"
+#
+# Table 29 lists bytes 0-3 and nothing else: ACKN carries NO callsign field.
+# Total 4 bytes.
+41434B4E

@@ -1,0 +1,19 @@
+# CONN — client to reflector.
+#
+# Source: M17 Protocol Specification, "M17 Internet Protocol (IP) Networking",
+# section "Control Packets", Table 28 "Bytes of a CONN packet".
+# Published at m17-protocol-specification.readthedocs.io/en/latest/ip_encapsulation.html;
+# read from the archived copy at
+# web.archive.org/web/20251008220102/https://m17-protocol-specification.readthedocs.io/en/latest/ip_encapsulation.html
+# Address encoding: M17 spec Part I v2.0.4, Appendix A (spec.m17project.org/files/M17_spec.pdf).
+#
+#   bytes 0-3   43 4F 4E 4E   Magic, ASCII "CONN" (Table 28)
+#   bytes 4-9   00 00 00 9F DD 51
+#                             6-byte 'From' callsign, base-40, big endian
+#                             (Part I §A.2). "AB1CD" is the spec's own worked
+#                             example: 0x9FDD51.
+#   byte  10    41            Module to connect to — single ASCII byte A-Z
+#                             (Table 28). 0x41 = 'A'.
+#
+# Total 11 bytes.
+434F4E4E 0000009FDD51 41

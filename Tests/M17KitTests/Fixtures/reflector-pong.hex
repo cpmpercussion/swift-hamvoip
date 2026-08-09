@@ -1,0 +1,12 @@
+# PONG — client to reflector keepalive response.
+#
+# Source: "M17 Internet Protocol (IP) Networking", "Control Packets",
+# Table 32 "Bytes of PONG packet". "Upon receiv[i]ng a PING from a reflector,
+# the client replies with a PONG."
+#
+#   bytes 0-3   50 4F 4E 47   Magic, ASCII "PONG"
+#   bytes 4-9   00 00 00 9F DD 51
+#                             6-byte 'From' callsign, "AB1CD" (Part I §A.2).
+#
+# Total 10 bytes.
+504F4E47 0000009FDD51

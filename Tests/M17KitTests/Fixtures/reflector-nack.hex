@@ -1,0 +1,9 @@
+# NACK — reflector to client, "deny connection".
+#
+# Source: "M17 Internet Protocol (IP) Networking", "Control Packets",
+# Table 30 "Bytes of NACK packet".
+#
+#   bytes 0-3   4E 41 43 4B   Magic, ASCII "NACK"
+#
+# Like ACKN, Table 30 lists bytes 0-3 only. Total 4 bytes.
+4E41434B

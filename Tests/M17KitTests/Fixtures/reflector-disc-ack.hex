@@ -1,0 +1,9 @@
+# DISC — bare form, the acknowledgement of a DISC.
+#
+# Source: "M17 Internet Protocol (IP) Networking", "Control Packets", DISC:
+# "Acknowledged with 4-byte packet "DISC" (without the callsign field)".
+#
+#   bytes 0-3   44 49 53 43   Magic, ASCII "DISC"
+#
+# Total 4 bytes. DISC is the only magic with two legal lengths (4 and 10).
+44495343
