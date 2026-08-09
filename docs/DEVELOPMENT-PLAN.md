@@ -140,6 +140,20 @@ and retries internally, so an unreachable node makes `send` hang rather than
 throw. **A connect timeout must be implemented one layer up, in `IAX2Call`
 or `IAX2Client` — the transport will not surface it.**
 
+Two lifecycle bugs found in review and fixed: `send` ignored task cancellation
+while awaiting readiness (leaking a task and a continuation per attempt, which
+booby-trapped exactly the connect-timeout pattern above), and `incoming` never
+finished when a transport was dropped without `close()`, contradicting the
+protocol's documented contract and leaking a live UDP connection.
+
+⚠️ **Known remaining hazard.** The `connection.send(...)` *completion*
+continuation — as distinct from the readiness wait — is still not
+cancellation-aware. It is safe today because only the connect phase is raced
+against a deadline. **If any caller ever races an in-flight `send` against a
+timeout, fix this first**; doing so needs double-resume protection, since the
+real `NWConnection` completion can fire after a cancellation-triggered early
+resume.
+
 ### RC-2 — G.711 µ-law codec
 **Depends on:** nothing. **Spec:** ITU-T G.711 (µ-law).
 **Files:** `Sources/RadioCore/Codecs/G711MuLawCodec.swift`,
