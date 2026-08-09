@@ -1,0 +1,35 @@
+# Inbound datagrams of a successful outbound call, hand-built from RFC 5456
+# §9.6 flow (a) in docs/reference/RFC5456-NOTES.md §12:
+#
+#   NEW  ==>            (ours; not in this file)
+#        <== ACCEPT
+#   ACK  ==>
+#        <== RINGING     (Control 0x03, §6.3.3)
+#   ACK  ==>
+#        <== ANSWER      (Control 0x04, §6.3.4)
+#   ACK  ==>
+#        <== HANGUP      (IAX 0x05, §6.2.5 — NOT Control 0x01)
+#   ACK  ==>
+#
+# Our source call number is 1 (the first the allocator hands out); the peer's
+# is 0x0042. Every frame here is therefore source 0x0042, destination 0x0001,
+# with F = 1 set in the top bit of the first word (§8.1.1).
+#
+# The peer's ISeqno stays at 1 throughout: our only non-exempt full frame is
+# the NEW (OSeqno 0), and ACKs "do not change the message count" (§7), so 1 is
+# permanently the peer's "next expected" (§8.1.1).
+
+# ACCEPT, ts 100, OSeq 0, ISeq 1, type 0x06 IAX, subclass 0x07 ACCEPT.
+# Payload: FORMAT IE (0x09), 4 octets, G.711 mu-law = 0x00000004 (§8.6.8, §8.7).
+8042 0001 00000064 00 01 06 07  09 04 00000004
+
+# RINGING, ts 200, OSeq 1, ISeq 1, type 0x04 Control, subclass 0x03 (§8.3).
+8042 0001 000000c8 01 01 04 03
+
+# ANSWER, ts 300, OSeq 2, ISeq 1, type 0x04 Control, subclass 0x04 (§8.3).
+8042 0001 0000012c 02 01 04 04
+
+# HANGUP, ts 400, OSeq 3, ISeq 1, type 0x06 IAX, subclass 0x05 (§8.4, §6.2.5).
+# Payload: CAUSE (0x16) "Bye", CAUSECODE (0x2a) 16 = normal call clearing
+# (§8.6.21, §8.6.33).
+8042 0001 00000190 03 01 06 05  16 03 427965  2a 01 10

@@ -1,0 +1,12 @@
+# A frame addressed to a call number we do not have, hand-built from RFC 5456
+# §6.9.2: "An INVAL is sent as a response to a received message that is not
+# valid. This occurs when an IAX peer sends a message on a call after the
+# remote peer has hung up its end."
+#
+# Our source call number is 1; this frame is addressed to destination call
+# number 9, which is nobody. The expected answer is an INVAL (§8.4 subclass
+# 0x0a) mirroring the pair — source 9, destination 0x0042 — and echoing the
+# time-stamp so the peer can match it to the frame that provoked it.
+
+# PING, source 0x0042, destination 0x0009, ts 100, OSeq 0, ISeq 1, IAX/PING.
+8042 0009 00000064 00 01 06 02

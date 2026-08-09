@@ -1,0 +1,27 @@
+# Inbound datagrams of an authenticated outbound call, hand-built from RFC 5456
+# §6.2 / §9.6 flow (b) in docs/reference/RFC5456-NOTES.md §12:
+#
+#   NEW     ==>          (ours; not in this file)
+#           <== AUTHREQ  USERNAME + AUTHMETHODS + CHALLENGE (§6.2.7)
+#   AUTHREP ==>          MD5 RESULT (§8.6.15)
+#           <== ACCEPT   FORMAT
+#   ACK     ==>
+#           <== ANSWER
+#   ACK     ==>
+#
+# Our source call number is 1, the peer's 0x0042.
+
+# AUTHREQ, ts 50, OSeq 0, ISeq 1, type 0x06 IAX, subclass 0x08 (§8.4).
+# Payload, in order:
+#   USERNAME     (0x06) "n0call"                    §8.6.6
+#   AUTHMETHODS  (0x0e) 0x0002 = MD5                §8.6.13
+#   CHALLENGE    (0x0f) "1234567890"                §8.6.14
+8042 0001 00000032 00 01 06 08  06 06 6e30 6361 6c6c  0e 02 0002  0f 0a 31323334353637383930
+
+# ACCEPT, ts 100, OSeq 1, ISeq 2, type 0x06 IAX, subclass 0x07.
+# ISeq is 2 because our AUTHREP carried OSeqno 1, so the peer's next expected
+# is 2 (§8.1.1). Payload: FORMAT = G.711 mu-law.
+8042 0001 00000064 01 02 06 07  09 04 00000004
+
+# ANSWER, ts 200, OSeq 2, ISeq 2, type 0x04 Control, subclass 0x04.
+8042 0001 000000c8 02 02 04 04

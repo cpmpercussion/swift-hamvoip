@@ -1,0 +1,12 @@
+# A rejected outbound call, hand-built from RFC 5456 §6.2.4 / notes §12 flow (c):
+#
+#   NEW ==>              (ours; not in this file)
+#       <== REJECT       CAUSE + CAUSECODE
+#   ACK ==>              REQUIRED: "REJECT messages require an explicit ACK."
+#
+# Our source call number is 1, the peer's 0x0042.
+
+# REJECT, ts 100, OSeq 0, ISeq 1, type 0x06 IAX, subclass 0x06 (§8.4).
+# Payload: CAUSE (0x16) "No route to destination" (23 octets = 0x17),
+#          CAUSECODE (0x2a) 3 = "No route to destination" (§8.6.33).
+8042 0001 00000064 00 01 06 06  16 17 4e6f20726f75746520746f2064657374696e6174696f6e  2a 01 03
