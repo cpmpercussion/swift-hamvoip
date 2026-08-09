@@ -751,14 +751,27 @@ public actor IAX2Call {
             throw IAX2CallError.malformedInformationElements(String(describing: error))
         }
 
+        // Transition and arm the deadline BEFORE writing the NEW, not after.
+        //
+        // `channel.send` is an await, and an actor is reentrant across an await,
+        // so with `readsTransport: true` the read loop can deliver the peer's
+        // ACCEPT while we are still suspended here. If the FSM were still
+        // `.idle` at that moment, ACCEPT would be an illegal transition and the
+        // call would be destroyed as a protocol error — a fast node answering
+        // before our own send resumes would look like a protocol fault.
+        //
+        // Committing the state first means the only lie is a sub-millisecond
+        // window where we claim to have sent a NEW that is still in flight, and
+        // the failure path below tears the call down anyway. See plan rule 10.
+        transition(to: .newSent)
+        armConnectDeadline()
+
         do {
             try await channel.send(.new, timestamp: 0, payload: payload)
         } catch {
             await terminate(.channelFailed(Self.channelError(error)))
             throw error
         }
-        transition(to: .newSent)
-        armConnectDeadline()
     }
 
     /// Suspends until the call reaches `up`.

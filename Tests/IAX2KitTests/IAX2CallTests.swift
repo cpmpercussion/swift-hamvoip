@@ -1085,4 +1085,77 @@ final class IAX2CallTests: XCTestCase {
 
         await tearDown(harness)
     }
+
+    // MARK: - Actor reentrancy (plan rule 10)
+
+    /// A peer that answers before our own `send` resumes must not be treated as
+    /// a protocol fault.
+    ///
+    /// `start()` awaits `channel.send(.new…)`, and an actor is reentrant across
+    /// an await, so with the default `readsTransport: true` the read loop can
+    /// deliver the ACCEPT while `start()` is still suspended. The transition to
+    /// `.newSent` used to happen *after* that await, so the reply arrived at an
+    /// FSM still in `.idle`, where ACCEPT is illegal — and the call was
+    /// destroyed as a protocol error rather than connecting.
+    ///
+    /// `ReplyDuringSendTransport` makes that interleaving deterministic; against
+    /// `MockTransport` it is a narrow race that ordinary tests never hit.
+    func testAcceptArrivingDuringTheNewSendIsNotAProtocolError() async throws {
+        let session = try FixtureLoader.datagrams("call-basic-session.hex", in: Bundle.module)
+        // ACCEPT, RINGING, ANSWER — everything up to `up`, all delivered inside
+        // the NEW's own send. The HANGUP is deliberately left out.
+        let transport = CallReplyDuringSendTransport(reply: Array(session.prefix(3)))
+        let call = try await IAX2Call.outbound(
+            allocator: IAX2CallNumberAllocator(),
+            request: IAX2CallRequest(calledNumber: "55553", username: "n0call"),
+            transport: transport,
+            clock: ManualTestClock())
+
+        try await call.start()
+        await waitFor(call, state: .up)
+
+        let state = await call.state
+        XCTAssertEqual(state, .up, "the peer answered during our send and the call still came up")
+        let termination = await call.termination
+        XCTAssertNil(termination, "the call must not have been torn down as a protocol error")
+
+        await call.close()
+        await transport.close()
+    }
+}
+
+/// Delivers canned datagrams to `incoming` from *inside* `send`, then yields so
+/// the receive loop processes them before `send` returns. See plan rule 10.
+private final class CallReplyDuringSendTransport: DatagramTransport, @unchecked Sendable {
+    let incoming: AsyncStream<Data>
+    private let continuation: AsyncStream<Data>.Continuation
+    private let reply: [Data]
+    private let lock = NSLock()
+    private var sentDatagrams: [Data] = []
+    private var hasReplied = false
+
+    var sent: [Data] { lock.withLock { sentDatagrams } }
+
+    init(reply: [Data]) {
+        self.reply = reply
+        var escaped: AsyncStream<Data>.Continuation!
+        incoming = AsyncStream<Data>(bufferingPolicy: .unbounded) { escaped = $0 }
+        continuation = escaped
+    }
+
+    func send(_ datagram: Data) async throws {
+        let shouldReply: Bool = lock.withLock {
+            sentDatagrams.append(datagram)
+            guard !hasReplied else { return false }
+            hasReplied = true
+            return true
+        }
+        guard shouldReply else { return }
+        for datagram in reply { continuation.yield(datagram) }
+        for _ in 0..<500 { await Task.yield() }
+    }
+
+    func close() async {
+        continuation.finish()
+    }
 }
