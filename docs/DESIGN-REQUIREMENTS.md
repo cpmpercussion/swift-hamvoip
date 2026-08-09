@@ -1,6 +1,8 @@
-# swift-hamvoip — Draft Design Requirements
+# swift-hamvoip — Design Requirements
 
-**Status:** Draft v0.1
+**Status:** Adopted. Phases 1–3 delivered in v0.1; see `CHANGELOG.md` for what
+that release does and does not contain, and `docs/DEVELOPMENT-PLAN.md` for
+what remains.
 **Scope:** Swift protocol libraries for unencumbered amateur radio VoIP modes, and a
 SwiftUI client built on them. Library and app ship as separate repositories.
 
@@ -162,13 +164,29 @@ failure mode for software clients. These requirements are not negotiable.
   There is no published specification, and LP-2 forbids the implementations
   that document it. **This now gates all of §4.3** — resolving OQ-1 moved the
   block here rather than removing it.
-- **OQ-2.** Codec2 as a dynamic XCFramework — confirm the build works for
-  iOS device, iOS simulator and macOS arm64 slices before committing to M17.
-- **OQ-3.** Application name and bundle identifier. Library naming is settled
-  (plain, descriptive, ecosystem-conventional); the app name is still open and
-  should not derive from any existing product's branding.
-- **OQ-4.** Whether the SwiftUI app lives in a second repository (recommended)
-  or as an additional target here.
+- **OQ-2.** ~~Codec2 as a dynamic XCFramework — do all three slices build?~~
+  **Resolved: yes.** iOS device, iOS simulator and macOS arm64 all build
+  dynamic and sign cleanly. See `docs/reference/CODEC2-XCFRAMEWORK.md`.
+- **OQ-3.** ~~Application name and bundle identifier.~~ **Resolved:
+  "Currawong"**, bundle identifier `au.charlesmartin.currawong`. Library
+  naming is unaffected — the package stays `swift-hamvoip`.
+- **OQ-4.** ~~Whether the SwiftUI app lives in a second repository.~~
+  **Resolved: yes**, a separate `currawong` repository depending on this one
+  via SPM.
+- **OQ-5.** How is `MD5_RESULT` textually encoded on the wire? §8.6.15 does
+  not say, and LP-2 forbids reading an implementation to find out. Ships as
+  lowercase 32-character hex; **must be settled against a live node.**
+- **OQ-6.** LGPL-2.1 relinking versus App Store code signing, for Codec2. A
+  licensing judgement, not a technical blocker. Gates App Store submission of
+  M17.
+- **OQ-7.** Is the M17 IP stream frame 56 bytes or 54? Implemented as 56 per
+  the specification's stated 240-bit LICH; 54 is widely quoted. Cannot be
+  settled from the document. **Gates M17 stream mode.**
+- **OQ-8.** The M17 reflector specification is offline. Should the repository
+  keep a local copy of the archived chapter, licence permitting?
+
+The authoritative record, with the full reasoning behind each resolution, is
+the open-questions table at the end of `docs/DEVELOPMENT-PLAN.md`.
 
 ## 10. Delivery sequence
 
