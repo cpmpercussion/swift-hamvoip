@@ -149,6 +149,95 @@ final class AudioLevellerTests: XCTestCase {
         }
 
         XCTAssertLessThan(leveller.currentGain, 1.0, "expected a full-scale input to end up attenuated")
+
+        // "Gain went down" is satisfied by any gain floor at all, including one
+        // too high to reach the target. The point of the leveller is that the
+        // operator hears a consistent level, so assert the level: a full-scale
+        // sine is -3.01 dBFS RMS, which needs -15 dB of gain to land on target.
+        var settled = loud.next(frameSize)
+        leveller.process(&settled)
+        XCTAssertEqual(
+            measureRMSdBFS(settled),
+            leveller.targetRMSdBFS,
+            accuracy: 1.0,
+            "a full-scale input must actually reach the target level, not merely be turned down a bit"
+        )
+    }
+
+    /// The real scenario RC-6 exists for: a hot AllStar node and a quiet M17
+    /// reflector in the same session. Every input level the leveller can
+    /// legitimately reach the target from must actually converge on it.
+    func testConvergesToTargetAcrossTheWholeInputRange() {
+        // The floor limits attenuation, so the hot end of this sweep is what
+        // the gain floor has to accommodate: 0 dBFS RMS needs exactly -18 dB.
+        for inputDBFS: Float in [-30, -24, -18, -12, -6, -3] {
+            var leveller = AudioLeveller()
+            var generator = SineGenerator(
+                frequency: 440,
+                sampleRate: sampleRate,
+                amplitude: sineAmplitude(forRMSdBFS: inputDBFS)
+            )
+            var lastFrame: [Int16] = []
+            for _ in 0..<200 { // 4 s: 80 attack / 8 release time constants
+                var frame = generator.next(frameSize)
+                leveller.process(&frame)
+                lastFrame = frame
+            }
+            XCTAssertEqual(
+                measureRMSdBFS(lastFrame),
+                leveller.targetRMSdBFS,
+                accuracy: 1.0,
+                "a \(inputDBFS) dBFS input did not converge to the target"
+            )
+        }
+    }
+
+    /// The hottest input that exists: a full-scale square wave, 0 dBFS RMS,
+    /// needing the full -18 dB. If the gain floor cannot supply it, nothing
+    /// this loud can ever be levelled.
+    func testFullScaleSquareWaveReachesTarget() {
+        var leveller = AudioLeveller()
+        var lastFrame: [Int16] = []
+        var phase = 0
+        for _ in 0..<200 {
+            var frame = [Int16](repeating: 0, count: frameSize)
+            for i in 0..<frameSize {
+                frame[i] = (phase / 4).isMultiple(of: 2) ? Int16.max : -Int16.max
+                phase += 1
+            }
+            XCTAssertEqual(measureRMSdBFS(frame), 0, accuracy: 0.01, "input should be 0 dBFS RMS")
+            leveller.process(&frame)
+            lastFrame = frame
+        }
+        XCTAssertEqual(
+            measureRMSdBFS(lastFrame),
+            leveller.targetRMSdBFS,
+            accuracy: 1.0,
+            "a 0 dBFS RMS input must be attenuated all the way to the target"
+        )
+        XCTAssertGreaterThanOrEqual(
+            leveller.currentGainDB,
+            leveller.minGainDB - 0.0001,
+            "gain must stay at or above the floor"
+        )
+    }
+
+    func testGainNeverFallsBelowTheFloor() {
+        var leveller = AudioLeveller()
+        // Full-scale square wave: the loudest possible input, asking for the
+        // most attenuation the leveller will ever be asked for.
+        for n in 0..<500 {
+            var frame = [Int16](repeating: 0, count: frameSize)
+            for i in 0..<frameSize {
+                frame[i] = ((n * frameSize + i) / 4).isMultiple(of: 2) ? Int16.max : -Int16.max
+            }
+            leveller.process(&frame)
+            XCTAssertGreaterThanOrEqual(
+                leveller.currentGainDB,
+                leveller.minGainDB - 0.0001,
+                "gain fell below the -\(-leveller.minGainDB) dB floor"
+            )
+        }
     }
 
     func testGainNeverExceedsCeilingAfterLongQuietPassage() {

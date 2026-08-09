@@ -50,13 +50,22 @@ public enum JitterOutput: Sendable, Equatable {
 /// - a queued frame at or before the expected timestamp is emitted (`.frame`)
 /// - a queued frame *after* the expected timestamp means the expected slot is
 ///   missing, so the slot is concealed (`.concealment`) and the grid advances
+/// - a queued frame so far after the expected timestamp that the gap is a
+///   stream discontinuity rather than packet loss un-primes the buffer, which
+///   re-anchors on the head (see `discontinuityMillis`)
 /// - nothing queued at all is starvation: `.silence`, and the buffer un-primes
 ///   so it re-primes (and re-anchors the grid) on the next talk spurt
 ///
-/// Frames older than the expected timestamp are late and dropped. Frames that
-/// duplicate a timestamp already queued are dropped, keeping the first copy.
-/// Out-of-order frames still inside the buffer window are reordered by
-/// timestamp on insertion.
+/// Un-priming always discards the playout grid entirely, so the next spurt is
+/// anchored on whatever arrives — including a stream whose clock restarts at a
+/// *lower* timestamp, as a second call on a reused buffer does. ``reset()``
+/// does the same thing on demand and additionally drops queued audio and the
+/// arrival estimate.
+///
+/// While primed, frames older than the expected timestamp are late and
+/// dropped. Frames that duplicate a timestamp already queued are dropped,
+/// keeping the first copy. Out-of-order frames still inside the buffer window
+/// are reordered by timestamp on insertion.
 ///
 /// ## Adaptive depth (RC-4)
 ///
@@ -99,6 +108,29 @@ public struct JitterBuffer: Sendable {
     /// Smoothing factor of the deviation EWMA.
     private static let smoothing = 0.125
 
+    /// A timestamp discontinuity of more than this is not packet loss.
+    ///
+    /// Two places need to tell "the stream skipped a bit" apart from "this is a
+    /// different stream position altogether", and both want the same answer:
+    ///
+    /// - `pop()` conceals missing slots one at a time, and `.concealment` means
+    ///   the caller repeats or fades the last frame. That is convincing for a
+    ///   frame or two and an obvious stuck buzz much beyond a fifth of a
+    ///   second, so a gap this large is better served by re-anchoring — brief
+    ///   silence, then real audio — than by grinding through it. One
+    ///   mis-expanded 16-bit IAX2 mini-frame timestamp (IAX-6 re-expands them
+    ///   against the call's 32-bit clock; getting it wrong lands a frame
+    ///   +65536 ms ahead) otherwise yields 3273 concealments — 65 s of stuck
+    ///   audio for one bad packet.
+    /// - `updateEstimator` must not mistake a stream that restarted at a lower
+    ///   timestamp for an ordinary reordered arrival.
+    ///
+    /// 200 ms is the AU-3 ceiling on buffer depth and the default talk-spurt
+    /// gap, so by this type's own reckoning nothing legitimate sits further
+    /// than that from the playout point. Deliberately not configurable: it is a
+    /// safety bound on how bad the output can get, not a tuning knob.
+    private static let discontinuityMillis: Double = 200
+
     // MARK: Derived configuration (milliseconds, to keep the arithmetic exact)
 
     private let frameMillis: Double
@@ -106,6 +138,11 @@ public struct JitterBuffer: Sendable {
     private let minDepthMillis: Double
     private let maxDepthMillis: Double
     private let talkSpurtGapMillis: Double
+    private let initialTargetMillis: Double
+    /// `discontinuityMillis`, but never less than one slot, so a single lost
+    /// frame is always concealed rather than treated as a discontinuity even
+    /// for frame durations longer than 200 ms.
+    private let discontinuityGap: UInt32
 
     // MARK: State
 
@@ -155,14 +192,48 @@ public struct JitterBuffer: Sendable {
         let frameMillis = Self.milliseconds(frameDuration)
         precondition(frameMillis >= 1, "frameDuration must be at least 1 ms")
         self.frameMillis = frameMillis
-        self.frameStep = UInt32(frameMillis.rounded())
+        let frameStep = UInt32(frameMillis.rounded())
+        self.frameStep = frameStep
         self.minDepthMillis = Self.milliseconds(minDepth)
         self.maxDepthMillis = Self.milliseconds(maxDepth)
         self.talkSpurtGapMillis = Self.milliseconds(talkSpurtGap)
-        self.currentTargetMillis = min(
+        self.discontinuityGap = max(UInt32(Self.discontinuityMillis), frameStep)
+        let initialTargetMillis = min(
             max(Self.milliseconds(targetDepth), Self.milliseconds(minDepth)),
             Self.milliseconds(maxDepth)
         )
+        self.initialTargetMillis = initialTargetMillis
+        self.currentTargetMillis = initialTargetMillis
+    }
+
+    // MARK: Reset
+
+    /// Return the buffer to its just-constructed state, keeping configuration.
+    ///
+    /// Call this between streams — a new call on a reused buffer (IAX-8), or a
+    /// re-established one. A new stream's timestamp clock has no relation to
+    /// the old stream's and routinely starts *lower*, and its arrival times
+    /// come from a fresh path, so carrying either across would drop the new
+    /// call's audio as late and freeze the adaptation estimator. Queued audio
+    /// from the old stream is discarded: it belongs to a call that is over.
+    public mutating func reset() {
+        queue.removeAll(keepingCapacity: true)
+        unprime()
+        currentTargetMillis = initialTargetMillis
+        deviationMillis = 0
+        lastArrivalMillis = nil
+        lastArrivalTimestamp = nil
+        silenceRunMillis = 0
+    }
+
+    /// Discard the playout grid. The buffer re-primes and re-anchors on
+    /// whatever frame is at the head once `currentTargetMillis` is queued
+    /// again. Clearing `nextExpected` is the load-bearing half: while it is
+    /// set, `enqueue` rejects everything below it as late, which would keep a
+    /// dead stream's grid deafening the buffer to the next one.
+    private mutating func unprime() {
+        primed = false
+        nextExpected = nil
     }
 
     // MARK: Read-only state
@@ -245,8 +316,18 @@ public struct JitterBuffer: Sendable {
             return
         }
         // Out-of-order arrival: no usable sample, and the reference stays on
-        // the newest timestamp seen.
-        guard timestamp > previousTimestamp else { return }
+        // the newest timestamp seen — unless the timestamp is so far behind
+        // that this is a different stream (a second call on a reused buffer,
+        // whose clock starts over). Re-seed there, or the reference stays
+        // pinned to the dead stream's newest timestamp and the estimator never
+        // takes another sample for the life of the buffer.
+        guard timestamp > previousTimestamp else {
+            if previousTimestamp - timestamp > discontinuityGap {
+                lastArrivalMillis = arrivedAtMillis
+                lastArrivalTimestamp = timestamp
+            }
+            return
+        }
 
         let transit = (arrivedAtMillis - previousArrival) - Double(timestamp - previousTimestamp)
         deviationMillis += Self.smoothing * (abs(transit) - deviationMillis)
@@ -275,7 +356,16 @@ public struct JitterBuffer: Sendable {
 
         guard let head = queue.first else {
             // Starved: fall back to priming for the next talk spurt.
-            primed = false
+            unprime()
+            return emitSilence()
+        }
+
+        if head.timestamp > expected, head.timestamp - expected > discontinuityGap {
+            // Not loss to conceal — the head is somewhere else entirely (a
+            // corrupt or mis-expanded timestamp, or a stream that jumped).
+            // Same recovery as starvation: drop the grid and re-anchor on
+            // whatever the head turns out to be once we re-prime.
+            unprime()
             return emitSilence()
         }
 

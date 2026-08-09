@@ -28,9 +28,10 @@ public struct AudioLeveller: Sendable {
     /// Hard ceiling on applied gain, in dB. Prevents a very quiet floor from
     /// being amplified into a howl.
     public let maxGainDB: Float
-    /// Hard floor on applied gain, in dB (negative = attenuation). Prevents
-    /// a hot input from merely being "less amplified" — it must actually be
-    /// turned down.
+    /// Hard floor on applied gain, in dB (negative = attenuation). Bounds how
+    /// far a runaway measurement can attenuate; it must never be the reason a
+    /// real input fails to reach the target. See `init` for the derivation of
+    /// the default.
     public let minGainDB: Float
 
     /// One-pole smoothing coefficient for rising gain error correction
@@ -64,9 +65,21 @@ public struct AudioLeveller: Sendable {
     ///     input being brought up toward target). Default 0.5 s (500 ms) —
     ///     deliberately slow so gain doesn't pump during ordinary syllable
     ///     gaps, only easing up during genuinely quiet passages.
-    ///   - maxGainDB: Ceiling on applied gain. Default +18 dB.
+    ///   - maxGainDB: Ceiling on applied gain. Default +18 dB — a deliberate
+    ///     limit that stops a near-silent source being amplified into hiss and
+    ///     howl, so the leveller genuinely cannot reach the target from below
+    ///     about -36 dBFS. That is the intended behaviour.
     ///   - minGainDB: Floor on applied gain (attenuation limit for hot
-    ///     sources). Default -12 dB.
+    ///     sources). Default -24 dB. Unlike the ceiling, this floor must not
+    ///     bite in normal use: the loudest input that exists is 0 dBFS RMS (a
+    ///     full-scale square wave), which needs exactly `targetRMSdBFS` =
+    ///     -18 dB of attenuation to land on target, and a hot AllStar node
+    ///     into a quiet M17 reflector is the everyday case, not a pathological
+    ///     one. -24 dB clears that worst case with 6 dB to spare while still
+    ///     bounding attenuation, so a wild RMS measurement can never fade the
+    ///     audio away to nothing. (The previous -12 dB floor pinned anything
+    ///     hotter than -6 dBFS RMS short of the target: a full-scale sine came
+    ///     out at -15 dBFS instead of -18.)
     ///   - noiseFloorRMSdBFS: Frames at or below this RMS are passed through
     ///     with the current gain held (never boosted). Default -55 dBFS.
     public init(
@@ -75,7 +88,7 @@ public struct AudioLeveller: Sendable {
         attackSeconds: Double = 0.050,
         releaseSeconds: Double = 0.500,
         maxGainDB: Float = 18,
-        minGainDB: Float = -12,
+        minGainDB: Float = -24,
         noiseFloorRMSdBFS: Float = -55
     ) {
         self.sampleRate = sampleRate

@@ -482,6 +482,215 @@ final class JitterBufferAdaptationTests: XCTestCase {
     }
 }
 
+// MARK: - RC-3/RC-4: recovery from bad timestamps and stream restarts
+
+final class JitterBufferRecoveryTests: XCTestCase {
+    /// Longest unbroken run of `.concealment` in `outputs`.
+    private func longestConcealmentRun(_ outputs: [JitterOutput]) -> Int {
+        var longest = 0
+        var run = 0
+        for output in outputs {
+            if output == .concealment {
+                run += 1
+                longest = max(longest, run)
+            } else {
+                run = 0
+            }
+        }
+        return longest
+    }
+
+    /// A single frame carrying a timestamp 65536 ms in the future — exactly
+    /// what a mis-expanded 16-bit IAX2 mini-frame timestamp looks like (IAX-6)
+    /// — must not turn into a minute of concealment. `.concealment` tells the
+    /// caller to repeat or fade the last frame, so an unbounded run is a
+    /// stuck-audio bug, not a graceful degradation.
+    func testMisExpandedTimestampDoesNotCauseAnUnboundedConcealmentRun() {
+        var buffer = JitterBuffer()
+        let base: UInt32 = 1000
+        for i in 0..<10 {
+            var timestamp = base + UInt32(i) * 20
+            if i == 5 { timestamp &+= 65_536 } // the 16-bit mis-expansion
+            buffer.push(TimedFrame(timestamp: timestamp, payload: payload(timestamp)))
+        }
+
+        // 400 pops is 8 s of playout: far more than the stream is worth, and
+        // far less than the 65 s the unbounded run produced.
+        var outputs: [JitterOutput] = []
+        for _ in 0..<400 { outputs.append(buffer.pop()) }
+
+        let run = longestConcealmentRun(outputs)
+        XCTAssertLessThanOrEqual(
+            run,
+            10,
+            "one bad timestamp produced \(run) consecutive concealments (\(run * 20) ms of repeated audio)"
+        )
+
+        // The nine good frames still play, in order, before the outlier is hit.
+        let played = outputs.compactMap { output -> [UInt8]? in
+            if case .frame(let bytes) = output { return bytes }
+            return nil
+        }
+        let expectedPlayed = [1000, 1020, 1040, 1060, 1080, 1120, 1140, 1160, 1180]
+            .map { payload(UInt32($0)) }
+        XCTAssertEqual(played, expectedPlayed)
+
+        // Having hit the discontinuity the buffer un-primes and waits for a new
+        // spurt to anchor on, rather than grinding through the gap.
+        XCTAssertFalse(buffer.isPrimed)
+    }
+
+    /// A gap that is genuinely packet loss (well inside the discontinuity
+    /// bound) must still be concealed slot by slot — the bound must not turn
+    /// ordinary burst loss into silence.
+    func testBurstLossJustInsideTheBoundIsStillConcealed() {
+        var buffer = JitterBuffer()
+        for timestamp: UInt32 in [1000, 1020, 1040] {
+            buffer.push(TimedFrame(timestamp: timestamp, payload: payload(timestamp)))
+        }
+        // 1060...1240 lost: a 200 ms gap, the largest run still concealed.
+        buffer.push(TimedFrame(timestamp: 1260, payload: payload(1260)))
+
+        var outputs: [JitterOutput] = []
+        for _ in 0..<14 { outputs.append(buffer.pop()) }
+
+        XCTAssertEqual(outputs.prefix(3), [frame(1000), frame(1020), frame(1040)])
+        XCTAssertEqual(Array(outputs[3..<13]), Array(repeating: .concealment, count: 10))
+        XCTAssertEqual(outputs[13], frame(1260))
+    }
+
+    /// Reusing a buffer for a second call: the new stream's clock is unrelated
+    /// to the old one's and typically starts lower. Starvation un-primes the
+    /// buffer, and the documented contract is that it re-anchors on the new
+    /// head — which it cannot do if `enqueue` is still rejecting frames as
+    /// "late" against the dead stream's playout grid.
+    func testStreamRestartAtALowerTimestampIsNotRejectedAsLate() {
+        var buffer = JitterBuffer()
+        for timestamp: UInt32 in [600_000, 600_020, 600_040] {
+            buffer.push(TimedFrame(timestamp: timestamp, payload: payload(timestamp)))
+        }
+        XCTAssertEqual(buffer.pop(), frame(600_000))
+        XCTAssertEqual(buffer.pop(), frame(600_020))
+        XCTAssertEqual(buffer.pop(), frame(600_040))
+        XCTAssertEqual(buffer.pop(), .silence) // starved: un-primes
+        XCTAssertFalse(buffer.isPrimed)
+
+        // New call on the same buffer, 30 s of audio starting at timestamp 0.
+        for i in 0..<1500 {
+            let timestamp = UInt32(i) * 20
+            buffer.push(TimedFrame(timestamp: timestamp, payload: payload(timestamp)))
+        }
+        XCTAssertEqual(buffer.queuedFrameCount, 1500, "the new call's frames were dropped as late")
+
+        XCTAssertEqual(buffer.pop(), frame(0))
+        XCTAssertEqual(buffer.pop(), frame(20))
+        XCTAssertEqual(buffer.pop(), frame(40))
+    }
+
+    /// The smaller version of the same defect: a short stream, then a restart
+    /// at timestamp 0. Not one frame may be swallowed.
+    func testShortStreamRestartLosesNoFrames() {
+        var buffer = JitterBuffer()
+        for timestamp: UInt32 in [1000, 1020, 1040] {
+            buffer.push(TimedFrame(timestamp: timestamp, payload: payload(timestamp)))
+        }
+        for _ in 0..<3 { _ = buffer.pop() }
+        XCTAssertEqual(buffer.pop(), .silence)
+
+        for i in 0..<60 {
+            let timestamp = UInt32(i) * 20
+            buffer.push(TimedFrame(timestamp: timestamp, payload: payload(timestamp)))
+        }
+        XCTAssertEqual(buffer.queuedFrameCount, 60)
+        XCTAssertEqual(buffer.pop(), frame(0), "the restarted stream's first frame was dropped")
+    }
+
+    /// `reset()` is how a caller reuses one buffer across calls deliberately
+    /// (IAX-8 composes a single buffer per client): queued audio from the dead
+    /// call is dropped, and nothing about its clock survives to reject or
+    /// mis-anchor the next one.
+    func testResetClearsQueueGridAndEstimator() {
+        var buffer = JitterBuffer()
+        for i in 0..<40 {
+            let timestamp = 600_000 + UInt32(i) * 20
+            buffer.push(
+                TimedFrame(timestamp: timestamp, payload: payload(timestamp)),
+                arrivedAt: .milliseconds(600_000 + i * 20 + (i.isMultiple(of: 2) ? 0 : 100))
+            )
+        }
+        XCTAssertEqual(buffer.pop(), frame(600_000))
+        XCTAssertTrue(buffer.isPrimed)
+        XCTAssertEqual(buffer.nextExpectedTimestamp, 600_020)
+        XCTAssertGreaterThan(buffer.queuedFrameCount, 0)
+        XCTAssertGreaterThan(buffer.arrivalDeviation, .zero)
+
+        buffer.reset()
+
+        XCTAssertEqual(buffer.queuedFrameCount, 0, "reset must drop the dead call's audio")
+        XCTAssertEqual(buffer.depth, .zero)
+        XCTAssertFalse(buffer.isPrimed)
+        XCTAssertNil(buffer.nextExpectedTimestamp)
+        XCTAssertEqual(buffer.arrivalDeviation, .zero)
+        XCTAssertEqual(buffer.currentTargetDepth, .milliseconds(60), "reset restores the initial target depth")
+        XCTAssertEqual(buffer.pop(), .silence)
+    }
+
+    /// After `reset()` the buffer behaves exactly like a fresh one, including
+    /// for a stream whose timestamps sit below the old call's.
+    func testBufferIsFullyReusableAfterReset() {
+        var buffer = JitterBuffer()
+        for timestamp: UInt32 in [600_000, 600_020, 600_040, 600_060] {
+            buffer.push(TimedFrame(timestamp: timestamp, payload: payload(timestamp)))
+        }
+        XCTAssertEqual(buffer.pop(), frame(600_000))
+
+        buffer.reset()
+
+        // Second call: primes from scratch, then plays from timestamp 0.
+        buffer.push(TimedFrame(timestamp: 0, payload: payload(0)))
+        buffer.push(TimedFrame(timestamp: 20, payload: payload(20)))
+        XCTAssertEqual(buffer.pop(), .silence, "only 40 ms queued: still priming")
+        buffer.push(TimedFrame(timestamp: 40, payload: payload(40)))
+        XCTAssertEqual(buffer.pop(), frame(0))
+        XCTAssertEqual(buffer.pop(), frame(20))
+        XCTAssertEqual(buffer.pop(), frame(40))
+        XCTAssertEqual(buffer.pop(), .silence)
+    }
+
+    /// The arrival estimator must survive a restart too: a new call's arrival
+    /// clock and timestamps both start over, and if the estimator keeps
+    /// comparing against the old stream's newest timestamp it never takes
+    /// another sample and RC-4 adaptation dies for the life of the buffer.
+    func testEstimatorResumesAfterAStreamRestart() {
+        var buffer = JitterBuffer()
+        for i in 0..<40 {
+            let timestamp = 600_000 + UInt32(i) * 20
+            buffer.push(
+                TimedFrame(timestamp: timestamp, payload: payload(timestamp)),
+                arrivedAt: .milliseconds(600_000 + i * 20)
+            )
+        }
+        while buffer.queuedFrameCount > 0 { _ = buffer.pop() }
+        for _ in 0..<12 { _ = buffer.pop() }
+        XCTAssertEqual(buffer.arrivalDeviation, .zero, "steady arrivals: deviation should be ~0")
+
+        // New call: timestamps restart at 0, arrivals badly jittered.
+        for i in 0..<40 {
+            let timestamp = UInt32(i) * 20
+            let jitter = i.isMultiple(of: 2) ? 0 : 30
+            buffer.push(
+                TimedFrame(timestamp: timestamp, payload: payload(timestamp)),
+                arrivedAt: .milliseconds(i * 20 + jitter)
+            )
+        }
+        XCTAssertGreaterThan(
+            buffer.arrivalDeviation,
+            .milliseconds(20),
+            "the estimator never took another sample after the stream restarted"
+        )
+    }
+}
+
 // MARK: - Duration assertion helper
 
 private func XCTAssertEqual(
