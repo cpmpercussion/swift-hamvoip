@@ -1,0 +1,33 @@
+# IAX-8b — what the registrant emits to release a registration (RFC 5456
+# §6.1.6, §9.4), paired with reg-inbound-release.hex. Our source call number is
+# 1; the registrar's is 0x0042.
+
+# 1. REGREL — subclass 0x11 (§8.4).
+#   00 00       destination call number 0: this is a fresh exchange, so the
+#               registrar's call number for it is not known yet
+#   00000000    time-stamp 0 — the first transmission of *this* exchange
+#   00 00       OSeqno 0, ISeqno 0 — counters restart with the exchange
+# Payload:
+#   06 06 "n0call"  USERNAME — the only IE the §9.4 flow shows on a first
+#                   REGREL. No REFRESH: Table 1 lists REFRESH against REGREQ,
+#                   REGACK and DPREP only, and a release has no validity
+#                   period to negotiate               §8.6.6, §8.6.18
+8001 0000 00000000 00 00 06 11  06 06 6e30 6361 6c6c
+
+# 2. ACK of the REGAUTH, echoing its time-stamp (§6.9.1, trap 9).
+8001 0042 000000c8 01 01 06 04
+
+# 3. REGREL re-sent with credentials — §6.1.3 covers REGREL as well as REGREQ:
+#    "the registrant MUST resend the REGREQ or REGREL message with one of the
+#    requested credentials". §8.6.15 likewise permits MD5 RESULT on a REGREL
+#    sent in answer to a CHALLENGE.
+#   01 01       OSeqno 1, ISeqno 1
+# Payload:
+#   06 06 "n0call"  USERNAME
+#   10 20 …         MD5 RESULT = MD5("9876543210" ‖ "s3cret")
+#                     = 796b2c115326d823e2a7f903a8af1726
+#                   Challenge first, no separator, lowercase hex (OQ-5).
+8001 0042 00000000 01 01 06 11  06 06 6e30 6361 6c6c  10 20 37393662 32633131 35333236 64383233 65326137 66393033 61386166 31373236
+
+# 4. ACK of the REGACK — required by §6.1.4 and by the §6.9.1 MUST-ACK list.
+8001 0042 0000012c 02 02 06 04

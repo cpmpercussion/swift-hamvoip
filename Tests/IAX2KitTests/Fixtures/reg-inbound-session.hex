@@ -1,0 +1,60 @@
+# IAX-8b — the registrar's side of a successful registration.
+#
+# Hand-built from RFC 5456 §6.1 and the §9.3 flow, as transcribed in
+# docs/reference/RFC5456-NOTES.md §12(e). Nothing here is copied from any
+# implementation (LP-1, LP-2); every field is annotated with the section that
+# fixes it.
+#
+#   REGREQ  ==>          (ours; see reg-outbound-session.hex)
+#           <== REGAUTH  USERNAME + AUTHMETHODS + CHALLENGE   §6.1.3
+#   REGREQ  ==>          USERNAME + MD5 RESULT + REFRESH      §6.1.2, §8.6.15
+#           <== REGACK   USERNAME + DATETIME + APPARENT ADDR + REFRESH  §6.1.4
+#   ACK     ==>          REQUIRED (§6.1.4)
+#
+# Our source call number is 1 (the first the allocator hands out); the
+# registrar's is 0x0042.
+
+# REGAUTH — §6.1.3, subclass 0x0e (§8.4).
+#   80 42       F=1, source call number 0x0042            §8.1.1
+#   00 01       R=0, destination call number 1 (ours)     §8.1.1, trap 1
+#   00000032    time-stamp 50 ms, the registrar's own clock  §8.1.1
+#   00          OSeqno 0   — first frame of its stream     §8.1.1
+#   01          ISeqno 1   — "next expected": it has seen our OSeqno 0
+#   06          frame type 0x06 IAX                        §8.2.6
+#   0e          C=0, subclass 14 = REGAUTH                 §8.4
+# Payload (§8.6 TLV: id, length, data):
+#   06 06 "n0call"   USERNAME    — MUST be sent with REGAUTH   §8.6.6
+#   0e 02 0002       AUTHMETHODS — MUST be sent with REGAUTH; 0x0002 = MD5  §8.6.13
+#   0f 0a "1234567890"  CHALLENGE — MUST be sent with REGAUTH   §8.6.14
+8042 0001 00000032 00 01 06 0e  06 06 6e30 6361 6c6c  0e 02 0002  0f 0a 31323334353637383930
+
+# REGACK — §6.1.4, subclass 0x0f (§8.4).
+#   00000064    time-stamp 100 ms
+#   01          OSeqno 1
+#   02          ISeqno 2 — our credentialed REGREQ carried OSeqno 1, so the
+#               registrar's next expected is 2                §8.1.1
+# Payload:
+#   06 06 "n0call"   USERNAME — MUST be sent with REGACK        §8.6.6
+#   1f 04 35096454   DATETIME — SHOULD be sent with REGACK; packed as
+#                    year(7)|month(4)|day(5)|hour(5)|minute(6)|second(5),
+#                    most significant field first, year offset from 2000,
+#                    month 1-based, timezone UTC:
+#                    26|8|9|12|34|20 = 2026-08-09 12:34:20Z     §8.6.28
+#                    (Seconds get only 5 bits, so the field cannot express a
+#                    value above 31 at all — an RFC quirk, not a typo here.)
+#   12 10 …          APPARENT ADDR — "MUST indicate the 'apparent address'"
+#                    (§6.1.1, §6.1.4). 16 octets of data — the "18 octets" in
+#                    §8.6.17's prose counts the 2-octet IE header (trap 14):
+#                      02 00      address family. **Byte order genuinely
+#                                 ambiguous**: this is the RFC's own example
+#                                 value, which reads as AF_INET=2 only
+#                                 little-endian, while the port beside it is
+#                                 big-endian (trap 13). Both readings are
+#                                 exposed by ApparentAddress; neither is
+#                                 "corrected" here.
+#                      11 d9      port 4569 — big-endian, per the RFC's own
+#                                 0x11d9 constant                §3, §8.6.17
+#                      cb 00 71 09  IPv4 203.0.113.9 (RFC 5737 doc range)
+#                      00 × 8     padding, all zero bits         §8.6.17
+#   13 02 003c       REFRESH — 60 seconds of validity            §8.6.18
+8042 0001 00000064 01 02 06 0f  06 06 6e30 6361 6c6c  1f 04 35096454  12 10 0200 11d9 cb007109 0000000000000000  13 02 003c

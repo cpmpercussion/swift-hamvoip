@@ -1,0 +1,15 @@
+# IAX-8b — what the registrant emits for the REGREJ branch (RFC 5456 §6.1.5),
+# paired with reg-inbound-reject.hex.
+
+# 1. REGREQ — identical to datagram 1 of reg-outbound-session.hex; see there
+#    for the field-by-field annotation.
+8001 0000 00000000 00 00 06 0d  06 06 6e30 6361 6c6c  13 02 003c
+
+# 2. ACK of the REGREJ. "(Note: REJECT messages require an explicit ACK.)"
+#    (§6.2.4) applies to REGREJ through the §6.9.1 MUST-ACK list, which names
+#    REGREJ directly. The ACK echoes the REGREJ's time-stamp (§6.9.1, trap 9)
+#    and does not advance OSeqno (§7, trap 4).
+#   00 42       destination call number learned from the REGREJ
+#   00000032    the REGREJ's time-stamp, echoed
+#   01 01       OSeqno 1 (after the REGREQ), ISeqno 1
+8001 0042 00000032 01 01 06 04
