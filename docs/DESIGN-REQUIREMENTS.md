@@ -1,8 +1,8 @@
-# QSOKit — Draft Design Requirements
+# swift-hamvoip — Draft Design Requirements
 
 **Status:** Draft v0.1
 **Scope:** Swift protocol libraries for unencumbered amateur radio VoIP modes, and a
-SwiftUI client built on them.
+SwiftUI client built on them. Library and app ship as separate repositories.
 
 ---
 
@@ -155,13 +155,15 @@ failure mode for software clients. These requirements are not negotiable.
   is invested.
 - **OQ-2.** Codec2 as a dynamic XCFramework — confirm the build works for
   iOS device, iOS simulator and macOS arm64 slices before committing to M17.
-- **OQ-3.** Application name and bundle identifier.
+- **OQ-3.** Application name and bundle identifier. Library naming is settled
+  (plain, descriptive, ecosystem-conventional); the app name is still open and
+  should not derive from any existing product's branding.
 - **OQ-4.** Whether the SwiftUI app lives in a second repository (recommended)
   or as an additional target here.
 
 ## 10. Delivery sequence
 
-1. `QSOCore` — transport, codec protocol, jitter buffer, audio graph.
+1. `RadioCore` — transport, codec protocol, jitter buffer, audio graph.
 2. `IAX2Kit` — validates the whole pipeline against a mode with no codec
    dependency. µ-law is trivial, so any audio fault found here is a pipeline
    fault, not a codec fault.

@@ -1,7 +1,8 @@
-# QSOKit
+# swift-hamvoip
 
 Permissively licensed Swift implementations of unencumbered amateur radio VoIP
-protocols, for Apple platforms.
+protocols. Apple platforms are the primary target; the protocol code itself is
+portable Swift with the transport behind an adapter.
 
 ## Why
 
@@ -9,7 +10,7 @@ Every existing cross-platform client for these modes is GPL-licensed, which
 prevents App Store distribution. There is no permissively licensed Swift
 implementation of IAX2, and none of M17 in any form.
 
-QSOKit covers only modes with no patent encumbrance:
+swift-hamvoip covers only modes with no patent encumbrance:
 
 - **AllStarLink** — IAX2 (RFC 5456), G.711 µ-law
 - **M17** — reflector protocol, Codec2 3200
