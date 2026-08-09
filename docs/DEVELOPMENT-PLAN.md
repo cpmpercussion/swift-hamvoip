@@ -536,19 +536,51 @@ Per M17 spec "Address Encoding": charset index 1…39 =
 `0xFFFFFFFFFFFF` = broadcast. Encode + decode + validation, exhaustive
 round-trip tests including 9-char max and rejection of invalid characters.
 
-### M17-3 — Reflector control (FR-2.1)
-**Depends on:** M17-2, RC-1. UDP 17000. Packets are magic-prefixed:
-`CONN` (+ encoded callsign + module letter), `ACKN`, `NACK`, `PING`/`PONG`,
-`DISC` — verify layouts against the M17 spec's reflector section. Actor
-FSM: connect → linked (keepalive PONG↔PING) → disconnected; NACK surfaces
-an error. Fixture-driven tests as in IAX-5.
+### M17-3 — Reflector control (FR-2.1) ✅ DONE
+
+Confirmed layouts (this plan's earlier one-line summary grouped them wrongly —
+`ACKN`/`NACK` carry **no** address, `PING`/`PONG` **do**, and `DISC` has two
+legal lengths):
+
+| Packet | Size | Contents |
+|---|---|---|
+| `CONN` | 11 | magic(4) + 'From' address(6) + module `A`–`Z`(1) |
+| `ACKN` | 4 | magic only |
+| `NACK` | 4 | magic only |
+| `PING` | 10 | magic(4) + 'From' address(6) |
+| `PONG` | 10 | magic(4) + 'From' address(6) |
+| `DISC` | 10 or 4 | magic + address, or magic alone (ack of a `DISC`) |
+
+⚠️ **The reflector protocol is not in the PDF at spec.m17project.org.** That
+document is Part I (Air Interface) and has no IP networking chapter. The
+reflector chapter was published as HTML at a readthedocs host that now returns
+"Project not found", so M17-3 worked from an Internet Archive capture,
+cross-checked against a 2022 capture to confirm the tables are unchanged. See
+`docs/reference/PROVENANCE.md`. **The specification this code implements is
+currently offline.** Worth the maintainer deciding whether to keep a local copy
+of the archived chapter in the repository, licence permitting — right now the
+only record of what we implemented against is a third-party archive.
+
+The spec states **no timer values at all**. The 5 s connect and 30 s keepalive
+deadlines are local policy, documented as such and injectable.
 
 ### M17-4 — Stream mode RX/TX (FR-2.2)
-**Depends on:** M17-3, M17-1 gate. `M17 ` stream frames: LICH/LSF fields
-(dst, src, type, meta — **type bits for encryption are never set; if a
-received stream is flagged encrypted, mark it unplayable, per FR-2.5**),
-16-bit frame number with end-of-stream flag, 2×Codec2-3200 frames
-(16 bytes payload per packet). Wrap codec2 via a thin C shim target.
+**Depends on:** M17-3 ✅, M17-1 ✅ (OQ-2 resolved). Needs a `Package.swift`
+change (codec2 C shim target) — one of the few tasks permitted to touch it.
+
+M17-3 already implements `M17StreamPacket` parse/serialize: magic `"M17 "`
+(trailing space), SID(2), LICH(30), FN(2) with end-of-stream flag `FN & 0x8000`,
+payload(16), CRC16(2). LICH decomposes as DST(6) SRC(6) TYPE(2) META(14)
+LSF-CRC(2). Encryption bits in TYPE are parsed and surfaced **only** as
+`isEncrypted`/`playability == .encrypted` — there is no cipher enum, no key
+parameter and no decrypt path, and M17-4 must not add one (FR-2.5).
+
+M17-4's job is the Codec2 3200 wiring (2 × 64-bit frames per 16-byte payload,
+confirmed by the M17-1 spike) and TX/RX stream sequencing.
+
+⚠️ **Resolve OQ-7 first** — see the open questions table. The frame is
+implemented as 56 bytes per the spec's stated 240-bit LICH; 54 is widely
+quoted. Do not build stream TX on an unverified frame size.
 
 ### M17-5 — `M17Client` public API
 **Depends on:** M17-4. Mirrors IAX-8: conforms to `NetworkClient`,
@@ -568,4 +600,7 @@ human validation.
 | OQ-4 | App in separate repo? (plan assumes yes) | Phase 4 |
 | **OQ-5** | **How is MD5_RESULT represented on the wire?** §8.6.15 says the IE carries the UTF-8-encoded MD5 of `challenge ‖ password`, but the RFC never states the text encoding — hex or not, upper or lower case, padded or not. This cannot be resolved from the specification, and LP-2 forbids reading an implementation to find out. It has to be settled empirically against a real node. | IAX-4 ships lowercase 32-char hex as the documented assumption; **IAX-9/CLI-1 must confirm it against a live AllStar node before v1** |
 | **OQ-6** | **LGPL-2.1 relinking vs App Store code signing.** Shipping Codec2 as a dynamic framework satisfies LP-4's letter, but a signed iOS app cannot have its framework substituted by the user, which is what LGPL §6 relinking is for. A licensing judgement, not a technical blocker, and unchanged by the M17-1 spike — but it wants a conscious decision before App Store submission, not after. | App Store submission of M17 |
+| **OQ-7** | **Is the M17 IP stream frame 56 bytes or 54?** The spec's Table 27 gives LICH as 240 bits, which is the full 30-byte LSF *including* its own CRC → 56 bytes. 54 is widely quoted elsewhere, and the difference is exactly whether that CRC is present. Implemented as 56 per the spec. Cannot be settled from the document. | **M17-4 — settle against a capture from a live reflector before building stream TX.** `M17StreamPacket.byteCount` is the single place to change |
+| **OQ-8** | **The M17 reflector specification is offline.** The chapter we implement against was published as HTML at a readthedocs host that now 404s; M17-3 worked from an Internet Archive capture. Should the repository keep a local copy of that archived chapter, licence permitting? Right now the only record of what we implemented against is a third-party archive that may itself disappear. | Nothing today; a maintenance risk |
 | — | Packet capture of own AllStar session | IAX-9 |
+| — | Capture from a live M17 reflector | OQ-7 / M17-4 |
