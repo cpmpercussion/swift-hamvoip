@@ -71,6 +71,15 @@ settles the authentication-encoding question without placing a call.
   nodes; the fix is `IAX2Call.Configuration.md5ResultEncoding`, reachable from
   `IAX2Client.Configuration.call`. Run `hamvoip-cli oq5` against a live node to
   settle it (OQ-5).
+- **That override does not extend to registration.** `IAX2Registrar` computes
+  its digest with the default encoding and carries no configuration point, so
+  if OQ-5 resolves to anything other than lowercase hex, registered node mode
+  (FR-1.3) remains broken after the call path has been corrected. Threading
+  `md5ResultEncoding` through `IAX2Registrar.Configuration` is the fix.
+- **A `raw-bytes` outcome is not expressible at all.** `TextDigestEncoding`
+  renders to a `String` and `InformationElement.md5Result` takes a `String`,
+  so should that candidate win, IAX2Kit needs a byte-valued MD5 RESULT path
+  before either code path can authenticate.
 - **No on-air validation of any kind.** There is no capture-replay conformance
   test against a recorded session of a real node (IAX-9).
 - **M17 has no audio path.** Stream mode is unimplemented pending OQ-7, the
