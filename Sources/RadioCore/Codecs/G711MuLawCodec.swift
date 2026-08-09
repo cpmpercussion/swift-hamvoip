@@ -45,12 +45,14 @@ public enum G711Error: Error, Equatable, Sendable {
 /// Decoding reconstructs the magnitude at the midpoint of the
 /// quantisation interval the encoder collapsed the sample into (implicit
 /// leading bit + mantissa bits + half of the discarded low-order bits),
-/// then removes the bias. The one exception is the zero-magnitude,
-/// negative-sign code (encoded from PCM samples 0 and -1 alike): without
-/// adjustment it would decode to 0, colliding with the positive-sign
-/// zero code and breaking the "256 distinct decoded values" property, so
-/// it decodes to -1 instead (which is also its exact original encode
-/// input, preserving the decode→encode round trip).
+/// then removes the bias.
+///
+/// µ-law has both a positive and a negative zero code, so `0xFF` and `0x7F`
+/// both decode to 0 and the decode map is deliberately **not** injective —
+/// 256 codes produce 255 distinct values. `decodeSample(0x7F) == 0`, matching
+/// the standard. An earlier revision returned -1 there to make decode→encode a
+/// round trip; that was a departure from G.711 introduced to satisfy a test
+/// assertion that was itself wrong, and it has been corrected.
 public struct G711MuLawCodec: VoiceCodec, Sendable {
     /// ITU-T G.711 bias constant.
     static let bias: Int = 0x84 // 132
