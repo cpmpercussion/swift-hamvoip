@@ -94,6 +94,13 @@ not remembered; if it disagrees with the repository, the repository is right.
   replayed by `IAX2ConformanceTests`, so registration, call setup, an inbound
   over and both `0x8000` time-stamp boundaries are regression-tested against
   what a real node put on the wire, not only against our reading of the RFC.
+- **A second live node, 2026-08-10** — `wintermute`, node 44309, ASL on a LAN,
+  reached over `hamvoip-cli`. MD5 authentication, `ulaw` call setup and
+  teardown all worked, which corroborates OQ-5 on the `connect` path against a
+  *different* implementation than the one that settled it. The session also
+  turned up **IAX-11**: the node has two interfaces and answers from the one
+  that was not dialled, which the transport cannot cope with and reports as an
+  unrelated socket error.
 
 Per-task status is on the task headings themselves — `✅ DONE` where the work
 has merged and the code it describes exists.
@@ -641,6 +648,53 @@ that appeared on one session and not the other.
 **Done when:** frames leave at roughly the interval their timestamps claim,
 a test asserts the pacing against a mock clock, and a re-captured session
 shows no VNAK at the start of an over.
+
+---
+
+### IAX-11 — A node may answer from an address other than the one dialled ⚠️ NEW
+**Depends on:** RC-1, IAX-8. **Found by:** a live LAN session against a
+multi-homed ASL node, 2026-08-10.
+**Files:** `Sources/RadioCore/NWDatagramTransport.swift` + tests.
+
+`NWDatagramTransport` opens an `NWConnection` in UDP mode against one host and
+port, which is a *connected* socket. A node with more than one interface on the
+same subnet answers from whichever address its routing table prefers, not from
+the address that was dialled, and a connected socket will not accept those
+datagrams.
+
+Observed on node 44309 (`wintermute`), which has eth0 `192.168.0.224` and wlan
+`192.168.0.170`. A raw UDP POKE sent to `.224:4569` was answered with PONG
+**from `.170:4569`**. Through `NWDatagramTransport` aimed at `.224` the first
+send succeeded, the next failed with `POSIXErrorCode 57` (`ENOTCONN`), and no
+datagram was ever delivered upward. Aimed at `.170` the same client completed
+registration, MD5 authentication, `ulaw` call setup and a clean teardown.
+
+The exact mechanism behind the `ENOTCONN` — presumably the kernel rejecting a
+datagram from a non-peer address, and Network.framework tearing the flow down
+after the resulting ICMP — was **not** confirmed on the wire. The reply from
+the unexpected address was.
+
+Two things make this worth a task rather than a footnote. IAX2 multiplexes
+calls by call number on a well-known port; nothing in RFC 5456 promises that a
+peer answers from the address it was called on, so a node behaving this way is
+not misconfigured. And the failure is unreadable: `hamvoip-cli` reports
+`the call could not be set up: … send failed: Socket is not connected`, which
+points at the socket rather than at the node's routing, and gives nobody a
+reason to try the other address.
+
+**Done when:** such a node is either handled or diagnosed clearly. That is a
+design choice for the maintainer, not something a task should presume:
+
+- *Handle it* — receive from any source rather than from one peer. PD-1 keeps
+  this inside Network.framework, so confirm which primitive actually fits
+  before writing code; it weakens the transport's binding to its peer, which
+  wants thinking about before it is traded away.
+- *Diagnose it* — keep the connected socket and turn the failure into a
+  message that names the likely cause and suggests the node's other address.
+
+Either way AU-5 stands: no sockets in unit tests, so the mismatch must be
+modelled at the `DatagramTransport` seam rather than reproduced against a real
+multi-homed host.
 
 ---
 
