@@ -137,6 +137,21 @@ one. The LSF CRC is not transmitted. `M17StreamPacket` now implements 54 with a
 28-byte LICH. Evidence: the OQ-7 row of `DEVELOPMENT-PLAN.md` and `docs/CLI.md`
 §7.
 
+**A second, smaller gap in the same area, found while implementing the CRC
+(M17-4).** The specification states the CRC's polynomial and initial value and
+stops there. A CRC is not determined by those two numbers alone: bit order and
+the presence of a final XOR also have to be fixed, and the text we hold fixes
+neither. This was resolved the same way — by measuring. Exactly one of the
+eight combinations of reflected input, reflected output and final XOR validates
+the captured frames, and it validates all 52 of them; the other seven validate
+none. `M17CRC16` therefore documents MSB-first, no reflection, no final XOR as
+an **observation**, not as a quotation from the document.
+
+Same failure mode as the LICH width, and the same argument for OQ-8: the
+specification is written as a companion to implementations that already agree
+on these details, so it under-specifies exactly where an independent
+implementer needs it most.
+
 **What this says about the source, which is the point of this file:** the
 archived chapter is accurate about field *order*, field *meanings* and every
 control packet — all verified — and wrong, or at least misleading, about one

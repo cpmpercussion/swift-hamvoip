@@ -597,9 +597,25 @@ public struct M17StreamPacket: Hashable, Sendable {
     public let payload: Data
 
     /// CRC16 over the entire packet — the only CRC a stream datagram carries
-    /// (OQ-7: the LSF's own CRC is not on the wire). Carried through verbatim;
-    /// not verified here (M17-4 owns CRC).
+    /// (OQ-7: the LSF's own CRC is not on the wire).
+    ///
+    /// Carried through verbatim by ``parse(_:)``: a datagram whose CRC does not
+    /// check is still parsed, and is rejected — or not — by the caller reading
+    /// ``isCRCValid``. Keeping the two apart is deliberate. A packet that fails
+    /// its CRC still has a readable SID and FN, and a receiver that wants to
+    /// count corrupt frames, or conceal one, needs to see it rather than have
+    /// it disappear into a thrown error.
     public let crc: UInt16
+
+    /// ``M17CRC16`` over the 52 bytes this packet serialises to ahead of the
+    /// CRC field itself.
+    public var computedCRC: UInt16 { M17CRC16.compute(Self.bytesBeforeCRC(self)) }
+
+    /// Whether ``crc`` matches ``computedCRC``.
+    ///
+    /// Confirmed against live traffic: true for 52 of 52 stream datagrams in
+    /// the OQ-7 capture.
+    public var isCRCValid: Bool { crc == computedCRC }
 
     /// Whether this is the final frame of the stream (`FN & 0x8000`).
     public var isLastFrame: Bool { frameNumber & M17StreamPacket.lastFrameFlag != 0 }
@@ -640,6 +656,43 @@ public struct M17StreamPacket: Hashable, Sendable {
         self.crc = crc
     }
 
+    /// Creates a packet carrying the CRC the wire format requires, for
+    /// transmission.
+    ///
+    /// The same as the memberwise initialiser except that ``crc`` is computed
+    /// rather than supplied, so ``isCRCValid`` is true by construction. This is
+    /// the initialiser TX should use; the one taking a `crc` exists for
+    /// ``parse(_:)`` and for tests that need to build a packet whose CRC is
+    /// deliberately wrong.
+    public init(
+        streamID: UInt16,
+        destination: M17Address,
+        source: M17Address,
+        type: M17StreamType,
+        metadata: Data,
+        frameNumber: UInt16,
+        payload: Data
+    ) throws {
+        let provisional = try M17StreamPacket(
+            streamID: streamID,
+            destination: destination,
+            source: source,
+            type: type,
+            metadata: metadata,
+            frameNumber: frameNumber,
+            payload: payload,
+            crc: 0)
+        try self.init(
+            streamID: streamID,
+            destination: destination,
+            source: source,
+            type: type,
+            metadata: metadata,
+            frameNumber: frameNumber,
+            payload: payload,
+            crc: provisional.computedCRC)
+    }
+
     /// Parses a stream datagram.
     ///
     /// - Throws: `M17PacketError` unless the datagram opens with `"M17 "` and
@@ -676,15 +729,23 @@ public struct M17StreamPacket: Hashable, Sendable {
 
     /// The datagram for this packet.
     public var data: Data {
-        var out = Data(M17PacketMagic.stream.bytes)
-        out.append(contentsOf: M17StreamPacket.bigEndian(streamID))
-        out.append(contentsOf: destination.bytes)
-        out.append(contentsOf: source.bytes)
-        out.append(contentsOf: M17StreamPacket.bigEndian(type.rawValue))
-        out.append(metadata)
-        out.append(contentsOf: M17StreamPacket.bigEndian(frameNumber))
-        out.append(payload)
+        var out = M17StreamPacket.bytesBeforeCRC(self)
         out.append(contentsOf: M17StreamPacket.bigEndian(crc))
+        return out
+    }
+
+    /// Everything the CRC closes over: bytes 0-51, the datagram without its
+    /// trailing CRC field. Shared by ``data`` and ``computedCRC`` so the two
+    /// cannot drift apart.
+    private static func bytesBeforeCRC(_ packet: M17StreamPacket) -> Data {
+        var out = Data(M17PacketMagic.stream.bytes)
+        out.append(contentsOf: bigEndian(packet.streamID))
+        out.append(contentsOf: packet.destination.bytes)
+        out.append(contentsOf: packet.source.bytes)
+        out.append(contentsOf: bigEndian(packet.type.rawValue))
+        out.append(packet.metadata)
+        out.append(contentsOf: bigEndian(packet.frameNumber))
+        out.append(packet.payload)
         return out
     }
 

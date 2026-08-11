@@ -873,12 +873,27 @@ assumption, so stream TX may be built on it.
 
 Two things M17-4 inherits from that:
 
-- **The single CRC is the whole-datagram one, and nothing verifies it yet.**
-  `M17StreamPacket.crc` is carried through verbatim. The polynomial is
-  confirmed against the capture: M17 CRC16, polynomial `0x5935`, initial value
-  `0xFFFF`, computed over the preceding 52 bytes, valid in 52 of 52 observed
-  frames. M17-4 owns implementing and verifying it. There is no LSF CRC to
-  verify — it is not transmitted.
+- **The single CRC is the whole-datagram one.** ✅ **Done** — `M17CRC16` plus
+  `M17StreamPacket.computedCRC` / `.isCRCValid`, and a CRC-computing
+  initialiser for TX. There is no LSF CRC to verify; it is not transmitted.
+
+  Worth recording, because it came out of doing the work: **the spec pins the
+  polynomial (`0x5935`) and the initial value (`0xFFFF`) but not the rest of
+  what a CRC needs** — bit order, and whether a final XOR applies. Those were
+  settled the same way OQ-7 was, by measuring. Of the eight combinations of
+  reflected input, reflected output and final XOR, exactly one closes over the
+  first 52 bytes of a captured stream datagram to give its trailing two, and it
+  does so in **52 of 52** frames of the OQ-7 capture; the other seven match
+  none. The answer is MSB-first, no reflection either way, no final XOR. The
+  Swift implementation was then run against those same 52 frames and validates
+  all 52. For the conventional `"123456789"` vector this parameterisation gives
+  `0x772B`, which `M17CRC16.checkValue` pins — that constant is *not* in the
+  spec text we hold, and is recorded because it is the cheapest way to catch a
+  mis-transcribed table.
+
+  Parsing deliberately does **not** enforce the CRC: a corrupt datagram is
+  still parsed and reported through `isCRCValid`, so a receiver can count or
+  conceal it rather than have it vanish into a thrown error.
 - **`hamvoip-cli oq7` stays useful** as a re-check against a second reflector,
   and it still measures below the parser: `RecordingTransport` taps the
   `DatagramTransport` seam rather than `M17ReflectorClient.events`, because the
