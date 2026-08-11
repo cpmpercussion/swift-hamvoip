@@ -128,6 +128,79 @@ final class M17StreamAudioTests: XCTestCase {
         XCTAssertEqual(expander.expand(11), 11)
     }
 
+    /// A frame reordered *across* the wrap must not corrupt the epoch.
+    ///
+    /// Found in review. The first version advanced its reference on every
+    /// frame including late ones, so a pre-wrap 0x7FFF arriving after the
+    /// stream had already wrapped to 0 left the reference at 0x7FFF — and the
+    /// next ordinary post-wrap frame then looked like a *second* wrap. The
+    /// epoch ran away, and every timestamp after it was 21.8 minutes further
+    /// out than the one before, which the jitter buffer reads as a
+    /// discontinuity and the audio does not survive.
+    func testAFrameReorderedAcrossTheWrapDoesNotRunTheEpochAway() {
+        var expander = M17FrameNumberExpander()
+        XCTAssertEqual(expander.expand(0x7FFE), 0x7FFE)
+        XCTAssertEqual(expander.expand(0x7FFF), 0x7FFF)
+        XCTAssertEqual(expander.expand(0x0000), 0x8000, "the wrap itself")
+
+        // A straggler from before the wrap. It belongs where it was sent,
+        // *below* the frame that has already been emitted.
+        XCTAssertEqual(
+            expander.expand(0x7FFF), 0x7FFF,
+            "a late pre-wrap frame expands to where it was sent, not past the wrap")
+
+        // And the stream carries on undisturbed.
+        XCTAssertEqual(expander.expand(0x0001), 0x8001, "the straggler must not have moved the epoch")
+        XCTAssertEqual(expander.expand(0x0002), 0x8002)
+    }
+
+    func testTheReferenceOnlyAdvancesOnNewerFrames() {
+        var expander = M17FrameNumberExpander()
+        _ = expander.expand(100)
+        _ = expander.expand(98)   // late
+        _ = expander.expand(99)   // late
+        XCTAssertEqual(expander.expand(101), 101, "late frames must not drag the reference back")
+    }
+
+    /// Every frame of a long over that wraps must expand to its true index,
+    /// however the delivery order is shuffled — as long as the shuffle is
+    /// within a plausible reordering window rather than a 21-minute one.
+    func testEveryFrameOfAWrappingOverExpandsToItsTrueIndexUnderReordering() {
+        // Straddle the wrap: true indices 0x7FF0 … 0x8010.
+        let firstIndex: UInt32 = 0x7FF0
+        let lastIndex: UInt32 = 0x8010
+
+        // Deliver in a fixed, repeatable shuffle: swap each adjacent pair, so
+        // every frame arrives at most one slot out of order — including the
+        // pair that straddles the wrap.
+        var order: [UInt32] = []
+        var index = firstIndex
+        while index <= lastIndex {
+            if index + 1 <= lastIndex {
+                order.append(index + 1)
+                order.append(index)
+                index += 2
+            } else {
+                order.append(index)
+                index += 1
+            }
+        }
+
+        var expander = M17FrameNumberExpander()
+        // Prime the reference with a couple of in-order frames, as a real
+        // stream would; an expander whose first-ever frame is out of order has
+        // nothing to be relative to.
+        _ = expander.expand(UInt16(firstIndex - 2))
+        _ = expander.expand(UInt16(firstIndex - 1))
+
+        for trueIndex in order {
+            let onTheWire = UInt16(trueIndex % M17FrameNumberExpander.modulus)
+            XCTAssertEqual(
+                expander.expand(onTheWire), trueIndex,
+                "frame \(trueIndex) expanded wrongly when delivered out of order")
+        }
+    }
+
     func testResetReturnsTheExpanderToTheStartOfAnOver() {
         var expander = M17FrameNumberExpander()
         _ = expander.expand(0x7FFF)

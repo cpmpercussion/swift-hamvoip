@@ -57,6 +57,23 @@ public enum M17ClientError: Error, Equatable, CustomStringConvertible {
 
 // MARK: - Events
 
+/// Why an inbound stream stopped.
+public enum StreamEndReason: Sendable, Equatable, CustomStringConvertible {
+    /// The transmitting station set the last-frame flag — a clean end of over.
+    case lastFrame
+    /// A different stream ID started before this one ended. The previous
+    /// station either lost its last frame or was talked over; either way its
+    /// audio is abandoned rather than played across the join.
+    case preempted
+
+    public var description: String {
+        switch self {
+        case .lastFrame: return "end of over"
+        case .preempted: return "cut off by another station"
+        }
+    }
+}
+
 /// What an ``M17Client`` reports to whoever is watching.
 public enum M17ClientEvent: Sendable, Equatable {
     /// A link attempt has begun.
@@ -65,8 +82,13 @@ public enum M17ClientEvent: Sendable, Equatable {
     case linked(module: Character)
     /// A new station started transmitting.
     case streamStarted(source: M17Address, streamID: UInt16)
-    /// The station transmitting sent its last frame.
-    case streamEnded(source: M17Address)
+    /// A station stopped transmitting, and why.
+    ///
+    /// The reason matters to an operator: a stream that just stopped arriving
+    /// is an ordinary end of over, while one displaced by another station is
+    /// somebody being cut off — the kind of thing worth showing rather than
+    /// silently replacing in the UI.
+    case streamEnded(source: M17Address, reason: StreamEndReason)
     /// A datagram was refused, with why. Emitted once per run of the same
     /// reason rather than per datagram, so a corrupt stream cannot flood.
     case streamRejected(M17StreamReceiver.Rejection)
@@ -472,19 +494,23 @@ public actor M17Client: NetworkClient {
     private func handle(stream packet: M17StreamPacket) {
         guard var receiver else { return }
         let previousSource = receiver.source
+        // Whether the over being displaced already ended cleanly. If it did,
+        // its `.lastFrame` end has been reported and reporting a preemption on
+        // top would be a second ending for the same stream.
+        let previousAlreadyEnded = receiver.hasSeenFinalFrame
         let reception = receiver.receive(packet)
         self.receiver = receiver
 
         switch reception {
         case .acceptedNewStream(let streamID, let source):
             lastReportedRejection = nil
-            if let previousSource, previousSource != source {
-                emit(.streamEnded(source: previousSource))
+            if let previousSource, !previousAlreadyEnded {
+                emit(.streamEnded(source: previousSource, reason: .preempted))
             }
             emit(.streamStarted(source: source, streamID: streamID))
         case .acceptedFinalFrame:
             lastReportedRejection = nil
-            emit(.streamEnded(source: packet.source))
+            emit(.streamEnded(source: packet.source, reason: .lastFrame))
         case .accepted:
             lastReportedRejection = nil
         case .rejected(let rejection):

@@ -93,39 +93,76 @@ public enum M17StreamAudioError: Error, Equatable, CustomStringConvertible {
 /// stream that wraps must not look to the jitter buffer like a stream that
 /// jumped backwards by 21 minutes.
 ///
-/// Same job as `IAX2MiniTimestampExpander`, and much simpler, because FN
-/// counts frames from the start of the over rather than tracking a peer's
-/// clock: the sequence always starts at zero and only ever advances by one.
+/// Same job as `IAX2MiniTimestampExpander`, and it works the same way for the
+/// same reason: expansion is relative to the **newest expanded value**, and the
+/// reference only advances when a frame is genuinely newer.
+///
+/// The obvious implementation — remember the last raw sequence, bump an epoch
+/// whenever the number jumps backwards — is wrong at exactly the boundary it
+/// exists to handle, and the failure is not subtle. A pre-wrap `0x7FFF`
+/// arriving *after* the stream has already wrapped to `0` leaves the reference
+/// at `0x7FFF`, so the next ordinary post-wrap frame reads as a second wrap.
+/// The epoch then runs away permanently: every timestamp is 21.8 minutes
+/// further out than the last, the jitter buffer sees a discontinuity rather
+/// than a stream, and the audio does not recover. Found in review of M17-5.
 public struct M17FrameNumberExpander: Sendable, Equatable {
 
     /// One past the largest sequence number, the 15-bit range.
     public static let modulus: UInt32 = 0x8000
 
-    /// A backwards step larger than this is a wrap, not a reorder.
-    private static let wrapThreshold: UInt16 = 0x4000
+    /// Half the range. A step further than this in either direction is a wrap
+    /// rather than an ordinary reorder — the same "nearest interpretation"
+    /// rule a sequence-number window uses.
+    private static let wrapThreshold: Int = 0x4000
 
-    private var epoch: UInt32 = 0
-    private var lastSequence: UInt16?
+    /// The newest expanded value emitted so far. `nil` until the first frame.
+    private var newestExpanded: UInt32?
 
     public init() {}
 
     /// The expanded, monotonic frame count for `frameNumber`.
     ///
+    /// Late frames expand to where they were *sent* — below the reference —
+    /// rather than being dragged forward, which is what lets the jitter buffer
+    /// recognise them as the reordered arrivals they are.
+    ///
     /// - Parameter frameNumber: the raw FN field, last-frame flag included;
     ///   the flag is masked off here.
     public mutating func expand(_ frameNumber: UInt16) -> UInt32 {
-        let sequence = frameNumber & ~M17StreamPacket.lastFrameFlag
-        if let last = lastSequence, sequence < last, last - sequence > Self.wrapThreshold {
-            epoch &+= 1
+        let sequence = UInt32(frameNumber & ~M17StreamPacket.lastFrameFlag)
+
+        guard let reference = newestExpanded else {
+            newestExpanded = sequence
+            return sequence
         }
-        lastSequence = sequence
-        return epoch &* Self.modulus &+ UInt32(sequence)
+
+        let referenceSequence = reference % Self.modulus
+        let referenceEpoch = reference / Self.modulus
+        let delta = Int(sequence) - Int(referenceSequence)
+
+        let epoch: UInt32
+        if delta < -Self.wrapThreshold {
+            // A long way below the reference: the stream wrapped forwards.
+            epoch = referenceEpoch &+ 1
+        } else if delta > Self.wrapThreshold, referenceEpoch > 0 {
+            // A long way above it: a straggler from before the wrap. It
+            // belongs in the previous epoch, not this one.
+            epoch = referenceEpoch - 1
+        } else {
+            epoch = referenceEpoch
+        }
+
+        let expanded = epoch &* Self.modulus &+ sequence
+        // Only newer frames move the reference. A late arrival that dragged it
+        // backwards would make the *next* in-order frame look like a wrap,
+        // which is the bug this design exists to avoid.
+        if expanded > reference { newestExpanded = expanded }
+        return expanded
     }
 
     /// Back to a just-constructed state, for a new over.
     public mutating func reset() {
-        epoch = 0
-        lastSequence = nil
+        newestExpanded = nil
     }
 }
 

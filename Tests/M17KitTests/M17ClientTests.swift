@@ -367,7 +367,7 @@ final class M17ClientTests: XCTestCase {
         await tearDown(harness)
     }
 
-    func testTheLastFrameOfAnOverIsReported() async throws {
+    func testTheLastFrameOfAnOverIsReportedAsACleanEnd() async throws {
         let harness = makeHarness()
         try await connect(harness)
 
@@ -375,8 +375,59 @@ final class M17ClientTests: XCTestCase {
         harness.transport.inject(try inboundStream(sequence: 1, value: 2, isLast: true))
 
         _ = await waitForEvent(
-            { if case .streamEnded = $0 { return true } else { return false } },
-            harness.events, "the over to end")
+            { $0 == .streamEnded(source: try! M17Address(callsign: "VK3ABC"), reason: .lastFrame) },
+            harness.events, "a clean end of over")
+
+        await tearDown(harness)
+    }
+
+    /// A station displaced mid-over is reported as cut off, not as having
+    /// finished. Raised in review: both cases used to emit the same event,
+    /// whose documentation only described the clean one.
+    func testAStationTalkedOverIsReportedAsPreempted() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        // One station starts and does *not* send a last frame…
+        harness.transport.inject(try inboundStream(streamID: 0x1111, sequence: 0, value: 1))
+        _ = await waitForEvent(
+            { if case .streamStarted = $0 { return true } else { return false } },
+            harness.events, "the first stream to start")
+
+        // …and another takes the channel.
+        harness.transport.inject(try inboundStream(streamID: 0x2222, sequence: 0, value: 9))
+
+        _ = await waitForEvent(
+            {
+                if case .streamEnded(_, .preempted) = $0 { return true } else { return false }
+            },
+            harness.events, "the displaced station to be reported as cut off")
+
+        await tearDown(harness)
+    }
+
+    /// And an over that ended cleanly must not *also* be reported as
+    /// preempted when the next station keys up.
+    func testACleanlyEndedOverIsNotAlsoReportedAsPreempted() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        harness.transport.inject(
+            try inboundStream(streamID: 0x1111, sequence: 0, value: 1, isLast: true))
+        _ = await waitForEvent(
+            { if case .streamEnded(_, .lastFrame) = $0 { return true } else { return false } },
+            harness.events, "the clean end")
+
+        harness.transport.inject(try inboundStream(streamID: 0x2222, sequence: 0, value: 9))
+        _ = await waitForEvent(
+            { if case .streamStarted(_, 0x2222) = $0 { return true } else { return false } },
+            harness.events, "the second stream to start")
+        await settle()
+
+        let preemptions = await harness.events.events.filter {
+            if case .streamEnded(_, .preempted) = $0 { return true } else { return false }
+        }
+        XCTAssertTrue(preemptions.isEmpty, "a stream must not end twice")
 
         await tearDown(harness)
     }

@@ -342,8 +342,8 @@ private final class M17Session: @unchecked Sendable {
             receivedStreams += 1
             await console.log(
                 String(format: "RX %@ (stream 0x%04X)", source.callsign ?? "?", streamID))
-        case .streamEnded(let source):
-            await console.log("RX \(source.callsign ?? "?") ended")
+        case .streamEnded(let source, let reason):
+            await console.log("RX \(source.callsign ?? "?") ended — \(reason)")
         case .streamRejected(let rejection):
             await note("refused: \(rejection)")
         case .transmitting:
