@@ -23,7 +23,7 @@ struct HamVoIPCLI: AsyncParsableCommand {
         commandName: "hamvoip-cli",
         abstract: "Drive swift-hamvoip against a real AllStarLink node from a terminal.",
         discussion: """
-            Two subcommands:
+            Three subcommands:
 
               connect  place a call and work it — spacebar for PTT, DTMF for node control,
                        level meters for both directions, and the SF-1 transmit watchdog
@@ -31,6 +31,9 @@ struct HamVoIPCLI: AsyncParsableCommand {
               oq5      settle OQ-5 — how a real node wants the MD5 RESULT information
                        element encoded — by asking one, instead of by reading somebody
                        else's implementation.
+              oq7      re-check OQ-7 — the M17 IP stream frame size, settled at 54 bytes
+                       on 2026-08-11 — by measuring what a live reflector sends.
+                       Receive-only.
 
             Transmitting on amateur frequencies requires a licence. Connecting to a node
             can key a repeater; nothing is transmitted until you ask for it.
@@ -38,5 +41,5 @@ struct HamVoIPCLI: AsyncParsableCommand {
             Full documentation, including the M2 sign-off checklist: docs/CLI.md
             """,
         version: "0.1.0 (CLI-1)",
-        subcommands: [ConnectCommand.self, OQ5Command.self])
+        subcommands: [ConnectCommand.self, OQ5Command.self, OQ7Command.self])
 }

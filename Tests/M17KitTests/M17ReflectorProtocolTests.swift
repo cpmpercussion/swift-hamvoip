@@ -61,7 +61,7 @@ final class M17ReflectorProtocolTests: XCTestCase {
         // DISC alone has two forms: with the callsign, and the 4-byte bare
         // acknowledgement.
         XCTAssertEqual(M17PacketMagic.disconnect.permittedLengths, [10, 4])
-        XCTAssertEqual(M17PacketMagic.stream.permittedLengths, [56])             // 4+2+30+2+16+2
+        XCTAssertEqual(M17PacketMagic.stream.permittedLengths, [54])             // 4+2+28+2+16+2 (OQ-7)
     }
 
     // MARK: - Address field
@@ -245,9 +245,10 @@ final class M17ReflectorProtocolTests: XCTestCase {
     func testStreamHeaderFieldsMatchTheSpecificationLayout() throws {
         let packet = try M17StreamPacket.parse(fixture("reflector-stream.hex"))
 
-        // Table 27, field by field.
-        XCTAssertEqual(M17StreamPacket.byteCount, 56)          // 4+2+30+2+16+2
-        XCTAssertEqual(M17StreamPacket.lichByteCount, 30)      // 240 bits
+        // Table 27, field by field — with the LICH width from OQ-7 rather than
+        // from Table 27's stated 240 bits.
+        XCTAssertEqual(M17StreamPacket.byteCount, 54)          // 4+2+28+2+16+2
+        XCTAssertEqual(M17StreamPacket.lichByteCount, 28)      // 224 bits (OQ-7)
         XCTAssertEqual(M17StreamPacket.payloadByteCount, 16)   // 128 bits
         XCTAssertEqual(M17StreamPacket.metadataByteCount, 14)  // 112 bits
 
@@ -256,10 +257,43 @@ final class M17ReflectorProtocolTests: XCTestCase {
         XCTAssertEqual(packet.source.callsign, "AB1CD")
         XCTAssertEqual(packet.type.rawValue, 0x0005)
         XCTAssertEqual(packet.metadata, Data(repeating: 0, count: 14))
-        XCTAssertEqual(packet.lsfCRC, 0xABCD)
         XCTAssertEqual(packet.frameNumber, 0x0001)
         XCTAssertEqual(packet.payload, Data((0...15).map(UInt8.init)))
         XCTAssertEqual(packet.crc, 0xBEEF)
+
+        // The constants and the offsets have to agree, or a future edit could
+        // move one without the other.
+        XCTAssertEqual(
+            M17PacketMagic.byteCount + 2 + M17StreamPacket.lichByteCount
+                + 2 + M17StreamPacket.payloadByteCount + 2,
+            M17StreamPacket.byteCount)
+        XCTAssertEqual(
+            2 * M17Address.byteCount + 2 + M17StreamPacket.metadataByteCount,
+            M17StreamPacket.lichByteCount,
+            "LICH is DST + SRC + TYPE + META, and no LSF CRC (OQ-7)")
+    }
+
+    /// OQ-7, settled 2026-08-11 against a live reflector: the frame is 54
+    /// bytes, so the 56-byte reading of Table 27 must now be *rejected*. This
+    /// is the assertion that would have to be deleted to undo the observation,
+    /// which is the point of writing it down.
+    func testTheFiftySixByteReadingOfTableTwentySevenIsRejected() throws {
+        let observed = try fixture("reflector-stream.hex")
+        XCTAssertEqual(observed.count, 54)
+
+        // The same fields with a 30-byte LICH: an LSF CRC spliced in after META
+        // pushes FN, payload and CRC two bytes along.
+        var withLSFCRC = [UInt8](observed)
+        withLSFCRC.insert(contentsOf: [0xAB, 0xCD], at: 34)
+        XCTAssertEqual(withLSFCRC.count, 56)
+
+        XCTAssertThrowsError(try M17StreamPacket.parse(Data(withLSFCRC))) { error in
+            XCTAssertEqual(
+                error as? M17PacketError,
+                .wrongLength(magic: "M17 ", expected: [54], actual: 56))
+        }
+        XCTAssertNil(try? M17ReflectorPacket.parse(Data(withLSFCRC)))
+        XCTAssertFalse(M17PacketMagic.stream.permittedLengths.contains(56))
     }
 
     func testFrameNumberSplitsIntoSequenceAndLastFrameFlag() throws {
@@ -269,8 +303,8 @@ final class M17ReflectorProtocolTests: XCTestCase {
         XCTAssertEqual(base.sequenceNumber, 1)
 
         var bytes = [UInt8](base.data)
-        bytes[36] = 0x80  // set bit 15 of FN
-        bytes[37] = 0x2A
+        bytes[34] = 0x80  // set bit 15 of FN
+        bytes[35] = 0x2A
         let last = try M17StreamPacket.parse(Data(bytes))
         XCTAssertTrue(last.isLastFrame)
         XCTAssertEqual(last.sequenceNumber, 0x2A)
@@ -406,12 +440,12 @@ final class M17ReflectorProtocolTests: XCTestCase {
             try M17StreamPacket(
                 streamID: 0, destination: address, source: address,
                 type: M17StreamType(rawValue: 5), metadata: Data(repeating: 0, count: 13),
-                lsfCRC: 0, frameNumber: 0, payload: Data(repeating: 0, count: 16), crc: 0))
+                frameNumber: 0, payload: Data(repeating: 0, count: 16), crc: 0))
         XCTAssertThrowsError(
             try M17StreamPacket(
                 streamID: 0, destination: address, source: address,
                 type: M17StreamType(rawValue: 5), metadata: Data(repeating: 0, count: 14),
-                lsfCRC: 0, frameNumber: 0, payload: Data(repeating: 0, count: 15), crc: 0))
+                frameNumber: 0, payload: Data(repeating: 0, count: 15), crc: 0))
     }
 
     // MARK: - Error descriptions

@@ -219,6 +219,8 @@ is about.
 
 ## 4. The OQ-5 experiment
 
+§7 does the same thing for OQ-7, against an M17 reflector instead of a node.
+
 ### The question
 
 RFC 5456 §8.6.15 says the MD5 RESULT information element (`0x10`) "carries the
@@ -532,8 +534,175 @@ Unit-tested (`Tests/HamVoIPCLITests/`, no hardware, no network):
 * **Raw mode** — against a real `posix_openpt` pseudo-terminal: the flags raw
   mode sets, and that leaving restores every flag and control character
   exactly, idempotently, and repeatedly.
+* **The OQ-7 tally** — both readings of Table 27 synthesised field by field and
+  told apart; that silence, mixed lengths, an unexpected length and a
+  length-versus-sequencing contradiction all refuse to become a verdict; that a
+  run reporting the refuted 56-byte reading is reported as disagreeing with the
+  settled answer rather than as confirmation of anything; and, through the whole
+  stack against `MockTransport`, both that the settled 54-byte reality is parsed
+  and tallied, and that a reality `M17ReflectorClient` discards entirely still
+  reaches a verdict.
 
 Only a live node can test: whether audio is intelligible, whether levels are
 right, whether PTT edges sound clean, whether the node accepts our
 authentication, and whether DTMF reaches its command processor. That is what
 §5 is for.
+
+---
+
+## 7. The OQ-7 experiment
+
+> **Settled 2026-08-11: the frame is 54 bytes.** The evidence is in
+> "What the answer was", below, and in the OQ-7 row of `DEVELOPMENT-PLAN.md`.
+> `M17StreamPacket` implements 54. The subcommand remains, because one over on
+> one reflector is one observation, and re-checking it against a second
+> reflector is a five-minute job for whoever is next on air.
+
+### The question
+
+Is an M17 IP stream frame 56 bytes or 54?
+
+Table 27 of the reflector chapter gives LICH as 240 bits. That is the whole
+30-byte LSF of Part I Table 3.1 — DST 48, SRC 48, TYPE 16, META 112, CRC 16 —
+and the arithmetic follows: 4 + 2 + 30 + 2 + 16 + 2 = **56**. The figure quoted
+widely elsewhere is 54, which is the same layout with a 28-byte LICH, i.e. the
+LSF *without* its own CRC. Both readings are consistent with the text, so the
+document cannot settle it, and LP-2 forbids reading an implementation to find
+out. `M17StreamPacket` implemented 56 and said so in its doc comment, naming
+`byteCount` as the single place to change.
+
+M17-4 must not build stream transmit on an unverified frame size. So the
+question went to a reflector, which answers it every time somebody keys up.
+
+### Why it cannot listen to `M17ReflectorClient.events`
+
+Because `M17ReflectorClient` drops datagrams it cannot parse, and
+`M17StreamPacket.parse` requires exactly `byteCount` bytes. Any reality other
+than the one the parser already implements is therefore discarded before it
+reaches `events`, and a harness built on `events` reports a reflector that sent
+no audio at all — the wrong answer, arrived at with confidence, from code that
+is behaving correctly.
+
+This is not hindsight: it is what happened. The parser said 56, the wire said
+54, and only because the tap sits below the parser did the experiment come back
+with an answer that contradicted the code running it instead of with silence.
+The same reasoning now points the other way — a reflector sending 56 would be
+invisible to `events` today — which is why the tap stays.
+
+`RecordingTransport` therefore taps the `DatagramTransport` seam and measures
+every datagram *below* the parser. `RecordingTransportTests` pins this down so
+the harness cannot later be "simplified" into uselessness.
+
+### Running it
+
+Receive-only. It sends CONN, answers PING with PONG, and sends DISC on the way
+out; it never sends a stream packet, and there is no transmit path in `M17Kit`
+for it to use even if it wanted one. Your callsign does go out in CONN, so you
+will appear on the reflector's dashboard as a connected station — which is
+normal, and is also how you confirm the link from the other side.
+
+```sh
+# Listen for five minutes on a busy module.
+swift run hamvoip-cli oq7 --reflector <host> --module C --callsign VK1XYZ
+
+# Until Ctrl-C, stopping early once 40 frames have arrived, with a report file.
+swift run hamvoip-cli oq7 --reflector <host> --module C --callsign VK1XYZ \
+    --duration 0 --min-frames 40 --report oq7-result.txt
+```
+
+Ctrl-C ends the run *with* a verdict rather than killing it before the report
+prints. If the reflector answers NACK, try a module it actually offers and
+`--source-module`, which appends a module letter to your own address the way the
+specification's `"A1BCD D"` example does.
+
+To keep a capture of the run — worth doing, and what the 2026-08-11 verdict was
+independently checked against — run `tcpdump` alongside. Read the provenance note
+at the end of this section before cutting a fixture from it:
+
+```sh
+sudo tcpdump -i any -w m17-oq7.pcap 'udp port 17000'
+```
+
+### What it needs
+
+Somebody talking. A silent module answers nothing, and the verdict will say so
+rather than guess. Twenty or thirty frames of a single over is plenty — under
+two seconds of speech.
+
+### Reading the output
+
+Datagram length is the primary evidence: a UDP datagram is as long as it is.
+The corroboration is whether the two bytes at each reading's FN offset behave
+like a frame counter — a real FN increments by one per frame within a stream,
+while at the wrong offset the same bytes are an LSF CRC or Codec 2 payload and
+count for nothing. That second test is what distinguishes a genuine 54-byte
+frame from a 56-byte frame that something truncated.
+
+| Verdict | Meaning |
+|---|---|
+| `SETTLED` | One consistent length, and FN counts at that reading's offset. 54 agrees with what M17Kit implements; anything else disagrees with a settled question, so read "What this does not claim" below before changing a constant. |
+| `LENGTH ONLY` | One consistent length, too little traffic to check FN. Answers the question as asked; run longer to corroborate. |
+| `CONTRADICTORY` | Length says one reading, sequencing the other. **Do not act on it** — keep the capture and read it by hand. |
+| `MIXED` | Stream datagrams arrived in more than one length. Worth knowing whether they sort by transmitting client. |
+| `UNEXPECTED` | A consistent length that is neither 54 nor 56. Read the datagram by hand before touching any constant. |
+| `INCONCLUSIVE` | The link worked; nobody talked. |
+
+### What the answer was
+
+Run 2026-08-11 against a live reflector on UDP 17000, five minutes, one over of
+52 frames from one station, alongside `tcpdump`. Verdict:
+
+```
+VERDICT: SETTLED — the stream frame is 54 bytes: 54-byte frame, 28-byte LICH
+                   (LSF CRC absent)
+```
+
+Three readings of those bytes agree, and only on that layout:
+
+| Evidence | 54-byte reading | 56-byte reading |
+|---|---|---|
+| Datagram length | 54 bytes, 52 of 52 | never seen |
+| FN counts at the reading's offset | offset 34: 0, 1, 2 … 51 | offset 36: 0 of 51 pairs, and bit 15 set in 35 of 52 frames |
+| Trailing CRC16 closes over the frame | bytes 0-51, valid 52 of 52 | LSF CRC at 32-33: 0 of 52 |
+
+The CRC is the one that rules out a truncated 56-byte frame: two bytes lost in
+transit would not leave a CRC that closes over what remains. It is the M17 CRC16
+of Part I — polynomial `0x5935`, initial value `0xFFFF` — and confirming the
+polynomial on real traffic is a side benefit M17-4 inherits. The field offsets
+corroborate as well: SID constant across the over, DST and SRC decoding as
+base-40 callsigns at bytes 6-11 and 12-17, TYPE `0x0005` (stream mode, voice,
+unencrypted) at 18-19, META all zeros, and 16 bytes at 36-51 differing in every
+frame, as Codec 2 must.
+
+So `M17StreamPacket.byteCount` is 54, `lichByteCount` is 28, the `lsfCRC`
+property is gone — there is no such field on the wire — and the hand-built spec
+fixtures were rebuilt at 54 bytes with the divergence from Table 27 recorded in
+their headers. The change is driven by an observation, not by the document, and
+the doc comment on `M17StreamPacket` says which.
+
+**What this does not claim.** One reflector, one over, one transmitting client.
+If a later run reports 56, that is new information rather than a bug to fix by
+reverting: the tally's guidance says to keep the capture and work out whether
+the difference sorts by reflector or by transmitting software before touching
+the constant, because two populations of transmitters disagreeing would mean the
+parser has to tolerate both.
+
+### A provenance question the maintainer owns
+
+The frames this measures are other operators' traffic on a public reflector.
+`FIXTURES.md` allows fixtures from "packet captures of our own sessions", which
+is not quite what a passive listen produces, so **do not check a capture-derived
+`live-*.hex` fixture in from this run without deciding that question first.**
+Nothing forces the issue: OQ-7 needs only the length, the verdict lives in the
+requirements and this document, and once the number is known the fixture can be
+hand-built from the specification — `FIXTURES.md` source 1, the preferred one
+anyway.
+
+**In the event, that is what happened.** No `live-*.hex` was cut from the
+2026-08-11 run. `reflector-stream.hex` and `reflector-stream-encrypted.hex` are
+hand-built from the specification with only the LICH width taken from the
+observation, so no third party's traffic is in the repository and the provenance
+question is still open rather than answered by default. The capture itself sits
+in the workspace with the AllStar ones, unversioned. Its provenance is recorded
+in the OQ-7 row of `DEVELOPMENT-PLAN.md`, which is what a fixture header would
+otherwise have carried.
