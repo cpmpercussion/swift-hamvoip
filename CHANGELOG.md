@@ -8,6 +8,99 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-11
+
+M17 stream mode. `M17Kit` goes from parsing reflector control traffic to
+producing and consuming stream-mode audio, with a public `M17Client` and a CLI
+harness to validate it. **None of the M17 audio path has been run against a
+real reflector** — see "Known limitations".
+
+### Resolved
+
+- **OQ-7 — the M17 IP stream frame is 54 bytes, not 56.** Settled on air on
+  2026-08-11 against a live reflector, receive-only. The LICH is 28 bytes, the
+  LSF *without* its own CRC; Table 27's stated 240 bits would make it 56. One
+  over of 52 consecutive datagrams, and three independent readings agree and
+  only on this layout: every datagram was 54 bytes, FN counted 0…51 at offset
+  34, and the trailing CRC16 closed over the preceding 52 bytes in 52 of 52.
+  That third test is what rules out a truncated 56-byte frame. Recorded as an
+  observation about what M17-over-IP carries rather than as a correction to the
+  specification. Evidence in the OQ-7 row of `docs/DEVELOPMENT-PLAN.md`.
+
+### Added
+
+**`M17Kit`** — stream mode (M17-4, M17-5).
+
+- `M17CRC16` and whole-datagram CRC validation on `M17StreamPacket`
+  (`computedCRC`, `isCRCValid`) plus a CRC-computing initialiser for transmit.
+  Parsing deliberately does **not** enforce the CRC: a corrupt datagram is
+  still parsed and reported, so a receiver can count or conceal it rather than
+  have it vanish into a thrown error.
+- `Codec2VoiceCodec` — Codec2 3200 as a `RadioCore.VoiceCodec` (FR-2.4), bound
+  directly to the XCFramework. No C shim target proved necessary. Dynamic
+  linking only (LP-4).
+- `M17StreamPayload`, `M17StreamTransmitter`, `M17StreamReceiver` — stream
+  sequencing as clock-free value types, mirroring the IAX2 pair. The 16-byte
+  payload is two 8-byte codec frames; both halves are queued as separate 20 ms
+  slots, so a lost datagram conceals as two ordinary gaps and the rest of the
+  stack keeps its 20 ms tick.
+- `M17FrameNumberExpander` — FN is 15 bits and wraps every 21.8 minutes.
+- `M17Client` — conforms to `NetworkClient`, composing the reflector link,
+  codec, jitter buffer, transmit watchdog (SF-1) and received-audio leveller
+  (AU-4). The 20/40 ms mismatch is absorbed here: `send(pcm:)` takes the same
+  20 ms frame the IAX2 path takes and holds every other one back.
+- `M17ReflectorClient.send(_:)`, and `M17Address.broadcast`.
+
+**`hamvoip-cli`**
+
+- `m17` subcommand — link a reflector module and pass audio. The live
+  validation harness, and compiled out with a pointer to the build script when
+  `Codec2.xcframework` is absent.
+
+### Changed
+
+- **`Package.swift` now adapts to whether `Codec2.xcframework` is present.**
+  The framework is never committed, but CI builds a bare checkout and a
+  `binaryTarget` naming a missing path is a hard manifest error. The manifest
+  probes for it and adds the binary target plus a `CODEC2` compilation
+  condition only when it is there. Stream sequencing is written against
+  `RadioCore.VoiceCodec` rather than against codec2, so it is covered either
+  way — 616 tests without the framework, 624 with it.
+
+  ⚠️ SwiftPM caches the evaluated manifest against its *contents*, not against
+  the filesystem this probe reads. Run `swift package reset` after building or
+  deleting the framework, or the next build can fail with `local binary target
+  'Codec2' … does not contain a binary artifact`. A fresh checkout is
+  unaffected.
+- `TransmitStateBox` moved from `IAX2Kit` to `RadioCore`, now that both clients
+  need it. Source-compatible for anything outside the package, which could not
+  see it before.
+
+### Known limitations
+
+Everything listed under 0.1.0 still applies except the M17 entry, which is
+superseded by:
+
+- **The M17 audio path has never been run against a real reflector.** Not
+  once. The 2026-08-11 on-air session that settled OQ-7 was receive-only and
+  had no codec in it. M17 transmit has never been sent to a reflector, the
+  decoded audio has never been listened to, and whether a reflector accepts our
+  stream at all — the stream ID, the `BROADCAST` destination address, the LSF
+  fields — is reasoned from the specification rather than observed.
+  `hamvoip-cli m17` exists to settle exactly that, and says so when it starts.
+  Treat M17 as believed-working, not as working.
+- **The M17 CRC is under-specified by its own specification.** The polynomial
+  (`0x5935`) and initial value (`0xFFFF`) are stated; bit order and the
+  presence of a final XOR are not, and those are also required to determine a
+  CRC. They were settled by measurement against the OQ-7 capture — of the eight
+  combinations, exactly one validates the captured frames and it validates all
+  52 — and are documented as an observation in
+  `docs/reference/PROVENANCE.md`, not as a quotation.
+- **Building M17 audio needs a manual step.** `Codec2.xcframework` is not
+  committed; run `scripts/build-codec2-xcframework.sh` (needs `cmake`) before
+  the codec, its tests, or `hamvoip-cli m17` will build. See
+  `docs/reference/CODEC2-XCFRAMEWORK.md`.
+
 ## [0.1.0] — 2026-08-10
 
 First release. The AllStarLink/IAX2 path is complete and has been validated
@@ -170,5 +263,6 @@ DMR, System Fusion (YSF), D-STAR, P25 and NXDN. All require AMBE or AMBE+2,
 which is patent-encumbered (NG-1). No MMDVM or USB modem support (NG-2), no MFi
 (NG-3), and no RF layer (NG-4).
 
-[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/cpmpercussion/swift-hamvoip/releases/tag/v0.1.0

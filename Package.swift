@@ -1,7 +1,38 @@
 // swift-tools-version: 5.9
 // SPDX-License-Identifier: Apache-2.0
 
+import Foundation
 import PackageDescription
+
+// MARK: - Codec2 (M17-4)
+//
+// The Codec2 XCFramework is built by `scripts/build-codec2-xcframework.sh` and
+// is deliberately **never committed**: 7.6 MB of LGPL-2.1 binary, and
+// `.gitignore` covers `*.xcframework` precisely so it cannot be. That leaves
+// the manifest with a problem, because CI checks out a bare tree and runs
+// `swift build && swift test`, and a `binaryTarget` pointing at a path that
+// does not exist is a hard manifest error.
+//
+// So the manifest adapts. When the framework is present the real codec is
+// compiled in and `CODEC2` is defined; when it is not, the package still
+// builds and every test that does not need codec2 still runs.
+//
+// This is why M17-4's stream sequencing is written against
+// `RadioCore.VoiceCodec` rather than against codec2 directly: the framing,
+// the frame numbering and the payload split are covered by tests that pass
+// with or without the framework, and only the codec conformance itself is
+// conditional. Run the script to compile and test that last piece.
+//
+// ⚠️ One trap, and it is SwiftPM's rather than ours: the evaluated manifest is
+// cached against the manifest's *contents*, not against the filesystem this
+// probe reads. So building or deleting the XCFramework does not on its own
+// invalidate the cache, and the next build can fail with "local binary target
+// 'Codec2' … does not contain a binary artifact". Run `swift package reset`
+// (or delete `.build/`) after adding or removing the framework. A fresh
+// checkout — CI, and anyone cloning — is unaffected, having no cache at all.
+let codec2FrameworkName = "Codec2.xcframework"
+let codec2IsBuilt = FileManager.default.fileExists(
+    atPath: Context.packageDirectory + "/" + codec2FrameworkName)
 
 let package = Package(
     name: "HamVoIP",
@@ -33,8 +64,13 @@ let package = Package(
         // AllStarLink via IAX2 (RFC 5456). Priority 1.
         .target(name: "IAX2Kit", dependencies: ["RadioCore"]),
 
-        // M17 reflector protocol. Priority 3 — needs Codec2 XCFramework (OQ-2).
-        .target(name: "M17Kit", dependencies: ["RadioCore"]),
+        // M17 reflector protocol and stream mode. Priority 3.
+        // The Codec2 dependency is conditional — see the note at the top.
+        .target(
+            name: "M17Kit",
+            dependencies: ["RadioCore"] + (codec2IsBuilt ? ["Codec2"] : []),
+            swiftSettings: codec2IsBuilt ? [.define("CODEC2")] : []
+        ),
 
         // Test-only helpers shared by every test target: fixture loading and
         // the mock transport. Deliberately not exposed as a product — nothing
@@ -50,7 +86,8 @@ let package = Package(
                 "M17Kit",
                 "RadioCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
-            ]
+            ],
+            swiftSettings: codec2IsBuilt ? [.define("CODEC2")] : []
         ),
 
         .testTarget(
@@ -66,7 +103,8 @@ let package = Package(
         .testTarget(
             name: "M17KitTests",
             dependencies: ["M17Kit", "RadioCore", "TestSupport"],
-            resources: [.copy("Fixtures")]
+            resources: [.copy("Fixtures")],
+            swiftSettings: codec2IsBuilt ? [.define("CODEC2")] : []
         ),
 
         // The pure logic inside the CLI: argument validation, the level meter,
@@ -80,3 +118,12 @@ let package = Package(
         ),
     ]
 )
+
+// Appended rather than written inline, because a `binaryTarget` naming a path
+// that does not exist fails the manifest outright — it cannot be guarded from
+// inside the target list.
+if codec2IsBuilt {
+    package.targets.append(
+        .binaryTarget(name: "Codec2", path: codec2FrameworkName)
+    )
+}

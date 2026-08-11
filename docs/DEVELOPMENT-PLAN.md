@@ -867,18 +867,61 @@ cipher enum, no key parameter and no decrypt path, and M17-4 must not add one
 M17-4's job is the Codec2 3200 wiring (2 × 64-bit frames per 16-byte payload,
 confirmed by the M17-1 spike) and TX/RX stream sequencing.
 
+✅ **Done, except for live validation.** What landed:
+
+- `M17CRC16`, `M17StreamPacket.isCRCValid`, and a CRC-computing initialiser.
+- `Codec2VoiceCodec` — Codec2 3200 as a `RadioCore.VoiceCodec`, bound straight
+  to the XCFramework. **No C shim target was needed**: the generated module map
+  imports into Swift directly. Dynamic linking only (LP-4).
+- `M17StreamPayload` — the 16-byte payload is two 8-byte codec frames, 40 ms.
+  Both halves are queued as separate 20 ms slots, so one lost datagram conceals
+  as two ordinary gaps and the rest of the stack keeps its 20 ms tick.
+- `M17FrameNumberExpander` — FN is 15 bits and wraps every 21.8 minutes.
+- `M17StreamTransmitter` / `M17StreamReceiver` — value types, no clock and no
+  task, mirroring `IAX2VoiceTransmitter` / `IAX2VoiceReceiver`.
+
+**`Package.swift` is conditional, and this is the part to know about.** The
+XCFramework is never committed, but CI builds a bare checkout, and a
+`binaryTarget` pointing at a missing path is a hard manifest error. So the
+manifest probes for `Codec2.xcframework` and adds the binary target plus a
+`CODEC2` condition only when it is there. The sequencing is written against
+`VoiceCodec`, so it is tested either way — 597 tests without the framework,
+605 with it. Run `swift package reset` after building or deleting the
+framework; SwiftPM caches the manifest against its contents, not against the
+filesystem the probe reads.
+
+**Not done: anything requiring air.** No live transmit to a reflector has been
+attempted — M17 TX has never been exercised against a real reflector, and the
+audio path has not been listened to. That is the M17-5 / live-validation
+boundary, not something another test can settle.
+
 ✅ **OQ-7 is settled — 54 bytes, resolved 2026-08-11 against a live reflector**;
 see the open questions table for the evidence. The frame size is no longer an
 assumption, so stream TX may be built on it.
 
 Two things M17-4 inherits from that:
 
-- **The single CRC is the whole-datagram one, and nothing verifies it yet.**
-  `M17StreamPacket.crc` is carried through verbatim. The polynomial is
-  confirmed against the capture: M17 CRC16, polynomial `0x5935`, initial value
-  `0xFFFF`, computed over the preceding 52 bytes, valid in 52 of 52 observed
-  frames. M17-4 owns implementing and verifying it. There is no LSF CRC to
-  verify — it is not transmitted.
+- **The single CRC is the whole-datagram one.** ✅ **Done** — `M17CRC16` plus
+  `M17StreamPacket.computedCRC` / `.isCRCValid`, and a CRC-computing
+  initialiser for TX. There is no LSF CRC to verify; it is not transmitted.
+
+  Worth recording, because it came out of doing the work: **the spec pins the
+  polynomial (`0x5935`) and the initial value (`0xFFFF`) but not the rest of
+  what a CRC needs** — bit order, and whether a final XOR applies. Those were
+  settled the same way OQ-7 was, by measuring. Of the eight combinations of
+  reflected input, reflected output and final XOR, exactly one closes over the
+  first 52 bytes of a captured stream datagram to give its trailing two, and it
+  does so in **52 of 52** frames of the OQ-7 capture; the other seven match
+  none. The answer is MSB-first, no reflection either way, no final XOR. The
+  Swift implementation was then run against those same 52 frames and validates
+  all 52. For the conventional `"123456789"` vector this parameterisation gives
+  `0x772B`, which `M17CRC16.checkValue` pins — that constant is *not* in the
+  spec text we hold, and is recorded because it is the cheapest way to catch a
+  mis-transcribed table.
+
+  Parsing deliberately does **not** enforce the CRC: a corrupt datagram is
+  still parsed and reported through `isCRCValid`, so a receiver can count or
+  conceal it rather than have it vanish into a thrown error.
 - **`hamvoip-cli oq7` stays useful** as a re-check against a second reflector,
   and it still measures below the parser: `RecordingTransport` taps the
   `DatagramTransport` seam rather than `M17ReflectorClient.events`, because the
@@ -892,6 +935,39 @@ Two things M17-4 inherits from that:
 composes jitter buffer + Codec2 + watchdog + leveller; fixture-driven
 end-to-end test; then a CLI-1 subcommand (`hamvoip-cli m17 …`) for live
 human validation.
+
+✅ **Code done; the live validation is not, and cannot be done from here.**
+
+- `M17Client` — actor, conforms to `NetworkClient`, composes
+  `M17ReflectorClient` + `M17StreamTransmitter`/`Receiver` + `JitterBuffer` +
+  Codec2 + `TransmitWatchdog` + `AudioLeveller`. 14 tests on `MockTransport`
+  and `ManualTestClock`; no socket (AU-5).
+- `M17ReflectorClient.send(_:)` — the link layer's outbound media path, which
+  M17-3 did not need and so did not have.
+- `hamvoip-cli m17 --host … --module C --callsign …` — the live harness.
+- `TransmitStateBox` moved from `IAX2Kit` into `RadioCore`, since both clients
+  now need it. It was always a RadioCore concern.
+
+**The 20/40 ms mismatch is handled inside `M17Client`.** Everything else in the
+stack works in 20 ms frames; an M17 datagram carries 40 ms. `send(pcm:)` takes
+the same 20 ms frame the IAX2 path takes and holds every other one back,
+returning `nil` on the odd calls. Callers — including `AudioPipeline` — are
+unchanged.
+
+⛔ **What is left is a human with a licence and a radio.** Nothing in this
+repository can settle it:
+
+1. **M17 transmit has never been sent to a real reflector.** Not once. RX was
+   confirmed on air on 2026-08-11 (the OQ-7 run) but that was receive-only and
+   had no codec in it.
+2. **The audio path has never been listened to.** Codec2 round-trips with its
+   energy intact under test, which is not the same as being intelligible.
+3. **Whether a reflector accepts our stream at all** — the SID, the DST we send
+   (`BROADCAST`; the module is chosen by `CONN`, not by DST), and the LSF
+   fields are all reasoned from the specification and none has been confirmed
+   by a reflector relaying our audio to someone who heard it.
+
+Until then M17 is "believed working", and the CLI's banner says so.
 
 ---
 

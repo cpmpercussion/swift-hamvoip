@@ -23,11 +23,14 @@ struct HamVoIPCLI: AsyncParsableCommand {
         commandName: "hamvoip-cli",
         abstract: "Drive swift-hamvoip against a real AllStarLink node from a terminal.",
         discussion: """
-            Three subcommands:
+            Four subcommands:
 
               connect  place a call and work it — spacebar for PTT, DTMF for node control,
                        level meters for both directions, and the SF-1 transmit watchdog
                        shown when it fires.
+              m17      link an M17 reflector module and pass audio (Codec2 3200).
+                       NOT YET VALIDATED ON AIR — M17 transmit has never been sent to a
+                       real reflector. Needs Codec2.xcframework; see docs/CLI.md.
               oq5      settle OQ-5 — how a real node wants the MD5 RESULT information
                        element encoded — by asking one, instead of by reading somebody
                        else's implementation.
@@ -41,5 +44,7 @@ struct HamVoIPCLI: AsyncParsableCommand {
             Full documentation, including the M2 sign-off checklist: docs/CLI.md
             """,
         version: "0.1.0 (CLI-1)",
-        subcommands: [ConnectCommand.self, OQ5Command.self, OQ7Command.self])
+        subcommands: [
+            ConnectCommand.self, M17Command.self, OQ5Command.self, OQ7Command.self,
+        ])
 }

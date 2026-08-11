@@ -240,6 +240,94 @@ final class M17ReflectorProtocolTests: XCTestCase {
         XCTAssertEqual(try M17ReflectorPacket.parse(data), .stream(packet))
     }
 
+    // MARK: - Stream CRC (M17-4)
+
+    /// A packet built for transmission carries a CRC that checks, and survives
+    /// a trip through the wire format still checking.
+    func testTransmitInitialiserComputesACRCThatValidates() throws {
+        let packet = try M17StreamPacket(
+            streamID: 0x1234,
+            destination: M17Address(bytes: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
+            source: clientAddress(),
+            type: M17StreamType(rawValue: 0x0005),
+            metadata: Data(repeating: 0, count: 14),
+            frameNumber: 0x0001,
+            payload: Data((0...15).map(UInt8.init)))
+
+        XCTAssertTrue(packet.isCRCValid)
+        XCTAssertEqual(packet.crc, packet.computedCRC)
+
+        let reparsed = try M17StreamPacket.parse(packet.data)
+        XCTAssertEqual(reparsed, packet)
+        XCTAssertTrue(reparsed.isCRCValid, "the CRC must survive serialization")
+    }
+
+    /// The CRC closes over bytes 0-51 — everything but the CRC field itself.
+    /// This is the layout claim OQ-7's third reading rested on.
+    func testTheCRCClosesOverEveryByteAheadOfIt() throws {
+        let packet = try M17StreamPacket(
+            streamID: 0xABCD,
+            destination: try reflectorAddress(),
+            source: clientAddress(),
+            type: M17StreamType(rawValue: 0x0005),
+            metadata: Data(repeating: 0x5A, count: 14),
+            frameNumber: 0x8003,
+            payload: Data(repeating: 0xC3, count: 16))
+
+        let datagram = packet.data
+        XCTAssertEqual(datagram.count, 54)
+        XCTAssertEqual(packet.computedCRC, M17CRC16.compute(datagram.prefix(52)))
+        XCTAssertEqual(
+            packet.crc,
+            (UInt16(datagram[52]) << 8) | UInt16(datagram[53]),
+            "the CRC is written big-endian into the last two bytes")
+    }
+
+    /// Corruption anywhere in the datagram is caught. Byte-granular rather
+    /// than bit-granular, because this is about the wiring into the packet —
+    /// `M17CRC16Tests` covers single-bit detection.
+    func testCorruptingAnyByteInvalidatesTheCRC() throws {
+        let good = try M17StreamPacket(
+            streamID: 0x0042,
+            destination: try reflectorAddress(),
+            source: clientAddress(),
+            type: M17StreamType(rawValue: 0x0005),
+            metadata: Data(repeating: 0, count: 14),
+            frameNumber: 0x0007,
+            payload: Data((0...15).map(UInt8.init))).data
+
+        for index in 0..<54 {
+            var corrupted = [UInt8](good)
+            corrupted[index] ^= 0xFF
+            // A corrupted magic is not a stream datagram at all; the CRC never
+            // gets a say, which is correct.
+            guard index >= M17PacketMagic.byteCount else {
+                XCTAssertThrowsError(try M17StreamPacket.parse(Data(corrupted)))
+                continue
+            }
+            let packet = try M17StreamPacket.parse(Data(corrupted))
+            XCTAssertFalse(packet.isCRCValid, "corruption at byte \(index) went unnoticed")
+        }
+    }
+
+    /// Parsing does not enforce the CRC, deliberately: a corrupt frame is
+    /// still delivered, with `isCRCValid` false, so a receiver can count it or
+    /// conceal it rather than have it vanish into a thrown error.
+    ///
+    /// The hand-built `reflector-stream.hex` is the convenient example — its
+    /// CRC field is the documented placeholder `0xBEEF`, not a real CRC.
+    func testParsingDoesNotEnforceTheCRC() throws {
+        let packet = try M17StreamPacket.parse(fixture("reflector-stream.hex"))
+
+        XCTAssertEqual(packet.crc, 0xBEEF)
+        XCTAssertFalse(packet.isCRCValid, "premise: the fixture's CRC is a placeholder")
+        XCTAssertNotEqual(packet.computedCRC, 0xBEEF)
+
+        // Parsed anyway, with every other field intact.
+        XCTAssertEqual(packet.source.callsign, "AB1CD")
+        XCTAssertEqual(packet.frameNumber, 0x0001)
+    }
+
     // MARK: - Stream header
 
     func testStreamHeaderFieldsMatchTheSpecificationLayout() throws {

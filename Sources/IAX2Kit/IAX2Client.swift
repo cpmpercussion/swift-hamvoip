@@ -927,29 +927,5 @@ public actor IAX2Client: NetworkClient {
     }
 }
 
-// MARK: - Nonisolated state storage
-
-/// A lock-guarded `TransmitState`, so ``IAX2Client/state`` can satisfy
-/// `NetworkClient`'s synchronous requirement from an actor.
-///
-/// Small and deliberate: an actor cannot satisfy a non-`async` protocol
-/// requirement with an isolated property, and making the requirement `async`
-/// would push an `await` into every SwiftUI body that wants to know whether it
-/// is transmitting.
-final class TransmitStateBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var storage: TransmitState = .idle
-
-    var value: TransmitState {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return storage
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            storage = newValue
-        }
-    }
-}
+// `TransmitStateBox` now lives in RadioCore, so M17Client can use it too
+// (M17-5). It was always a RadioCore concern — it guards a `TransmitState`.
