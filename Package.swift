@@ -47,6 +47,7 @@ let package = Package(
             name: "hamvoip-cli",
             dependencies: [
                 "IAX2Kit",
+                "M17Kit",
                 "RadioCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
@@ -75,7 +76,7 @@ let package = Package(
         // rather than an I/O call lives in a value type with a test.
         .testTarget(
             name: "HamVoIPCLITests",
-            dependencies: ["hamvoip-cli", "IAX2Kit", "RadioCore"]
+            dependencies: ["hamvoip-cli", "IAX2Kit", "M17Kit", "RadioCore", "TestSupport"]
         ),
     ]
 )

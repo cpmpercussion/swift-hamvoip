@@ -219,6 +219,8 @@ is about.
 
 ## 4. The OQ-5 experiment
 
+§7 does the same thing for OQ-7, against an M17 reflector instead of a node.
+
 ### The question
 
 RFC 5456 §8.6.15 says the MD5 RESULT information element (`0x10`) "carries the
@@ -532,8 +534,117 @@ Unit-tested (`Tests/HamVoIPCLITests/`, no hardware, no network):
 * **Raw mode** — against a real `posix_openpt` pseudo-terminal: the flags raw
   mode sets, and that leaving restores every flag and control character
   exactly, idempotently, and repeatedly.
+* **The OQ-7 tally** — both readings of Table 27 synthesised field by field and
+  told apart; that silence, mixed lengths, an unexpected length and a
+  length-versus-sequencing contradiction all refuse to become a verdict; and,
+  through the whole stack against `MockTransport`, that a 54-byte reality
+  reaches the tally even though `M17ReflectorClient` discards every frame of it.
 
 Only a live node can test: whether audio is intelligible, whether levels are
 right, whether PTT edges sound clean, whether the node accepts our
 authentication, and whether DTMF reaches its command processor. That is what
 §5 is for.
+
+---
+
+## 7. The OQ-7 experiment
+
+### The question
+
+Is an M17 IP stream frame 56 bytes or 54?
+
+Table 27 of the reflector chapter gives LICH as 240 bits. That is the whole
+30-byte LSF of Part I Table 3.1 — DST 48, SRC 48, TYPE 16, META 112, CRC 16 —
+and the arithmetic follows: 4 + 2 + 30 + 2 + 16 + 2 = **56**. The figure quoted
+widely elsewhere is 54, which is the same layout with a 28-byte LICH, i.e. the
+LSF *without* its own CRC. Both readings are consistent with the text, so the
+document cannot settle it, and LP-2 forbids reading an implementation to find
+out. `M17StreamPacket` implements 56 and says so in its doc comment, naming
+`byteCount` as the single place to change.
+
+M17-4 must not build stream transmit on an unverified frame size. So the
+question goes to a reflector, which answers it every time somebody keys up.
+
+### Why it cannot listen to `M17ReflectorClient.events`
+
+Because `M17ReflectorClient` drops datagrams it cannot parse, and
+`M17StreamPacket.parse` requires exactly `byteCount` bytes. If the answer is
+54, every stream datagram is discarded before it reaches `events`, and a harness
+built on `events` reports a reflector that sent no audio at all — the wrong
+answer, arrived at with confidence, from code that is behaving correctly.
+
+`RecordingTransport` therefore taps the `DatagramTransport` seam and measures
+every datagram *below* the parser. `RecordingTransportTests` pins this down so
+the harness cannot later be "simplified" into uselessness.
+
+### Running it
+
+Receive-only. It sends CONN, answers PING with PONG, and sends DISC on the way
+out; it never sends a stream packet, and there is no transmit path in `M17Kit`
+for it to use even if it wanted one. Your callsign does go out in CONN, so you
+will appear on the reflector's dashboard as a connected station — which is
+normal, and is also how you confirm the link from the other side.
+
+```sh
+# Listen for five minutes on a busy module.
+swift run hamvoip-cli oq7 --reflector <host> --module C --callsign VK1XYZ
+
+# Until Ctrl-C, stopping early once 40 frames have arrived, with a report file.
+swift run hamvoip-cli oq7 --reflector <host> --module C --callsign VK1XYZ \
+    --duration 0 --min-frames 40 --report oq7-result.txt
+```
+
+Ctrl-C ends the run *with* a verdict rather than killing it before the report
+prints. If the reflector answers NACK, try a module it actually offers and
+`--source-module`, which appends a module letter to your own address the way the
+specification's `"A1BCD D"` example does.
+
+For a capture that can be cut into a fixture, run `tcpdump` alongside:
+
+```sh
+sudo tcpdump -i any -w m17-oq7.pcap 'udp port 17000'
+```
+
+### What it needs
+
+Somebody talking. A silent module answers nothing, and the verdict will say so
+rather than guess. Twenty or thirty frames of a single over is plenty — under
+two seconds of speech.
+
+### Reading the output
+
+Datagram length is the primary evidence: a UDP datagram is as long as it is.
+The corroboration is whether the two bytes at each reading's FN offset behave
+like a frame counter — a real FN increments by one per frame within a stream,
+while at the wrong offset the same bytes are an LSF CRC or Codec 2 payload and
+count for nothing. That second test is what distinguishes a genuine 54-byte
+frame from a 56-byte frame that something truncated.
+
+| Verdict | Meaning |
+|---|---|
+| `SETTLED` | One consistent length, and FN counts at that reading's offset. This is the answer. |
+| `LENGTH ONLY` | One consistent length, too little traffic to check FN. Answers the question as asked; run longer to corroborate. |
+| `CONTRADICTORY` | Length says one reading, sequencing the other. **Do not settle OQ-7 on it** — keep the capture and read it by hand. |
+| `MIXED` | Stream datagrams arrived in more than one length. Worth knowing whether they sort by transmitting client. |
+| `UNEXPECTED` | A consistent length that is neither 54 nor 56. Read the datagram by hand before touching any constant. |
+| `INCONCLUSIVE` | The link worked; nobody talked. |
+
+### What to do with the answer
+
+If it is 56, record the verdict against OQ-7 in `DESIGN-REQUIREMENTS.md` and the
+plan, and M17-4 proceeds with `M17StreamPacket` unchanged. If it is 54, change
+`M17StreamPacket.byteCount` and the field offsets in `M17ReflectorProtocol.swift`
+— the type's doc comment anticipated exactly this — adjust the hand-built
+spec fixtures, and say in the PR that the change is driven by an observation
+rather than by the document.
+
+### A provenance question the maintainer owns
+
+The frames this measures are other operators' traffic on a public reflector.
+`FIXTURES.md` allows fixtures from "packet captures of our own sessions", which
+is not quite what a passive listen produces, so **do not check a capture-derived
+`live-*.hex` fixture in from this run without deciding that question first.**
+Nothing forces the issue: OQ-7 needs only the length, the verdict lives in the
+requirements and this document, and once the number is known the fixture can be
+hand-built from the specification — `FIXTURES.md` source 1, the preferred one
+anyway.
