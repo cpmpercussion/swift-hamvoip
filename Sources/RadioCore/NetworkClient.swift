@@ -24,3 +24,30 @@ public protocol NetworkClient: AnyObject, Sendable {
     func startTransmit() async throws
     func stopTransmit() async
 }
+
+/// A lock-guarded ``TransmitState``, so an actor's ``NetworkClient/state`` can
+/// satisfy the protocol's synchronous requirement.
+///
+/// Small and deliberate: an actor cannot satisfy a non-`async` protocol
+/// requirement with an isolated property, and making the requirement `async`
+/// would push an `await` into every SwiftUI body that wants to know whether it
+/// is transmitting. Shared by `IAX2Client` and `M17Client`.
+public final class TransmitStateBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: TransmitState = .idle
+
+    public init() {}
+
+    public var value: TransmitState {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            storage = newValue
+        }
+    }
+}

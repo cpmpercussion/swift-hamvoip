@@ -185,6 +185,20 @@ public struct M17Address: Hashable, Sendable, CustomStringConvertible {
     /// The 48-bit base-40 address. Bits above bit 47 are always zero.
     public let value: UInt64
 
+    /// All ones — BROADCAST (Part I Table A.2).
+    ///
+    /// What `M17Client` puts in a stream frame's DST when transmitting to a
+    /// reflector: the module is chosen by the `CONN` that set the link up, not
+    /// by DST, and the reflector's own callsign is not something a client
+    /// knows from a host name. The hand-built `reflector-stream.hex` fixture
+    /// makes the same choice.
+    public static let broadcast = M17Address(unchecked: 0x0000_FFFF_FFFF_FFFF)
+
+    /// For the compile-time constants above, which cannot throw.
+    private init(unchecked value: UInt64) {
+        self.value = value
+    }
+
     /// - Throws: `M17PacketError.invalidAddress` if `value` does not fit in
     ///   48 bits.
     public init(value: UInt64) throws {

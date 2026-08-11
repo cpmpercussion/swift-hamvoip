@@ -300,6 +300,24 @@ public actor M17ReflectorClient {
         try await awaitConnectOutcome()
     }
 
+    /// Sends one stream datagram to the reflector (M17-5).
+    ///
+    /// The link layer's only outbound media path. It does not build the
+    /// packet, number it or CRC it — that is `M17StreamTransmitter`'s job, and
+    /// keeping it there is what lets the sequencing be tested without a
+    /// transport.
+    ///
+    /// - Throws: `M17ReflectorClientError.invalidTransition` unless the link is
+    ///   up. Transmitting into a reflector that has not acknowledged the link
+    ///   is not a recoverable condition to paper over — it means PTT and the
+    ///   link state have diverged, and the fail-safe direction is to refuse.
+    public func send(_ packet: M17StreamPacket) async throws {
+        guard state == .linked else {
+            throw M17ReflectorClientError.invalidTransition(from: state, operation: "send")
+        }
+        try await transport.send(packet.data)
+    }
+
     /// Sends `DISC` and tears the link down.
     ///
     /// - Throws: `M17ReflectorClientError.invalidTransition` if there is no

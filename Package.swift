@@ -86,7 +86,8 @@ let package = Package(
                 "M17Kit",
                 "RadioCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
-            ]
+            ],
+            swiftSettings: codec2IsBuilt ? [.define("CODEC2")] : []
         ),
 
         .testTarget(
