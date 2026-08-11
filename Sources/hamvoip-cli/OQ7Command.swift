@@ -65,7 +65,11 @@ struct OQ7Command: AsyncParsableCommand {
 
             To keep a capture of the run, run tcpdump alongside:
 
-              sudo tcpdump -i any -w m17-oq7.pcap 'udp port 17000'
+              sudo tcpdump -i any -w ../experiment-data/m17-oq7.pcap 'udp port 17000'
+
+            Write captures and --report files outside the repository — both name the \
+            callsigns they heard. .gitignore covers them as a backstop, not as \
+            permission to leave them in the tree. See docs/CLI.md §7.
             """)
 
     @Option(name: .long, help: ArgumentHelp(

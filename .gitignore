@@ -10,3 +10,8 @@ Package.resolved
 
 # Agent worktrees created by tooling; never part of the source tree.
 .claude/worktrees/
+
+# Experiment output. These name the callsigns they heard, so they belong in the
+# workspace's experiment-data/, not here — this is a backstop, not the rule.
+*.pcap
+*-result.txt

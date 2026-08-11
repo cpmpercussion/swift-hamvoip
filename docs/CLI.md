@@ -607,8 +607,18 @@ swift run hamvoip-cli oq7 --reflector <host> --module C --callsign VK1XYZ
 
 # Until Ctrl-C, stopping early once 40 frames have arrived, with a report file.
 swift run hamvoip-cli oq7 --reflector <host> --module C --callsign VK1XYZ \
-    --duration 0 --min-frames 40 --report oq7-result.txt
+    --duration 0 --min-frames 40 --report ../experiment-data/oq7-result.txt
 ```
+
+**Write the report outside the repository.** A report names the callsigns it
+heard, so it carries other operators' traffic. The workspace keeps
+`experiment-data/` for exactly this — see the workspace `CLAUDE.md`. The paths
+above assume you are running from the `swift-hamvoip` checkout with that
+directory alongside it.
+
+`.gitignore` also covers `*.pcap` and `*-result.txt`, but treat that as a
+backstop for a mistake rather than permission to leave either in the tree: an
+ignored file is still sitting in a working directory that gets `git clean`ed.
 
 Ctrl-C ends the run *with* a verdict rather than killing it before the report
 prints. If the reflector answers NACK, try a module it actually offers and
@@ -620,7 +630,10 @@ independently checked against — run `tcpdump` alongside. Read the provenance n
 at the end of this section before cutting a fixture from it:
 
 ```sh
-sudo tcpdump -i any -w m17-oq7.pcap 'udp port 17000'
+sudo tcpdump -i any -w ../experiment-data/m17-oq7.pcap 'udp port 17000'
+
+# tcpdump under sudo writes a root-owned file; hand it back afterwards.
+sudo chown "$(id -un):staff" ../experiment-data/m17-oq7.pcap
 ```
 
 ### What it needs
