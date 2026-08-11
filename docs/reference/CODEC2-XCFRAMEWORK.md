@@ -221,8 +221,29 @@ simulator `platform 7, minos 16.0`; both against SDK 26.5.
 
 ## How the app target embeds and signs it
 
-M17-4 will add a thin C shim target that links against this framework; the app
-target that ships it must:
+**Update (M17-4, 2026-08-11): no C shim target was needed.** The plan
+anticipated one, but the module map the script generates imports straight into
+Swift — `import Codec2`, call `codec2_create` and friends directly — so
+`M17Kit/Codec2VoiceCodec.swift` binds to the framework with no intervening C
+target. The `-fmodules` check the script already performs is exactly the thing
+that predicted this would work.
+
+How the SwiftPM side is wired, and why it is conditional: the XCFramework is
+never committed, but CI checks out a bare tree and runs `swift build && swift
+test`, and a `binaryTarget` naming a path that does not exist is a hard
+manifest error. So `Package.swift` probes for `Codec2.xcframework` and adds the
+binary target, the `M17Kit` dependency and a `CODEC2` compilation condition
+only when it is present. M17-4's stream sequencing is written against
+`RadioCore.VoiceCodec` so the framing, frame numbering and payload split are
+tested either way; only `Codec2VoiceCodec` and its tests are conditional.
+
+⚠️ SwiftPM caches the evaluated manifest against its *contents*, not against
+the filesystem this probe reads, so **run `swift package reset` after building
+or deleting the framework** — otherwise the next build can fail with `local
+binary target 'Codec2' … does not contain a binary artifact`. A fresh checkout
+has no cache and is unaffected.
+
+The app target that ships it must still:
 
 1. Add `Codec2.xcframework` under **Frameworks, Libraries, and Embedded
    Content** with **Embed & Sign**. Not *Do Not Embed* — that would break the

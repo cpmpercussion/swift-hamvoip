@@ -867,6 +867,34 @@ cipher enum, no key parameter and no decrypt path, and M17-4 must not add one
 M17-4's job is the Codec2 3200 wiring (2 × 64-bit frames per 16-byte payload,
 confirmed by the M17-1 spike) and TX/RX stream sequencing.
 
+✅ **Done, except for live validation.** What landed:
+
+- `M17CRC16`, `M17StreamPacket.isCRCValid`, and a CRC-computing initialiser.
+- `Codec2VoiceCodec` — Codec2 3200 as a `RadioCore.VoiceCodec`, bound straight
+  to the XCFramework. **No C shim target was needed**: the generated module map
+  imports into Swift directly. Dynamic linking only (LP-4).
+- `M17StreamPayload` — the 16-byte payload is two 8-byte codec frames, 40 ms.
+  Both halves are queued as separate 20 ms slots, so one lost datagram conceals
+  as two ordinary gaps and the rest of the stack keeps its 20 ms tick.
+- `M17FrameNumberExpander` — FN is 15 bits and wraps every 21.8 minutes.
+- `M17StreamTransmitter` / `M17StreamReceiver` — value types, no clock and no
+  task, mirroring `IAX2VoiceTransmitter` / `IAX2VoiceReceiver`.
+
+**`Package.swift` is conditional, and this is the part to know about.** The
+XCFramework is never committed, but CI builds a bare checkout, and a
+`binaryTarget` pointing at a missing path is a hard manifest error. So the
+manifest probes for `Codec2.xcframework` and adds the binary target plus a
+`CODEC2` condition only when it is there. The sequencing is written against
+`VoiceCodec`, so it is tested either way — 597 tests without the framework,
+605 with it. Run `swift package reset` after building or deleting the
+framework; SwiftPM caches the manifest against its contents, not against the
+filesystem the probe reads.
+
+**Not done: anything requiring air.** No live transmit to a reflector has been
+attempted — M17 TX has never been exercised against a real reflector, and the
+audio path has not been listened to. That is the M17-5 / live-validation
+boundary, not something another test can settle.
+
 ✅ **OQ-7 is settled — 54 bytes, resolved 2026-08-11 against a live reflector**;
 see the open questions table for the evidence. The frame size is no longer an
 assumption, so stream TX may be built on it.
