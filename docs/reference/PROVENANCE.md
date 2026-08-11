@@ -117,17 +117,35 @@ rendering made it unnecessary.
   - `DISC` 10 = magic(4) + 'From' address(6), *or* 4 = magic only, the latter
     being the acknowledgement of a `DISC`
 - Stream packet (Table 27): magic `"M17 "` (`0x4D313720`, trailing space),
-  SID(2), LICH(30), FN(2), payload(16), CRC16(2).
+  SID(2), LICH(30), FN(2), payload(16), CRC16(2). **The LICH width is the one
+  place where this document has been overruled by observation** — see judgement
+  call 1.
 
-**Judgement call 1 — the stream packet is 56 bytes, not 54.** Table 27 gives
-LICH as **240 bits** and names its contents as "dst, src, streamtype, META
-field, CRC16", which is exactly the 30-byte Link Setup Frame of Part I Table
-3.1 *including* its own CRC. 4 + 2 + 30 + 2 + 16 + 2 = 56. A 54-byte frame is
-sometimes quoted for M17-over-IP, and the difference is precisely whether the
-LSF's own 2-byte CRC is present. The specification's stated 240 bits was
-followed. **M17-4 must settle this against a capture from a live reflector**
-before shipping; `M17StreamPacket.byteCount` and the offsets beside it are the
-single place to change.
+**Judgement call 1 — the stream packet is 56 bytes, not 54. → OVERTURNED
+2026-08-11 by a live reflector: it is 54.** Table 27 gives LICH as **240 bits**
+and names its contents as "dst, src, streamtype, META field, CRC16", which is
+exactly the 30-byte Link Setup Frame of Part I Table 3.1 *including* its own
+CRC. 4 + 2 + 30 + 2 + 16 + 2 = 56. A 54-byte frame is sometimes quoted for
+M17-over-IP, and the difference is precisely whether the LSF's own 2-byte CRC is
+present. The specification's stated 240 bits was followed, and flagged for
+M17-4 to settle against a capture.
+
+It was settled (OQ-7): 52 consecutive stream datagrams from a live reflector
+were **54 bytes**, with FN counting at offset 34 and the trailing CRC16
+(polynomial `0x5935`, init `0xFFFF`) valid over the preceding 52 bytes in every
+one. The LSF CRC is not transmitted. `M17StreamPacket` now implements 54 with a
+28-byte LICH. Evidence: the OQ-7 row of `DEVELOPMENT-PLAN.md` and `docs/CLI.md`
+§7.
+
+**What this says about the source, which is the point of this file:** the
+archived chapter is accurate about field *order*, field *meanings* and every
+control packet — all verified — and wrong, or at least misleading, about one
+width. That is the expected failure mode of a specification whose reference
+implementations are the real authority, and it is an argument for the OQ-8
+question (keeping a local copy) rather than against it: the divergence is only
+citable because the text we implemented from is pinned. It is also the reason
+the two remaining judgement calls below stay flagged rather than being quietly
+promoted to fact.
 
 **Judgement call 2 — the module appears twice in `CONN`.** Tables 28/31/32/33
 describe the 6-byte address field as the "'From' callsign including module in
@@ -145,5 +163,7 @@ connect and 30 s keepalive deadlines in `M17ReflectorClient` are local policy,
 documented as such at their definitions, and injectable.
 
 **Residual risk:** low for the control packets — six fixed-layout packets with
-no options, each verified byte for byte against a hand-built fixture. Moderate
-for the stream frame size, which is flagged above and belongs to M17-4.
+no options, each verified byte for byte against a hand-built fixture. Low for
+the stream frame size, which was the moderate risk here until a live reflector
+settled it at 54 bytes; what remains is that the observation is one over from
+one transmitting client, so a second reflector disagreeing would reopen it.

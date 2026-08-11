@@ -803,25 +803,35 @@ deadlines are local policy, documented as such and injectable.
 change (codec2 C shim target) — one of the few tasks permitted to touch it.
 
 M17-3 already implements `M17StreamPacket` parse/serialize: magic `"M17 "`
-(trailing space), SID(2), LICH(30), FN(2) with end-of-stream flag `FN & 0x8000`,
-payload(16), CRC16(2). LICH decomposes as DST(6) SRC(6) TYPE(2) META(14)
-LSF-CRC(2). Encryption bits in TYPE are parsed and surfaced **only** as
-`isEncrypted`/`playability == .encrypted` — there is no cipher enum, no key
-parameter and no decrypt path, and M17-4 must not add one (FR-2.5).
+(trailing space), SID(2), LICH(28), FN(2) with end-of-stream flag `FN & 0x8000`,
+payload(16), CRC16(2) — 54 bytes. LICH decomposes as DST(6) SRC(6) TYPE(2)
+META(14), and **no LSF CRC** (OQ-7). Encryption bits in TYPE are parsed and
+surfaced **only** as `isEncrypted`/`playability == .encrypted` — there is no
+cipher enum, no key parameter and no decrypt path, and M17-4 must not add one
+(FR-2.5).
 
 M17-4's job is the Codec2 3200 wiring (2 × 64-bit frames per 16-byte payload,
 confirmed by the M17-1 spike) and TX/RX stream sequencing.
 
-⚠️ **Resolve OQ-7 first** — see the open questions table. The frame is
-implemented as 56 bytes per the spec's stated 240-bit LICH; 54 is widely
-quoted. Do not build stream TX on an unverified frame size.
+✅ **OQ-7 is settled — 54 bytes, resolved 2026-08-11 against a live reflector**;
+see the open questions table for the evidence. The frame size is no longer an
+assumption, so stream TX may be built on it.
 
-The harness for that exists: `hamvoip-cli oq7` links a reflector module,
-measures every inbound datagram below the parser, and reports a verdict. It is
-receive-only. `docs/CLI.md` §7 has the procedure and how to read the result.
-Do not settle OQ-7 by watching `M17ReflectorClient.events` — the client
-correctly discards anything that is not exactly `M17StreamPacket.byteCount`
-bytes, so a 54-byte reality would look like a silent reflector.
+Two things M17-4 inherits from that:
+
+- **The single CRC is the whole-datagram one, and nothing verifies it yet.**
+  `M17StreamPacket.crc` is carried through verbatim. The polynomial is
+  confirmed against the capture: M17 CRC16, polynomial `0x5935`, initial value
+  `0xFFFF`, computed over the preceding 52 bytes, valid in 52 of 52 observed
+  frames. M17-4 owns implementing and verifying it. There is no LSF CRC to
+  verify — it is not transmitted.
+- **`hamvoip-cli oq7` stays useful** as a re-check against a second reflector,
+  and it still measures below the parser: `RecordingTransport` taps the
+  `DatagramTransport` seam rather than `M17ReflectorClient.events`, because the
+  client correctly discards anything that is not exactly
+  `M17StreamPacket.byteCount` bytes. That is what let the experiment contradict
+  the code running it, and it is why a reflector sending some third length
+  would be reported rather than look like silence.
 
 ### M17-5 — `M17Client` public API
 **Depends on:** M17-4. Mirrors IAX-8: conforms to `NetworkClient`,
@@ -843,9 +853,9 @@ human validation.
 | ~~OQ-4~~ | ~~App in a separate repo?~~ **RESOLVED: yes**, a separate `currawong` repo depending on `swift-hamvoip` via SPM. Keeps the Apache-2.0 protocol libraries reusable, keeps app-only dependencies out of the library repo, and lets the two release independently. | — |
 | **OQ-5** | ✅ **RESOLVED 2026-08-09 — hexadecimal. Keep sending lowercase; no code change.** Settled by `hamvoip-cli oq5 --method register --exhaustive` against an ASL3 node (Asterisk + app_rpt in a UTM VM), packet capture retained. Result: **`lowercase-hex` ACCEPTED** (REGACK), **`uppercase-hex` ACCEPTED** (REGACK), **`base64` REFUSED**, **`raw-bytes` REFUSED** — both refusals `CAUSE "Registration Refused"`, `CAUSE CODE 29`, and each of the four probes got its own fresh CHALLENGE on its own UDP association, so these are four independent verifications. Both hex cases being accepted is not a contradiction and does not make the run unreliable: the node is decoding the IE text back to sixteen bytes, or comparing it case-insensitively. The refusals are what carry the weight — a node that accepted anything would have taken base64 too, so the digest is genuinely being checked. Corroborated on the wire: the node answered REGACK immediately but held both REGREJs for ~1.0 s, the pacing of a real credential check that failed rather than a parse error. **Scope of the claim:** this is an observation about one implementation, not a fact about the protocol. Case-insensitivity is that node's business; another peer may well compare byte-for-byte, so `IAX2Auth.TextDigestEncoding.oq5Default` stays lowercase hex. **Original question:** §8.6.15 says the IE carries the UTF-8-encoded MD5 of `challenge ‖ password`, but the RFC never states the text encoding — hex or not, upper or lower case, padded or not. Unresolvable from the specification, and LP-2 forbids reading an implementation to find out. | Confirms IAX-4's shipped assumption. Unblocks the `connect` path and FR-1.3 registered node mode; downgrades the `IAX2Registrar` encoding seam from defect to hygiene |
 | **OQ-6** | **LGPL-2.1 relinking vs App Store code signing.** Shipping Codec2 as a dynamic framework satisfies LP-4's letter, but a signed iOS app cannot have its framework substituted by the user, which is what LGPL §6 relinking is for. A licensing judgement, not a technical blocker, and unchanged by the M17-1 spike — but it wants a conscious decision before App Store submission, not after. | App Store submission of M17 |
-| **OQ-7** | **Is the M17 IP stream frame 56 bytes or 54?** The spec's Table 27 gives LICH as 240 bits, which is the full 30-byte LSF *including* its own CRC → 56 bytes. 54 is widely quoted elsewhere, and the difference is exactly whether that CRC is present. Implemented as 56 per the spec. Cannot be settled from the document. **The experiment is built and tested — `hamvoip-cli oq7`, `docs/CLI.md` §7 — and needs a maintainer to run it against a reflector while somebody is talking; it is receive-only and transmits no audio.** | **M17-4 — settle against a capture from a live reflector before building stream TX.** `M17StreamPacket.byteCount` is the single place to change |
+| **OQ-7** | ✅ **RESOLVED 2026-08-11 — 54 bytes. The LSF CRC is not on the wire; `M17StreamPacket` changed to match.** Settled by `hamvoip-cli oq7` against a live reflector on UDP 17000, packet capture retained (`m17-oq7.pcap`, workspace, unversioned). One over of 52 consecutive stream datagrams, one SID, one transmitting station. Three independent readings of those bytes agree and only on this layout: **length** — 54 bytes, 52 of 52, no exceptions; **sequencing** — the two bytes at offset 34 ran 0, 1, 2 … 51, while at offset 36, where the 56-byte reading puts FN, the same bytes do not count at all and set bit 15 in 35 of 52 frames, which a mid-over last-frame flag must never be; **CRC** — the trailing two bytes are the M17 CRC16 (Part I: polynomial `0x5935`, init `0xFFFF`) over the preceding 52 bytes, valid 52 of 52. That third test is what rules out a truncated 56-byte frame — two bytes lost in transit would not leave a CRC closing over what remains — and it fails 0 of 52 for the LSF-CRC-present reading. Field offsets corroborated too: SID constant, DST/SRC decoding as base-40 callsigns at 6-11 and 12-17, TYPE `0x0005` at 18-19, META all zeros, and 16 bytes of Codec 2 differing in every frame at 36-51. **Scope of the claim:** one reflector, one over, one transmitting client — an observation about what M17-over-IP actually carries, not a correction to the specification, which says 240 bits and is what we implemented first. A second reflector disagreeing would be new information rather than a bug; the tally's guidance says so. **Original question:** the spec's Table 27 gives LICH as 240 bits, the full 30-byte LSF *including* its own CRC → 56 bytes; 54 is widely quoted elsewhere, and the difference is exactly whether that CRC is present. Unresolvable from the document, and LP-2 forbids reading an implementation to find out. | Unblocks **M17-4** stream TX/RX |
 | **OQ-8** | **The M17 reflector specification is offline.** The chapter we implement against was published as HTML at a readthedocs host that now 404s; M17-3 worked from an Internet Archive capture. Should the repository keep a local copy of that archived chapter, licence permitting? Right now the only record of what we implemented against is a third-party archive that may itself disappear. | Nothing today; a maintenance risk |
 | **OQ-9** | ⛔ **Where does EchoLink protocol knowledge legitimately come from? This, not the terms, is what blocks Phase 6.** IAX2 has RFC 5456; M17 had a published spec (offline, but it existed — OQ-8). EchoLink has **no published protocol specification at all**, and LP-2 names SvxLink/EchoLib and thebridge — the projects that do document it, in code — as forbidden sources. Resolving OQ-1 therefore *moved* the block here rather than removing it, and the citations that support OQ-1 are precisely the sources an agent must not read. Candidate legitimate sources, for the maintainer to confirm before any Phase 6 task opens: (a) RFC 3550 for RTP framing; (b) the ETSI/ITU GSM 06.10 specification for the codec; (c) **packet captures of the maintainer's own EchoLink sessions**, under the same LP-1 fixture rule that governs IAX-9; (d) prose protocol write-ups that are documentation rather than source code, with provenance recorded per `docs/reference/PROVENANCE.md`. The directory protocol on TCP 5200 and the proxy transport are the parts least likely to fall out of (a)–(b) and most likely to need (c). | **Phase 6 — all of it** |
 | — | Packet capture of own AllStar session | IAX-9 |
 | — | Packet capture of own EchoLink session (directory + proxy especially) | OQ-9 / Phase 6 |
-| — | Capture from a live M17 reflector — `hamvoip-cli oq7` is the harness | OQ-7 / M17-4 |
+| ~~—~~ | ~~Capture from a live M17 reflector~~ **Done 2026-08-11** — `hamvoip-cli oq7`, `m17-oq7.pcap`. Settled OQ-7. Passive traffic, so no `live-*.hex` fixture was cut from it; see `docs/CLI.md` §7 on that provenance question, which is still the maintainer's | OQ-7 ✅ |

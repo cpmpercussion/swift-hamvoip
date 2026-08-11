@@ -12,35 +12,42 @@ import RadioCore
 /// spirit as `oq5`: ask the network a question the document cannot answer,
 /// rather than read somebody else's implementation.
 ///
+/// Settled 2026-08-11: 54 bytes. What remains is a re-check — one over on one
+/// reflector is one observation, and this is how a second one gets taken.
+///
 /// Receive-only. It sends the reflector protocol's control packets, because a
 /// reflector sends nothing to a client that has not linked and answered its
 /// keepalives, and it never sends a stream packet. There is no transmit path in
 /// `M17Kit` yet for it to use even if it wanted one — that is M17-4, which this
-/// exists to unblock.
+/// unblocked.
 struct OQ7Command: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "oq7",
-        abstract: "Settle OQ-7 — whether an M17 IP stream frame is 56 bytes or 54 — against a live reflector.",
+        abstract: "Re-check OQ-7 — the M17 IP stream frame size, settled at 54 bytes — against a live reflector.",
         discussion: """
-            OQ-7 asks whether an M17 stream datagram is 56 bytes or 54. The M17 \
+            OQ-7 asked whether an M17 stream datagram is 56 bytes or 54. The M17 \
             specification's Table 27 gives LICH as 240 bits, which is the whole 30-byte \
             LSF including its own CRC, and 4+2+30+2+16+2 = 56. The figure quoted widely \
             elsewhere is 54, and the difference is exactly whether that LSF CRC is on the \
             wire. The document cannot settle it — both readings are consistent with the \
             text — and the clean-room policy forbids reading an implementation to find \
-            out. So the question goes to a reflector, which answers it every time somebody \
+            out. So the question went to a reflector, which answers it every time somebody \
             keys up.
 
-            M17Kit implements 56. M17-4 must not build stream transmit on an unverified \
-            frame size, which is why this runs first.
+            SETTLED 2026-08-11: 54 bytes, no LSF CRC on the wire. M17Kit implements 54. \
+            This subcommand remains because that verdict rests on one over from one \
+            station on one reflector; a second reflector agreeing strengthens it, and a \
+            second reflector disagreeing is worth knowing about before M17-4 ships stream \
+            transmit.
 
             WHAT IT DOES. Links a reflector module, answers its keepalives, and watches. \
             Every inbound datagram is measured before it reaches the parser — which \
             matters, because M17ReflectorClient correctly discards anything that is not \
-            exactly 56 bytes, so a harness built on its event stream would report silence \
-            if the answer were 54. Nothing is transmitted: no audio, no stream packets. \
-            Your callsign does go out in CONN, so it will appear on the reflector's \
-            dashboard as a connected station.
+            exactly M17StreamPacket.byteCount bytes, so a harness built on its event \
+            stream would report silence for any other length. That is what let this \
+            contradict the code running it. Nothing is transmitted: no audio, no stream \
+            packets. Your callsign does go out in CONN, so it will appear on the \
+            reflector's dashboard as a connected station.
 
             WHAT IT NEEDS. Somebody talking. A silent module answers nothing. Pick a busy \
             module, or run during a net, and allow enough time for a transmission or two. \
@@ -49,10 +56,14 @@ struct OQ7Command: AsyncParsableCommand {
             READING THE RESULT
               SETTLED        one length, and FN counts up at that reading's offset
               LENGTH ONLY    one length, too little traffic to check FN; run longer
-              CONTRADICTORY  length and sequencing disagree — do not settle OQ-7 on it
+              CONTRADICTORY  length and sequencing disagree — do not act on it
               INCONCLUSIVE   the link worked, nobody talked
 
-            For a capture that can be cut into a fixture, run tcpdump alongside:
+            A SETTLED verdict of 54 agrees with what M17Kit implements. Any other verdict \
+            disagrees with a settled question: keep the capture and read docs/CLI.md §7 \
+            before changing a constant.
+
+            To keep a capture of the run, run tcpdump alongside:
 
               sudo tcpdump -i any -w m17-oq7.pcap 'udp port 17000'
             """)
@@ -140,16 +151,17 @@ struct OQ7Command: AsyncParsableCommand {
             clock: ContinuousClock())
 
         let events = Task {
-            for await event in await client.events {
+            for await event in client.events {
                 switch event {
                 case .connecting:
                     await console.log("→ CONN sent, waiting for ACKN")
                 case .linked:
                     await console.log("✓ linked — listening. Nothing will appear until somebody keys up.")
                 case .stream(let packet):
-                    // Only ever reached when the datagram was exactly 56 bytes,
-                    // which is itself evidence. The tally is what counts either
-                    // way; this is here so a human sees who is talking.
+                    // Only ever reached when the datagram was exactly
+                    // M17StreamPacket.byteCount bytes — 54, since OQ-7 — which
+                    // is itself evidence. The tally is what counts either way;
+                    // this is here so a human sees who is talking.
                     recorder.recordParsedStream()
                     if packet.sequenceNumber == 0 || packet.isLastFrame {
                         let who = packet.source.callsign ?? "unknown"

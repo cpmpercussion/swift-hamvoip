@@ -113,7 +113,7 @@ public enum M17PacketMagic: String, CaseIterable, Sendable {
         case .ping, .pong: return [M17PacketMagic.byteCount + M17Address.byteCount]  // 10
         case .disconnect:
             return [M17PacketMagic.byteCount + M17Address.byteCount, M17PacketMagic.byteCount]  // 10, 4
-        case .stream: return [M17StreamPacket.byteCount]                             // 56
+        case .stream: return [M17StreamPacket.byteCount]                             // 54
         }
     }
 
@@ -498,39 +498,71 @@ public struct M17StreamType: Hashable, Sendable {
 
 /// An `M17 ` stream datagram, parsed as far as its header.
 ///
-/// Layout from "Standard IP Framing", Table 27:
+/// Layout, as observed on the wire (see the OQ-7 note below):
 ///
 /// | Offset | Size | Field |
 /// |--------|------|-------|
 /// | 0-3    | 4    | MAGIC `"M17 "` (`0x4D313720`) |
 /// | 4-5    | 2    | StreamID (SID) |
-/// | 6-35   | 30   | LICH — "the meaningful contents of a LICH frame (dst, src, streamtype, META field, CRC16)" |
-/// | 36-37  | 2    | FN, frame number, last-frame flag at `FN & 0x8000` |
-/// | 38-53  | 16   | Payload |
-/// | 54-55  | 2    | CRC16 over the entire packet |
+/// | 6-33   | 28   | LICH — DST, SRC, TYPE, META; **no LSF CRC** |
+/// | 34-35  | 2    | FN, frame number, last-frame flag at `FN & 0x8000` |
+/// | 36-51  | 16   | Payload |
+/// | 52-53  | 2    | CRC16 over the entire packet |
 ///
-/// The LICH sub-fields are the Link Setup Frame contents of Part I Table 3.1:
-/// DST 48 bits, SRC 48 bits, TYPE 16 bits, META 112 bits, CRC 16 bits — 240
-/// bits, i.e. 30 bytes, which is exactly what Table 27 states.
+/// The LICH sub-fields are the Link Setup Frame contents of Part I Table 3.1,
+/// minus the last of them: DST 48 bits, SRC 48 bits, TYPE 16 bits, META 112
+/// bits — 224 bits, i.e. 28 bytes.
 ///
-/// **Total: 56 bytes.** That follows arithmetically from Table 27
-/// (4 + 2 + 30 + 2 + 16 + 2) and from the LICH field being the *whole* 30-byte
-/// LSF including its own CRC. It is worth flagging for M17-4: a 28-byte LICH
-/// (LSF without its CRC) would give the 54-byte frame that is sometimes quoted
-/// for M17-over-IP, and the two readings differ only in whether the LSF CRC is
-/// present. This implementation follows the specification's stated 240 bits.
-/// If a capture from a live reflector says otherwise, ``byteCount`` and the
-/// offsets below are the single place to change.
+/// **Total: 54 bytes.**
+///
+/// ## OQ-7 — why this is 54 and not the specification's 56
+///
+/// Table 27 states the LICH field as 240 bits and describes it as "the
+/// meaningful contents of a LICH frame (dst, src, streamtype, META field,
+/// CRC16)". Read literally that is the whole 30-byte LSF including its own
+/// CRC, and the arithmetic gives 4 + 2 + 30 + 2 + 16 + 2 = 56. This type was
+/// originally written that way, flagging 54 — the same layout with the LSF CRC
+/// absent — as the alternative that could not be chosen between from the
+/// document.
+///
+/// **A reflector settled it, 2026-08-11: the frame is 54 bytes.** Fifty-two
+/// consecutive stream datagrams of one over, captured by `hamvoip-cli oq7`
+/// against a live reflector on UDP 17000, were 54 bytes without exception.
+/// Three independent readings of those bytes agree, and only on this layout:
+///
+/// - **Length.** A UDP datagram is as long as it is: 54, ×52.
+/// - **Sequencing.** The two bytes at offset 34 ran 0, 1, 2, … 51 across the
+///   over — a frame counter. At offset 36, where the 56-byte reading puts FN,
+///   the same bytes do not count at all and set bit 15 in 35 of 52 frames,
+///   which for a mid-over frame the last-frame flag must never be.
+/// - **CRC.** The trailing two bytes are the M17 CRC16 (Part I: polynomial
+///   `0x5935`, initial value `0xFFFF`) over the preceding 52 bytes — valid in
+///   52 of 52 frames. This is what rules out a truncated 56-byte frame: two
+///   bytes lost in transit would not leave a CRC that closes over what
+///   remains. The LSF-CRC-present reading fails the same test, 0 of 52.
+///
+/// Corroborating the field offsets rather than just the total: SID was constant
+/// across the over, DST and SRC decoded as base-40 callsigns at bytes 6-11 and
+/// 12-17, TYPE read `0x0005` (stream mode, voice, unencrypted) at 18-19, META
+/// was all zeros, and the 16 bytes at 36-51 differed in every frame — Codec 2,
+/// as expected.
+///
+/// This contradicts the specification as written, so it is recorded as an
+/// observation about what reflectors actually send, not as a correction to the
+/// document. The capture is retained outside the repository, with the other
+/// live captures. See `docs/CLI.md` §7 and the OQ-7 row of
+/// `docs/DEVELOPMENT-PLAN.md`.
 ///
 /// Scope: M17-3 parses the header so the connection layer can *recognise* a
 /// stream datagram and route it. Interpreting ``payload`` (Codec 2), verifying
 /// ``crc``, and stream reassembly all belong to M17-4.
 public struct M17StreamPacket: Hashable, Sendable {
-    /// Total datagram size, in bytes. See the type-level note.
-    public static let byteCount = 56
+    /// Total datagram size, in bytes. See the type-level OQ-7 note.
+    public static let byteCount = 54
 
-    /// Size of the LICH/LSF field: 240 bits (Table 27, Part I Table 3.1).
-    public static let lichByteCount = 30
+    /// Size of the LICH field: 224 bits — the LSF of Part I Table 3.1 without
+    /// its CRC. Table 27 says 240; the wire says 224 (OQ-7).
+    public static let lichByteCount = 28
 
     /// Size of the payload field: 128 bits (Table 27).
     public static let payloadByteCount = 16
@@ -557,10 +589,6 @@ public struct M17StreamPacket: Hashable, Sendable {
     /// LSF META, 14 bytes. Contents depend on TYPE; not interpreted here.
     public let metadata: Data
 
-    /// LSF CRC, the last two bytes of the 30-byte LSF (Part I §3.1.4).
-    /// Carried through verbatim; not verified here (M17-4 owns CRC).
-    public let lsfCRC: UInt16
-
     /// Frame number, including the last-frame flag in bit 15.
     public let frameNumber: UInt16
 
@@ -568,8 +596,9 @@ public struct M17StreamPacket: Hashable, Sendable {
     /// stream frame". Opaque to M17-3.
     public let payload: Data
 
-    /// CRC16 over the entire packet. Carried through verbatim; not verified
-    /// here (M17-4 owns CRC).
+    /// CRC16 over the entire packet — the only CRC a stream datagram carries
+    /// (OQ-7: the LSF's own CRC is not on the wire). Carried through verbatim;
+    /// not verified here (M17-4 owns CRC).
     public let crc: UInt16
 
     /// Whether this is the final frame of the stream (`FN & 0x8000`).
@@ -589,7 +618,6 @@ public struct M17StreamPacket: Hashable, Sendable {
         source: M17Address,
         type: M17StreamType,
         metadata: Data,
-        lsfCRC: UInt16,
         frameNumber: UInt16,
         payload: Data,
         crc: UInt16
@@ -607,7 +635,6 @@ public struct M17StreamPacket: Hashable, Sendable {
         self.source = source
         self.type = type
         self.metadata = metadata
-        self.lsfCRC = lsfCRC
         self.frameNumber = frameNumber
         self.payload = payload
         self.crc = crc
@@ -642,10 +669,9 @@ public struct M17StreamPacket: Hashable, Sendable {
             source: M17Address(bytes: bytes[12..<18]),
             type: M17StreamType(rawValue: uint16(at: 18)),
             metadata: Data(bytes[20..<34]),
-            lsfCRC: uint16(at: 34),
-            frameNumber: uint16(at: 36),
-            payload: Data(bytes[38..<54]),
-            crc: uint16(at: 54))
+            frameNumber: uint16(at: 34),
+            payload: Data(bytes[36..<52]),
+            crc: uint16(at: 52))
     }
 
     /// The datagram for this packet.
@@ -656,7 +682,6 @@ public struct M17StreamPacket: Hashable, Sendable {
         out.append(contentsOf: source.bytes)
         out.append(contentsOf: M17StreamPacket.bigEndian(type.rawValue))
         out.append(metadata)
-        out.append(contentsOf: M17StreamPacket.bigEndian(lsfCRC))
         out.append(contentsOf: M17StreamPacket.bigEndian(frameNumber))
         out.append(payload)
         out.append(contentsOf: M17StreamPacket.bigEndian(crc))

@@ -12,4 +12,4 @@
 41434B4E 0000009FDD51           # 6. ACKN with a callsign field (10, needs 4)
 50494E47                        # 7. PING with no callsign field (4, needs 10)
 44495343 0000009FDD51 41        # 8. DISC of 11 bytes (only 4 and 10 are legal)
-4D313720 1234 FFFFFFFFFFFF      # 9. "M17 " stream truncated to 12 (needs 56)
+4D313720 1234 FFFFFFFFFFFF      # 9. "M17 " stream truncated to 12 (needs 54)

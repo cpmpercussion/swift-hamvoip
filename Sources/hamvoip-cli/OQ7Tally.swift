@@ -5,20 +5,25 @@ import M17Kit
 
 // MARK: - The two readings
 
-/// The two readings of Table 27 that OQ-7 is asking between.
+/// The two readings of Table 27 that OQ-7 was asking between.
 ///
 /// They agree on every field up to byte 34. They disagree only about whether
 /// bytes 34-35 are the LSF's own CRC — making the LICH field the full 30-byte
 /// LSF, and the datagram 56 bytes — or the FN field, making the LICH 28 bytes
 /// and the datagram 54.
+///
+/// OQ-7 is settled: ``lichOmitsLSFCRC`` is what reflectors send, and what
+/// `M17StreamPacket` implements. Both readings stay here, because the harness's
+/// job is to measure rather than to confirm — it must still be able to report
+/// the answer it was not expecting.
 enum OQ7Hypothesis: String, CaseIterable, Sendable, CustomStringConvertible {
     /// 56 bytes. LICH is the whole 30-byte LSF, *including* its own CRC, which
     /// is what the specification's stated 240-bit LICH arithmetically requires.
-    /// What `M17StreamPacket` implements today.
+    /// Refuted on the wire, 2026-08-11.
     case lichIncludesLSFCRC
 
     /// 54 bytes. LICH is 28 bytes, the LSF *without* its CRC. The figure widely
-    /// quoted elsewhere for M17-over-IP.
+    /// quoted elsewhere for M17-over-IP, and the one a live reflector sends.
     case lichOmitsLSFCRC
 
     /// Total datagram size this reading predicts.
@@ -39,8 +44,8 @@ enum OQ7Hypothesis: String, CaseIterable, Sendable, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .lichIncludesLSFCRC: return "56-byte frame, 30-byte LICH (LSF CRC present) — as implemented"
-        case .lichOmitsLSFCRC: return "54-byte frame, 28-byte LICH (LSF CRC absent)"
+        case .lichIncludesLSFCRC: return "56-byte frame, 30-byte LICH (LSF CRC present) — the spec as read"
+        case .lichOmitsLSFCRC: return "54-byte frame, 28-byte LICH (LSF CRC absent) — as implemented"
         }
     }
 }
@@ -165,17 +170,19 @@ enum OQ7Verdict: Equatable {
         case .settled(let byteCount, _):
             if byteCount == M17StreamPacket.byteCount {
                 return """
-                    This confirms what M17Kit already implements. Record the verdict against OQ-7 \
-                    in docs/DESIGN-REQUIREMENTS.md and the plan, and M17-4 may proceed with \
-                    M17StreamPacket unchanged.
+                    Agrees with the settled answer: OQ-7 was settled at 54 bytes on 2026-08-11, \
+                    and M17StreamPacket.byteCount is 54. Nothing to change. A second reflector \
+                    reaching the same verdict is worth noting in the OQ-7 row all the same — the \
+                    original evidence is one capture of one over.
                     """
             }
             return """
-                This refutes the specification's stated 240-bit LICH as read. \
-                M17StreamPacket.byteCount and the field offsets in M17ReflectorProtocol.swift \
-                are the single place to change, exactly as the type's doc comment anticipated. \
-                Change them, adjust the hand-built spec fixtures, and note in the PR that the \
-                change is driven by an observation rather than by the document.
+                This reflector disagrees with the settled answer: OQ-7 was settled at 54 bytes on \
+                2026-08-11 and M17StreamPacket.byteCount is \(M17StreamPacket.byteCount). That is \
+                new information, not a correction to apply on sight — keep the capture, and work \
+                out whether the difference sorts by reflector or by transmitting client before \
+                touching the constant. Two populations of transmitters disagreeing would mean the \
+                parser has to tolerate both, which is a bigger change than a number.
                 """
         case .lengthConsistentOnly:
             return """

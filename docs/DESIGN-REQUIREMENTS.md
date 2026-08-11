@@ -179,9 +179,11 @@ failure mode for software clients. These requirements are not negotiable.
 - **OQ-6.** LGPL-2.1 relinking versus App Store code signing, for Codec2. A
   licensing judgement, not a technical blocker. Gates App Store submission of
   M17.
-- **OQ-7.** Is the M17 IP stream frame 56 bytes or 54? Implemented as 56 per
-  the specification's stated 240-bit LICH; 54 is widely quoted. Cannot be
-  settled from the document. **Gates M17 stream mode.**
+- **OQ-7.** ~~Is the M17 IP stream frame 56 bytes or 54?~~ **Resolved
+  2026-08-11: 54 bytes**, a 28-byte LICH with the LSF's own CRC absent.
+  Settled by observation against a live reflector, not from the document — the
+  specification's stated 240-bit LICH would give 56. `M17StreamPacket` now
+  implements 54. No longer gates M17 stream mode.
 - **OQ-8.** The M17 reflector specification is offline. Should the repository
   keep a local copy of the archived chapter, licence permitting?
 

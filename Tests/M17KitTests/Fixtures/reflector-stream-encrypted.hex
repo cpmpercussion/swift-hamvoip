@@ -13,5 +13,6 @@
 #                                bit  11   = 0  not signed
 #                              0x0015 = 0b0000_0000_0001_0101.
 #
-# Every other byte is as documented in reflector-stream.hex. Total 56 bytes.
-4D313720 1234 FFFFFFFFFFFF 0000009FDD51 0015 0000000000000000000000000000 ABCD 0001 000102030405060708090A0B0C0D0E0F BEEF
+# Every other byte is as documented in reflector-stream.hex, including why the
+# frame is 54 bytes rather than Table 27's 56 (OQ-7). Total 54 bytes.
+4D313720 1234 FFFFFFFFFFFF 0000009FDD51 0015 0000000000000000000000000000 0001 000102030405060708090A0B0C0D0E0F BEEF

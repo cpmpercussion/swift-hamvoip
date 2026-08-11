@@ -31,8 +31,9 @@ struct HamVoIPCLI: AsyncParsableCommand {
               oq5      settle OQ-5 — how a real node wants the MD5 RESULT information
                        element encoded — by asking one, instead of by reading somebody
                        else's implementation.
-              oq7      settle OQ-7 — whether an M17 IP stream frame is 56 bytes or 54 —
-                       by measuring what a live reflector sends. Receive-only.
+              oq7      re-check OQ-7 — the M17 IP stream frame size, settled at 54 bytes
+                       on 2026-08-11 — by measuring what a live reflector sends.
+                       Receive-only.
 
             Transmitting on amateur frequencies requires a licence. Connecting to a node
             can key a repeater; nothing is transmitted until you ask for it.

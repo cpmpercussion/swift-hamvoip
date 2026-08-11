@@ -226,8 +226,24 @@ final class OQ7TallyTests: XCTestCase {
         XCTAssertTrue(report.contains("54 bytes  ×20"), report)
         XCTAssertTrue(report.contains("VK1XYZ"), report)
         XCTAssertTrue(report.contains("SETTLED"), report)
-        // The guidance for a 54-byte answer must point at the one constant that
-        // changes, or the next agent will go looking.
-        XCTAssertTrue(report.contains("M17StreamPacket.byteCount"), report)
+        // 54 is the settled answer and what M17Kit implements, so the guidance
+        // must say the run agrees rather than ask for a change.
+        XCTAssertTrue(report.contains("Agrees with the settled answer"), report)
+    }
+
+    /// A reflector sending the refuted 56-byte reading must not be reported as
+    /// confirmation of anything. The guidance has to name the constant it
+    /// disagrees with and say not to change it on one capture.
+    func testAFiftySixByteRunIsReportedAsDisagreeingWithTheSettledAnswer() throws {
+        var tally = OQ7Tally()
+        for datagram in try over(hypothesis: .lichIncludesLSFCRC, streamID: 0x0009, frames: 20) {
+            tally.record(datagram)
+        }
+
+        XCTAssertEqual(tally.verdict, .settled(byteCount: 56, hypothesis: .lichIncludesLSFCRC))
+        let report = tally.report()
+        XCTAssertTrue(report.contains("56 bytes  ×20"), report)
+        XCTAssertTrue(report.contains("disagrees with the settled answer"), report)
+        XCTAssertTrue(report.contains("M17StreamPacket.byteCount is 54"), report)
     }
 }
