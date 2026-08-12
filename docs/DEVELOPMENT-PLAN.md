@@ -114,8 +114,8 @@ Phase 2  IAX2Kit          IAX-1 … IAX-9      (needs RC-1..RC-4)
 Phase 3  CLI harness      CLI-1              (needs IAX-8)
 Phase 4  SwiftUI app      APP-1 … APP-4      (unblocked: OQ-3/3b/4 resolved)
 Phase 5  BLE PTT          BLE-1 … BLE-3      (needs APP-2)
-Phase 6  EchoLink         —                  (BLOCKED on OQ-9 — do not start;
-                                              OQ-1 terms gate is cleared)
+Phase 6  EchoLink         —                  (unblocked: OQ-1 + OQ-9 resolved;
+                                              task breakdown still to be cut)
 Phase 7  M17Kit           M17-1 … M17-5      (M17-1 ✅ done, OQ-2 resolved)
 ```
 
@@ -783,28 +783,35 @@ call, locally notable in VK1. Trademark checked clear in class 9.
 - **BLE-3** — Runtime: apply learned mapping → press/release edges drive
   PTT; UI indicator for accessory link state.
 
-## Phase 6 — EchoLink ⛔ BLOCKED (OQ-9)
+## Phase 6 — EchoLink ✅ UNBLOCKED (OQ-9 resolved 2026-08-12)
 
-**The terms-of-service gate is cleared (OQ-1, resolved 2026-08-09).** The
-remaining block is a clean-room sourcing problem, and it is a harder one:
-EchoLink has no published protocol specification, and LP-2 forbids exactly the
-implementations that document it. Do not write EchoLink code or design its API
-until the maintainer settles OQ-9 — where the protocol knowledge comes from.
+**Both gates are now cleared:** the terms (OQ-1, 2026-08-09) and the clean-room
+sourcing question (OQ-9, 2026-08-12). Permitted sources are fixed by the OQ-9
+resolution in the open-questions table below and are not restated here to avoid
+drift — read that row before opening the first task. In short: captures of the
+maintainer's own sessions are the primary source; RFC 3550 and GSM 06.10 anchor
+only the parts they cover, and where the wire disagrees with the RFC the wire
+wins; prose write-ups (candidate d) are admitted only under a high provenance
+bar and never when their derivation from a forbidden implementation cannot be
+ruled out.
 
-Two things an agent must not do here, even though the phase is closer than it
-was. **Do not read SvxLink, EchoLib, thebridge, MicroLink or any other EchoLink
-implementation**, including any linked from the discussion that resolved OQ-1;
-those citations are evidence about the service's posture, not permitted
-sources (LP-1, LP-2). **Do not use "EchoLink" as a product name** — nominative,
-descriptive use only, per OQ-1b.
+The clean-room rules are **unchanged and absolute**. **Do not read SvxLink,
+EchoLib, thebridge, MicroLink or any other EchoLink implementation** at source
+level, ever — the resolution permits observing wire output, not reading code.
+**Do not use "EchoLink" as a product name** — nominative, descriptive use only,
+per OQ-1b. When a protocol detail is ambiguous, the answer is another on-air
+capture, not an implementation; capture work spans multiple peers (a single-peer
+capture already yielded two wrong conclusions — see the PROVENANCE.md OQ-9 entry).
 
-Capturing the maintainer's *own* EchoLink traffic is a legitimate fixture source
-under LP-1 and is candidate (c) in OQ-9, but it is the maintainer's action to
-run, not an agent's.
+Cutting new captures remains the maintainer's action to run, not an agent's.
 
-When unblocked, this phase gets its own task breakdown (directory TCP 5200,
-RTP/GSM UDP 5198/5199, proxy transport default-on-cellular per FR-3.3,
-vendored BSD-licensed `libgsm` per LP-4).
+This phase now gets its own task breakdown (directory TCP 5200, RTP/GSM UDP
+5198/5199, proxy transport default-on-cellular per FR-3.3, vendored
+BSD-licensed `libgsm` per LP-4). The proxy framing and the login
+challenge-response (`MD5(password ‖ nonce-as-8-ASCII-characters)`, raw 16 bytes
+on the wire — the **opposite** of OQ-5's hex for IAX2) are already derived from
+captures and recorded in the PROVENANCE.md OQ-9 entry; the first task should
+turn those into fixtures under `Tests/FIXTURES.md` before code depends on them.
 
 ## Phase 7 — M17Kit
 
@@ -985,7 +992,7 @@ Until then M17 is "believed working", and the CLI's banner says so.
 | **OQ-6** | **LGPL-2.1 relinking vs App Store code signing.** Shipping Codec2 as a dynamic framework satisfies LP-4's letter, but a signed iOS app cannot have its framework substituted by the user, which is what LGPL §6 relinking is for. A licensing judgement, not a technical blocker, and unchanged by the M17-1 spike — but it wants a conscious decision before App Store submission, not after. | App Store submission of M17 |
 | **OQ-7** | ✅ **RESOLVED 2026-08-11 — 54 bytes. The LSF CRC is not on the wire; `M17StreamPacket` changed to match.** Settled by `hamvoip-cli oq7` against a live reflector on UDP 17000, packet capture retained (`m17-oq7.pcap`, workspace, unversioned). One over of 52 consecutive stream datagrams, one SID, one transmitting station. Three independent readings of those bytes agree and only on this layout: **length** — 54 bytes, 52 of 52, no exceptions; **sequencing** — the two bytes at offset 34 ran 0, 1, 2 … 51, while at offset 36, where the 56-byte reading puts FN, the same bytes do not count at all and set bit 15 in 35 of 52 frames, which a mid-over last-frame flag must never be; **CRC** — the trailing two bytes are the M17 CRC16 (Part I: polynomial `0x5935`, init `0xFFFF`) over the preceding 52 bytes, valid 52 of 52. That third test is what rules out a truncated 56-byte frame — two bytes lost in transit would not leave a CRC closing over what remains — and it fails 0 of 52 for the LSF-CRC-present reading. Field offsets corroborated too: SID constant, DST/SRC decoding as base-40 callsigns at 6-11 and 12-17, TYPE `0x0005` at 18-19, META all zeros, and 16 bytes of Codec 2 differing in every frame at 36-51. **Scope of the claim:** one reflector, one over, one transmitting client — an observation about what M17-over-IP actually carries, not a correction to the specification, which says 240 bits and is what we implemented first. A second reflector disagreeing would be new information rather than a bug; the tally's guidance says so. **Original question:** the spec's Table 27 gives LICH as 240 bits, the full 30-byte LSF *including* its own CRC → 56 bytes; 54 is widely quoted elsewhere, and the difference is exactly whether that CRC is present. Unresolvable from the document, and LP-2 forbids reading an implementation to find out. | Unblocks **M17-4** stream TX/RX |
 | **OQ-8** | **The M17 reflector specification is offline.** The chapter we implement against was published as HTML at a readthedocs host that now 404s; M17-3 worked from an Internet Archive capture. Should the repository keep a local copy of that archived chapter, licence permitting? Right now the only record of what we implemented against is a third-party archive that may itself disappear. | Nothing today; a maintenance risk |
-| **OQ-9** | ⛔ **Where does EchoLink protocol knowledge legitimately come from? This, not the terms, is what blocks Phase 6.** IAX2 has RFC 5456; M17 had a published spec (offline, but it existed — OQ-8). EchoLink has **no published protocol specification at all**, and LP-2 names SvxLink/EchoLib and thebridge — the projects that do document it, in code — as forbidden sources. Resolving OQ-1 therefore *moved* the block here rather than removing it, and the citations that support OQ-1 are precisely the sources an agent must not read. Candidate legitimate sources, for the maintainer to confirm before any Phase 6 task opens: (a) RFC 3550 for RTP framing; (b) the ETSI/ITU GSM 06.10 specification for the codec; (c) **packet captures of the maintainer's own EchoLink sessions**, under the same LP-1 fixture rule that governs IAX-9; (d) prose protocol write-ups that are documentation rather than source code, with provenance recorded per `docs/reference/PROVENANCE.md`. The directory protocol on TCP 5200 and the proxy transport are the parts least likely to fall out of (a)–(b) and most likely to need (c). | **Phase 6 — all of it** |
+| ~~OQ-9~~ | ✅ **RESOLVED 2026-08-12 — permitted sources named; Phase 6 unblocks. Maintainer's judgement.** The permitted sources for EchoLink protocol knowledge are: **(a)** RFC 3550 for RTP framing and **(b)** the ETSI/ITU GSM 06.10 specification for the codec, as spec anchors *for the parts they actually cover* — with the standing caveat that RFC 3550 does **not** describe this protocol as implemented (observed RTP version bits are 3, not 2; the proxy framing and the directory protocol on TCP 5200 fall outside it entirely), so where wire and RFC disagree the wire wins and the divergence is recorded; **(c) packet captures of the maintainer's own EchoLink sessions** are the **primary** source, under the same LP-1 fixture rule that governs IAX-9. Candidate **(d)**, prose write-ups, is admitted **only** under a provenance bar materially higher than the captures': because no published specification exists, most such prose derives from the very implementations LP-2 forbids (a summary of thebridge's source is the source at one remove, not "behavioural observation"), so a (d) source may be used only when its own provenance is independently established as *not* derived from forbidden implementations, and its use logged per `docs/reference/PROVENANCE.md` before any code depends on it. When (d) cannot clear that bar, the answer is another capture, not the write-up. **Standing procedural rules that come with this resolution:** (1) protocol ambiguities are settled by designing another on-air experiment and cutting another capture — never by reading an implementation; the pressure to peek is highest exactly where captures are thinnest, which is where the clean-room boundary matters most. (2) Capture work spans **multiple peers**: a single-peer capture already produced two confident wrong conclusions (SSRC always zero; sequence numbers start at zero) that a four-peer capture corrected — see the PROVENANCE.md OQ-9 entry. (3) Directory-server captures (TCP 5200) carry other operators' callsigns, locations and IPs; they get the same third-party-traffic hygiene the M17 OQ-7 capture did (`docs/CLI.md` §7), and no such capture's path is named in a versioned file. **Terms rechecked online 2026-08-12** against echolink.org directly (Access Policies, Validation, Download, Support): no anti-reverse-engineering clause, no client-software restriction, and no software EULA is even linked — the access policies govern *who* may connect (licensed amateurs) and what a Sysop node may interconnect *to*, never what client software reaches the service. echolink.org's own Download page lists compatible third-party implementations (EchoHam, EchoIRLP, svxLink/QTel, an Asterisk channel driver) with "we do not support these programs" — the service operator publicly acknowledges independent clients. This closes the narrow terms caveat left open under OQ-1 and does not disturb OQ-1's reasoning. **This resolves the sourcing question only** — OQ-1b (trademark, nominative use only) still governs all EchoLink naming, and LP-1/LP-2 are unchanged: no implementation source, at any level, is ever read. | ~~Phase 6~~ **unblocked** |
 | — | Packet capture of own AllStar session | IAX-9 |
-| — | Packet capture of own EchoLink session (directory + proxy especially) | OQ-9 / Phase 6 |
+| ~~—~~ | ~~Packet capture of own EchoLink session (directory + proxy especially)~~ **Done 2026-08-12** — three captures (multi-peer), held in `experiment-data/`, SHA-256s in `echolink-oq9-result.txt`. Settled OQ-9's evidence question and the proxy framing / login digest; boundary calls logged in `docs/reference/PROVENANCE.md`. Paths deliberately unnamed in versioned files (one holds a live credential, one the full directory). Further Phase 6 captures still the maintainer's to run | OQ-9 ✅ / Phase 6 |
 | ~~—~~ | ~~Capture from a live M17 reflector~~ **Done 2026-08-11** — `hamvoip-cli oq7`, `m17-oq7.pcap`. Settled OQ-7. Passive traffic, so no `live-*.hex` fixture was cut from it; see `docs/CLI.md` §7 on that provenance question, which is still the maintainer's | OQ-7 ✅ |

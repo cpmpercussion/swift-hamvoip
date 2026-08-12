@@ -26,7 +26,7 @@ licensed Swift implementation of IAX2 or M17 exists at all.
 |---|---|---|---|
 | AllStarLink | IAX2 (RFC 5456), UDP 4569 | G.711 µ-law | None |
 | M17 | Reflector protocol, UDP 17000 | Codec2 3200 | None |
-| EchoLink | RTP UDP 5198/5199, TCP 5200, proxy TCP | GSM 06.10 | Terms: cleared (OQ-1). Trademark: nominative use only (OQ-1b). No published spec — see OQ-9 |
+| EchoLink | RTP UDP 5198/5199, TCP 5200, proxy TCP | GSM 06.10 | Terms: cleared (OQ-1). Trademark: nominative use only (OQ-1b). No published spec; sources fixed (OQ-9, resolved) |
 
 ### Explicit non-goals
 
@@ -83,7 +83,7 @@ after distribution has begun.
   in the UI. Encryption is not permitted in the amateur service in most
   jurisdictions including Australia.
 
-### 4.3 EchoLink — priority 2, gated on OQ-9 (OQ-1 cleared)
+### 4.3 EchoLink — priority 2, unblocked (OQ-1 + OQ-9 resolved)
 
 - **FR-3.1.** Directory login and station list over TCP 5200.
 - **FR-3.2.** Audio as GSM 06.10 in RTP on UDP 5198; station info and
@@ -160,10 +160,16 @@ failure mode for software clients. These requirements are not negotiable.
 - **OQ-1b.** "EchoLink" is a Synergenics trademark. Descriptive use only —
   never in the app name, icon or App Store title, and never implying
   endorsement. This is what remains of the old "Trademark / ToS" cell in §2.
-- **OQ-9.** What are the permitted sources for EchoLink protocol knowledge?
-  There is no published specification, and LP-2 forbids the implementations
-  that document it. **This now gates all of §4.3** — resolving OQ-1 moved the
-  block here rather than removing it.
+- **OQ-9.** ~~What are the permitted sources for EchoLink protocol knowledge?~~
+  **Resolved 2026-08-12: captures of the maintainer's own sessions are the
+  primary source; RFC 3550 and GSM 06.10 anchor only the parts they cover (the
+  wire wins where they disagree); prose write-ups are admitted only under a high
+  provenance bar. Ambiguities are settled by another capture, never by reading
+  an implementation. §4.3 is no longer gated.** Terms rechecked online the same
+  day — no reverse-engineering or client-software clause. Full reasoning and the
+  standing capture rules are in the open-questions table in
+  `docs/DEVELOPMENT-PLAN.md`; the boundary calls already made are logged in
+  `docs/reference/PROVENANCE.md`.
 - **OQ-2.** ~~Codec2 as a dynamic XCFramework — do all three slices build?~~
   **Resolved: yes.** iOS device, iOS simulator and macOS arm64 all build
   dynamic and sign cleanly. See `docs/reference/CODEC2-XCFRAMEWORK.md`.
@@ -198,7 +204,7 @@ the open-questions table at the end of `docs/DEVELOPMENT-PLAN.md`.
    fault, not a codec fault.
 3. Minimal SwiftUI shell — on-screen PTT only.
 4. BLE PTT with learn mode.
-5. EchoLink, subject to OQ-9.
+5. EchoLink (OQ-9 resolved 2026-08-12; sources fixed, task breakdown to be cut).
 6. `M17Kit`.
 
 The ordering is deliberate. Building M17 first would mean debugging Codec2 and
