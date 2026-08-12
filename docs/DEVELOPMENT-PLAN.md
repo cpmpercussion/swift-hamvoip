@@ -1201,32 +1201,50 @@ it.
 command exists, the stack under it is tested, and `--help` says plainly that
 nothing here has ever spoken to a real proxy.
 
-⚠️ **One gap to resolve before attempting M3.** The session does the *proxy*
-login only. The *directory* login — the operator's own account password, which
-`EchoLinkDirectorySession` implements and tests (EL-6) — is **not wired into
-`EchoLinkClient.connect`**, so no account password is read or asked for.
+#### The connect sequence, and two corrections it forced
 
-The captures show a real client doing this before it opens a node channel:
+Wiring the directory login in meant re-reading the captures rather than the
+plan, and the re-reading found the plan's model of a session was wrong twice.
+The sequence a real client performs, and that `EchoLinkClient.connect` now
+follows:
 
+    <== nonce (unframed)          proxy login (EL-5)
+    ==> callsign + LF + digest
     ==> 0x01 OPEN   peer <directory server>
     <== 0x04 STATUS 00 00 00 00
-    ==> 0x02 TCP_DATA  'l' + callsign + separators + password + CR
+    ==> 0x02 TCP_DATA  'l' + callsign + separators + password + CR   (EL-6)
     <== 0x02 TCP_DATA  "OK"
-    <== 0x03 CLOSE
-    ==> 0x01 OPEN   peer <the node>
+    <== 0x03 CLOSE                the directory channel, closed on purpose
+    ==> 0x06 RR + SDES   peer <the node>     ← this opens the session
+    <== 0x06 RR + SDES                       ← the node answers
+    ... audio on 0x05 ...
+    ==> 0x06 RR + BYE            teardown
 
-Whether a node channel works *without* that first exchange is **not
-established** — no capture shows the attempt, so the answer is not in the
-evidence and guessing it is exactly what this phase does not do. Two things
-wiring it up needs that this task did not:
+**Correction 1 — there is no `OPEN` for a node.** Checked across all three
+captures: `0x01 OPEN` was sent **only** for the directory server, and six
+distinct audio peers received `0x05`/`0x06` traffic with no `OPEN` at all. The
+`0x01`/`0x02`/`0x03`/`0x04` family is the tunnelled **TCP** connection, and
+`OPEN` means "connect a socket to this address". `0x05`/`0x06` are
+connectionless, carrying the peer's address in each frame header, so an audio
+channel has no setup and no teardown. The first version of EL-9 opened a channel
+to the node, which no real client does.
 
-- somewhere to put the directory server's address (the capture's is in the
-  first `OPEN`'s peer field, so it is configuration, not a constant), and
-- per-channel `CLOSE` handling. `EchoLinkClient` currently treats any `0x03` as
-  the link going down, which is right for a single-channel session and wrong
-  the moment the directory channel closes on purpose.
+**Correction 2 — the control channel is not optional.** The section below says
+`0x06` is "observed but neither is needed for a working QSO". That is wrong, and
+it follows directly from correction 1: with no `OPEN` for the node, the
+`RR + SDES` compound is the *only* thing that starts a session. Without it a node
+never answers. `EchoLinkRTCP.swift` therefore builds and parses `RR`, `SDES` and
+`BYE`, against the two `0x06` frames in `live-proxy-rtcp.hex`.
 
-If M3 fails at the first `OPEN`, suspect this before anything else.
+`CLOSE` handling changed with it: a `0x03` closes a tunnelled channel, not the
+session, and in a normal session it arrives a few hundred milliseconds after
+connecting, when the directory channel shuts down on purpose. Treating it as the
+link dropping would have ended every session before any audio.
+
+**What is still not established:** whether a node answers a client that never
+logged in to the directory. `--no-directory-login` exists to find out; no
+capture shows the attempt, so the flag is an experiment rather than a supported
+mode.
 
 ---
 
@@ -1262,13 +1280,29 @@ address is already known.
 partial list is a typed error rather than a silent short read; and no fixture
 contains a callsign, location or address belonging to anyone else.
 
-### Station info and the control channel — deliberately not a task yet
+### Station info and the control channel — ⚠️ superseded 2026-08-13
 
-`0x06` frames carry RTCP-shaped packets (type 201 with an SDES), and station
-info arrives on the `0x05` channel as text beginning `oNDATA`. Both are
-observed but neither is needed for a working QSO, and neither has been decoded
-past its outer shape. They become tasks when something needs them — writing
-them up now would be designing against one capture's worth of evidence.
+This section used to read: "`0x06` frames carry RTCP-shaped packets (type 201
+with an SDES), and station info arrives on the `0x05` channel as text beginning
+`oNDATA`. Both are observed but **neither is needed for a working QSO**, and
+neither has been decoded past its outer shape."
+
+**The emphasised claim is false, and EL-10 found out the expensive way.** Since
+no `OPEN` is ever sent for an audio peer, the `RR + SDES` compound on `0x06` is
+the *only* thing that opens a node session — a client that does not send it is
+never answered. `0x06` is now decoded (`EchoLinkRTCP.swift`) and `BYE` is sent
+on teardown. See the EL-10 entry for the frame-by-frame sequence.
+
+The `0x05` text channel is decoded only far enough to keep it *out* of the
+audio path: `oNDATA` fed to an RTP parser reads as version 1, payload type 78,
+and plays as noise. `EchoLinkAudioChannelMessage` classifies before parsing and
+surfaces the text verbatim as an event. Its internal structure is still
+undecoded, and still deliberately so — nothing needs it.
+
+The general lesson is worth keeping even though the specific claim did not
+survive: "not needed for a QSO" was inferred from what the frames *looked* like,
+not from tracing what a session actually required. Checking which peers ever
+receive an `OPEN` took one pass over the captures and would have caught it.
 
 ## Phase 7 — M17Kit
 

@@ -38,19 +38,24 @@ struct EchoLinkCommand: AsyncParsableCommand {
             *ECHOTEST* is the obvious first contact: it echoes audio back, so one \
             operator alone can confirm the round trip end to end.
 
-            KNOWN GAP: this command does the PROXY login only. The DIRECTORY \
-            server login — your own EchoLink account password, which the capture \
-            shows a real client sending before it opens a node channel — is \
-            implemented and tested (EL-6) but is not yet wired into the session, \
-            so no account password is read or asked for. Whether a node channel \
-            works without it has not been established. If M3 fails at the first \
-            OPEN, this is the first thing to suspect.
-
             Two different secrets are involved and they are not interchangeable: \
             the PROXY password (--proxy-password, "PUBLIC" on a public proxy, and \
             not a secret) and your own EchoLink ACCOUNT password. Only the \
             account password is secret, and there is deliberately no option for \
-            it — a password on the command line leaks into shell history.
+            it — a password on the command line leaks into shell history. It is \
+            read from $ECHOLINK_PASSWORD, or prompted for.
+
+            The account login is tunnelled to the directory server, so \
+            --directory-server needs that server's IPv4 address. There is no \
+            default: the proxy's OPEN carries a raw address, nothing here \
+            resolves DNS, and baking one operator's choice of a third party's \
+            server into the tool would be a guess about infrastructure rather \
+            than about the protocol.
+
+            Pass --no-directory-login to skip it and go straight to the node. \
+            Whether a node answers a client that never logged in is NOT \
+            established — no capture shows the attempt — so that flag is an \
+            experiment, not a supported mode.
             """)
 
     @Option(name: .long, help: "EchoLink proxy host name or address.")
@@ -71,6 +76,16 @@ struct EchoLinkCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Your callsign.")
     var callsign: String
 
+    @Option(name: .long, help: "Your name, shown to the far end alongside the callsign.")
+    var operatorName: String = ""
+
+    @Option(name: .long, help: "Directory server IPv4 address, for the account login.")
+    var directoryServer: String?
+
+    @Flag(name: .long, inversion: .prefixedNo,
+          help: "Log in to the directory server before opening the node session.")
+    var directoryLogin: Bool = true
+
     @Flag(name: .long, inversion: .prefixedNo, help: "Open the microphone and speaker.")
     var audio: Bool = true
 
@@ -88,6 +103,24 @@ struct EchoLinkCommand: AsyncParsableCommand {
             throw ValidationError("--transmit-timeout must be positive")
         }
 
+        var accountPassword: EchoLinkAccountPassword?
+        var directory: EchoLinkPeerAddress?
+        if directoryLogin {
+            guard let directoryServer else {
+                throw ValidationError(
+                    "--directory-server is required for the account login. Pass "
+                        + "--no-directory-login to skip it, but note that whether a node "
+                        + "answers a client that never logged in is not established.")
+            }
+            guard let address = EchoLinkPeerAddress(directoryServer) else {
+                throw ValidationError(
+                    "--directory-server must be a dotted-quad IPv4 address, got "
+                        + "'\(directoryServer)'")
+            }
+            directory = address
+            accountPassword = EchoLinkAccountPassword(try Self.readAccountPassword())
+        }
+
         let session = try EchoLinkSession(
             destination: EchoLinkDestination(
                 peer: peerAddress,
@@ -99,11 +132,38 @@ struct EchoLinkCommand: AsyncParsableCommand {
                 )
             ),
             callsign: callsign.uppercased(),
+            operatorName: operatorName,
+            accountPassword: accountPassword,
+            directoryServer: directory,
             transmitTimeout: .seconds(transmitTimeout),
             useAudioDevices: audio,
             duration: duration.map { .seconds($0) }
         )
         try await session.run()
+    }
+
+    /// The account password, from the environment or an unechoed prompt.
+    ///
+    /// Same precedence and same reasoning as the IAX2 path's secret handling
+    /// (`docs/CLI.md` §3): there is no command-line option, because one would
+    /// put a live credential into shell history.
+    private static func readAccountPassword() throws -> String {
+        if let fromEnvironment = ProcessInfo.processInfo.environment["ECHOLINK_PASSWORD"],
+           !fromEnvironment.isEmpty {
+            return fromEnvironment
+        }
+        guard isatty(STDIN_FILENO) == 1 else {
+            throw ValidationError(
+                "No $ECHOLINK_PASSWORD and standard input is not a terminal, so there "
+                    + "is nowhere to prompt. Set the environment variable, or pass "
+                    + "--no-directory-login.")
+        }
+        guard let entered = String(validatingUTF8: getpass("EchoLink account password: ")),
+              !entered.isEmpty
+        else {
+            throw ValidationError("No password entered.")
+        }
+        return entered
     }
 }
 
@@ -129,6 +189,9 @@ private final class EchoLinkSession: @unchecked Sendable {
     init(
         destination: EchoLinkDestination,
         callsign: String,
+        operatorName: String,
+        accountPassword: EchoLinkAccountPassword?,
+        directoryServer: EchoLinkPeerAddress?,
         transmitTimeout: Duration,
         useAudioDevices: Bool,
         duration: Duration?
@@ -141,6 +204,9 @@ private final class EchoLinkSession: @unchecked Sendable {
             codec: try GSMVoiceCodec(),
             configuration: EchoLinkClient.Configuration(
                 callsign: callsign,
+                operatorName: operatorName,
+                accountPassword: accountPassword,
+                directoryServer: directoryServer,
                 transmitTimeout: transmitTimeout
             ),
             clock: ContinuousClock()
@@ -353,6 +419,10 @@ private final class EchoLinkSession: @unchecked Sendable {
         switch event {
         case .connecting:
             await console.log("Connecting…")
+        case .directoryLoggedIn:
+            await console.log("Directory login accepted.")
+        case .nodeAnswered(let name):
+            await console.log("Node answered: \(name)")
         case .connected(let node):
             await console.log("Connected to \(node).")
         case .talkspurtStarted:

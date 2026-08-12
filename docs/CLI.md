@@ -763,17 +763,38 @@ both redact themselves in `description` so an interpolation cannot put one in a
 log. There is deliberately no option for the account password: a password on the
 command line lands in shell history.
 
-### Before attempting M3: the directory-login gap
+### What connecting actually does
 
-This command does the **proxy** login only. The **directory** login is
-implemented and tested (`EchoLinkDirectorySession`, EL-6) but is not wired into
-`EchoLinkClient.connect`, so no account password is read or asked for.
+```
+proxy login          nonce -> callsign + digest
+OPEN                 to the DIRECTORY SERVER — the only OPEN a client sends
+account login        tunnelled as 0x02, answered "OK"
+CLOSE                the directory channel, closed on purpose. Not the session.
+RR + SDES            to the node, on 0x06 — this is what opens the session
+                     retransmitted until the node answers
+audio                on 0x05
+RR + BYE             on teardown
+```
 
-The captures show a real client logging in to the directory server *before* it
-opens a node channel. Whether a node channel works without that is **not
-established** — no capture shows the attempt. If the session fails at the first
-`OPEN`, suspect this first. The EL-10 entry in `DEVELOPMENT-PLAN.md` has the
-frame sequence and the two things wiring it up needs.
+Two things here are worth knowing before debugging a failed session, because
+both contradict what the plan originally assumed:
+
+- **No `OPEN` is sent for the node.** `OPEN`/`CLOSE`/`STATUS`/`TCP_DATA` are the
+  tunnelled TCP connection to the directory server. The audio and control
+  channels are connectionless — the peer's address rides in each frame header —
+  so they need no setup at all.
+- **The `RR + SDES` on the control channel is what opens a session.** Without
+  it, nothing answers. `--help`'s "expect to be the first" applies most
+  sharply here.
+
+`--directory-server` needs the directory server's IPv4 address. There is
+deliberately no default: the proxy's `OPEN` carries a raw address, nothing here
+resolves DNS, and baking one operator's choice of a third party's server into
+the tool would be a guess about infrastructure rather than about the protocol.
+
+`--no-directory-login` skips straight to the node. Whether a node answers a
+client that never logged in is **not established** — no capture shows the
+attempt — so that flag is an experiment, not a supported mode.
 
 ### What a live run has to settle
 
@@ -784,8 +805,9 @@ agrees with us by construction. A live run tests:
 
 - that a real proxy accepts our login digest (both recorded vectors reproduce
   offline, but only against captures of a client that was not us);
-- that a real node accepts an `OPEN` from a session logged in this way — see
-  the gap above;
+- that a real node answers the `RR + SDES` that opens a session, and does so
+  for a client that identifies itself as `swift-hamvoip` rather than as one of
+  the two clients the captures contain;
 - that GSM 06.10 audio we *encode* is intelligible at the far end. Decoding is
   already evidenced: `GSMVoiceCodecTests` decodes the captured frames a real
   peer sent, and finds them audible rather than noise. The encode direction has
@@ -799,7 +821,8 @@ agrees with us by construction. A live run tests:
 Same shape as the M2 checklist in §5. Record the result on the PR.
 
 - [ ] Proxy login accepted.
-- [ ] Channel opened to `*ECHOTEST*`.
+- [ ] Directory login accepted (`Directory login accepted.` in the log).
+- [ ] `*ECHOTEST*` answered the opening SDES (`Node answered: …`).
 - [ ] Audio transmitted, and heard back intelligibly in the echo.
 - [ ] Inbound talkspurts reported, with no stutter across a boundary.
 - [ ] SF-1 watchdog cut transmission at its limit.

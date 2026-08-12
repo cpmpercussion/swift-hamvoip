@@ -16,6 +16,8 @@ final class EchoLinkClientTests: XCTestCase {
     private static let callsign = "N0CALL"
     private static let nonce = "6fc8b7e3"
     private static let peer = EchoLinkPeerAddress(13, 57, 14, 183)
+    /// The address the captures show in the only OPEN a real client sends.
+    private static let directoryServer = EchoLinkPeerAddress(152, 67, 98, 197)
 
     /// A 33-byte-per-frame, 160-sample-per-frame codec that does no signal
     /// processing: exactly GSM 06.10's frame geometry, so every size assertion
@@ -40,20 +42,50 @@ final class EchoLinkClientTests: XCTestCase {
     }
 
     private func makeHarness(
-        transmitTimeout: Duration = .seconds(180)
+        transmitTimeout: Duration = .seconds(180),
+        accountPassword: EchoLinkAccountPassword? = nil,
+        directoryServer: EchoLinkPeerAddress? = nil,
+        nodeAnswerTimeout: Duration = .seconds(2)
     ) -> Harness {
         let transport = MockStreamTransport()
         let client = EchoLinkClient(
             codec: StubCodec(),
             configuration: .init(
                 callsign: Self.callsign,
+                operatorName: "Test Operator",
+                accountPassword: accountPassword,
+                directoryServer: directoryServer,
                 transmitTimeout: transmitTimeout,
-                frameInterval: .milliseconds(20)
+                frameInterval: .milliseconds(20),
+                nodeAnswerTimeout: nodeAnswerTimeout,
+                nodeAnswerRetryInterval: .milliseconds(50)
             ),
             clock: ContinuousClock(),
             transportFactory: { _ in transport }
         )
         return Harness(client: client, transport: transport)
+    }
+
+    /// An inbound RTCP SDES, which is how a node answers.
+    private func nodeAnswer(name: String = "*ECHOTEST* (Conference  [7]) CONF") -> Data {
+        let compound = EchoLinkRTCPCompound([
+            .receiverReport(ssrc: 9999),
+            .sourceDescription(ssrc: 9999, items: [
+                EchoLinkSDESItem(.cname, "CALLSIGN"),
+                EchoLinkSDESItem(.name, name),
+                EchoLinkSDESItem(.tool, "thebridge V 0.81"),
+            ]),
+        ])
+        return EchoLinkProxyFrame(
+            type: .udpControl, peer: Self.peer, payload: compound.encoded
+        ).encoded
+    }
+
+    /// Waits until the client has written at least `count` chunks.
+    private func waitForWrites(_ harness: Harness, _ count: Int) async {
+        for _ in 0 ..< 200_000 where harness.transport.sentCount < count {
+            await Task.yield()
+        }
     }
 
     private func destination() -> EchoLinkDestination {
@@ -72,24 +104,45 @@ final class EchoLinkClientTests: XCTestCase {
         try fixtureLines("live-proxy-login-in.hex")[1]
     }
 
-    /// Connects, feeding the proxy handshake as the client asks for it.
+    /// Connects with no directory login: proxy login, then the node SDES.
+    ///
+    /// Note what is NOT here: there is no OPEN for the node, and so no STATUS
+    /// to inject. Across three captures, 0x01 OPEN was only ever sent for the
+    /// directory server — audio channels are connectionless.
     private func connect(_ harness: Harness) async throws {
         let task = Task { try await harness.client.connect(to: destination()) }
 
         // The proxy speaks first with its unframed nonce.
         harness.transport.inject(Data(Self.nonce.utf8))
-        // Then answers the OPEN — but only once the client has actually sent
-        // it. See EchoLinkProxyClientTests.startOpen for why this matters.
-        for _ in 0 ..< 100_000 where harness.transport.sentCount < 2 {
-            await Task.yield()
-        }
+        // [0] login, [1] the opening SDES. Answer only once it has gone out.
+        await waitForWrites(harness, 2)
+        harness.transport.inject(nodeAnswer())
+        try await task.value
+    }
+
+    /// Connects with the directory login, feeding each reply as it is asked for.
+    private func connectWithDirectory(_ harness: Harness) async throws {
+        let task = Task { try await harness.client.connect(to: destination()) }
+
+        harness.transport.inject(Data(Self.nonce.utf8))
+        // [0] proxy login, [1] OPEN to the directory server.
+        await waitForWrites(harness, 2)
         harness.transport.inject(try statusSuccess())
+        // [2] the tunnelled account login.
+        await waitForWrites(harness, 3)
+        harness.transport.inject(
+            EchoLinkProxyFrame(type: .data, payload: Data("OK".utf8)).encoded)
+        // The proxy closes the directory channel — which must NOT end the
+        // session — and then [3] the opening SDES goes to the node.
+        harness.transport.inject(EchoLinkProxyFrame(type: .close).encoded)
+        await waitForWrites(harness, 4)
+        harness.transport.inject(nodeAnswer())
         try await task.value
     }
 
     // MARK: - Connect
 
-    func testConnectLogsInOpensTheChannelAndReportsReceiving() async throws {
+    func testConnectLogsInSendsTheOpeningSDESAndReportsReceiving() async throws {
         let harness = makeHarness()
         try await connect(harness)
 
@@ -97,7 +150,7 @@ final class EchoLinkClientTests: XCTestCase {
         XCTAssertTrue(connected)
         XCTAssertEqual(harness.client.state, .receiving)
 
-        // What went on the wire: the login, then the OPEN naming the peer.
+        // What went on the wire: the proxy login, then RR+SDES to the node.
         let writes = harness.transport.sent
         XCTAssertEqual(
             writes[0],
@@ -105,9 +158,35 @@ final class EchoLinkClientTests: XCTestCase {
                 callsign: Self.callsign, password: .publicProxy, nonce: Self.nonce
             )
         )
-        let open = try EchoLinkProxyFrame.parse(writes[1]).frame
-        XCTAssertEqual(open.type, .open)
-        XCTAssertEqual(open.peer, Self.peer)
+        let frame = try EchoLinkProxyFrame.parse(writes[1]).frame
+        XCTAssertEqual(frame.type, .udpControl, "the node session opens on the control channel")
+        XCTAssertEqual(frame.peer, Self.peer)
+
+        let compound = try EchoLinkRTCPCompound.parse(frame.payload)
+        XCTAssertEqual(compound.packets.count, 2, "RR then SDES, as observed")
+        guard case .receiverReport = compound.packets[0] else {
+            return XCTFail("first packet must be a receiver report")
+        }
+        guard case .sourceDescription(_, let items) = compound.packets[1] else {
+            return XCTFail("second packet must be an SDES")
+        }
+        let name = items.first { $0.type == .name }?.text
+        XCTAssertEqual(name, "N0CALL         Test Operator",
+                       "callsign left-justified in a 15-character field, then the name")
+    }
+
+    func testNoOpenIsEverSentForTheNode() async throws {
+        // The correction that matters most: across three captures and six
+        // distinct audio peers, 0x01 OPEN was only ever sent for the directory
+        // server. An earlier version of connect() opened a channel to the node,
+        // which no real client does.
+        let harness = makeHarness()
+        try await connect(harness)
+
+        for write in harness.transport.sent.dropFirst() {
+            let frame = try EchoLinkProxyFrame.parse(write).frame
+            XCTAssertNotEqual(frame.type, .open, "no OPEN may be sent for an audio peer")
+        }
     }
 
     func testConnectingTwiceIsRejected() async throws {
@@ -154,6 +233,227 @@ final class EchoLinkClientTests: XCTestCase {
         let connected = await harness.client.isConnected
         XCTAssertFalse(connected, "a failed connect must not leave a half-open session")
         XCTAssertEqual(harness.client.state, .idle)
+    }
+
+    // MARK: - The directory login, wired into connect
+
+    func testDirectoryLoginRunsInTheRightOrderAndOpensTheSession() async throws {
+        // The whole sequence the captures show, in one test:
+        //   proxy login -> OPEN(directory) -> account login -> "OK" -> CLOSE
+        //   -> SDES to the node.
+        let harness = makeHarness(
+            accountPassword: EchoLinkAccountPassword("not-a-real-password"),
+            directoryServer: Self.directoryServer
+        )
+        try await connectWithDirectory(harness)
+
+        let writes = harness.transport.sent
+        XCTAssertEqual(writes.count, 4)
+
+        let open = try EchoLinkProxyFrame.parse(writes[1]).frame
+        XCTAssertEqual(open.type, .open)
+        XCTAssertEqual(open.peer, Self.directoryServer,
+                       "the only OPEN a real client sends is to the directory server")
+
+        let login = try EchoLinkProxyFrame.parse(writes[2]).frame
+        XCTAssertEqual(login.type, .data, "the account login is tunnelled as 0x02")
+        XCTAssertEqual(
+            login.payload,
+            EchoLinkDirectory.loginLine(
+                callsign: Self.callsign,
+                password: EchoLinkAccountPassword("not-a-real-password")
+            )
+        )
+
+        let sdes = try EchoLinkProxyFrame.parse(writes[3]).frame
+        XCTAssertEqual(sdes.type, .udpControl)
+        XCTAssertEqual(sdes.peer, Self.peer)
+
+        let connected = await harness.client.isConnected
+        XCTAssertTrue(connected)
+    }
+
+    func testTheDirectoryChannelClosingDoesNotEndTheSession() async throws {
+        // The bug this replaces would have torn down every session a few
+        // hundred milliseconds after connecting: the proxy CLOSEs the
+        // directory channel on purpose, with all the audio still to come.
+        let harness = makeHarness(
+            accountPassword: EchoLinkAccountPassword("not-a-real-password"),
+            directoryServer: Self.directoryServer
+        )
+        try await connectWithDirectory(harness)
+
+        // Another CLOSE, well after connecting.
+        harness.transport.inject(EchoLinkProxyFrame(type: .close).encoded)
+        for _ in 0 ..< 5_000 { await Task.yield() }
+
+        let connected = await harness.client.isConnected
+        XCTAssertTrue(connected, "a CLOSE closes a tunnelled channel, not the session")
+        XCTAssertEqual(harness.client.state, .receiving)
+    }
+
+    func testRejectedDirectoryLoginIsATypedErrorAndLeavesTheClientIdle() async throws {
+        let harness = makeHarness(
+            accountPassword: EchoLinkAccountPassword("wrong"),
+            directoryServer: Self.directoryServer
+        )
+        let task = Task { try await harness.client.connect(to: destination()) }
+
+        harness.transport.inject(Data(Self.nonce.utf8))
+        await waitForWrites(harness, 2)
+        harness.transport.inject(try statusSuccess())
+        await waitForWrites(harness, 3)
+        harness.transport.inject(
+            EchoLinkProxyFrame(type: .data, payload: Data("Bad password".utf8)).encoded)
+
+        do {
+            try await task.value
+            XCTFail("a rejected account login must not read as connected")
+        } catch let error as EchoLinkClientError {
+            guard case .directory(let inner) = error else {
+                return XCTFail("expected .directory, got \(error)")
+            }
+            guard case .loginRejected = inner else {
+                return XCTFail("expected .loginRejected, got \(inner)")
+            }
+        }
+
+        let connected = await harness.client.isConnected
+        XCTAssertFalse(connected)
+        XCTAssertEqual(harness.client.state, .idle)
+    }
+
+    func testHalfADirectoryConfigurationIsRefused() async throws {
+        // A password with nowhere to send it would silently skip the login it
+        // was given for, which is worse than refusing.
+        let passwordOnly = makeHarness(
+            accountPassword: EchoLinkAccountPassword("x"),
+            directoryServer: nil
+        )
+        do {
+            try await passwordOnly.client.connect(to: destination())
+            XCTFail("a password with no directory server must be refused")
+        } catch let error as EchoLinkClientError {
+            XCTAssertEqual(error, .directoryLoginIncomplete)
+        }
+
+        let serverOnly = makeHarness(accountPassword: nil, directoryServer: Self.directoryServer)
+        do {
+            try await serverOnly.client.connect(to: destination())
+            XCTFail("a directory server with no password must be refused")
+        } catch let error as EchoLinkClientError {
+            XCTAssertEqual(error, .directoryLoginIncomplete)
+        }
+    }
+
+    func testAccountPasswordNeverAppearsInAConnectError() async throws {
+        let secret = "hunter2-not-real"
+        let harness = makeHarness(
+            accountPassword: EchoLinkAccountPassword(secret),
+            directoryServer: Self.directoryServer
+        )
+        let task = Task { try await harness.client.connect(to: destination()) }
+
+        harness.transport.inject(Data(Self.nonce.utf8))
+        await waitForWrites(harness, 2)
+        harness.transport.inject(try statusSuccess())
+        await waitForWrites(harness, 3)
+        harness.transport.inject(
+            EchoLinkProxyFrame(type: .data, payload: Data("NO".utf8)).encoded)
+
+        do {
+            try await task.value
+            XCTFail("expected a rejection")
+        } catch {
+            XCTAssertFalse("\(error)".contains(secret), "the error leaked the password")
+        }
+    }
+
+    // MARK: - The node handshake
+
+    func testConnectFailsWhenTheNodeNeverAnswers() async throws {
+        // Better than reporting success and then sitting in silence: if nothing
+        // answers the SDES, there is no session.
+        let harness = makeHarness(nodeAnswerTimeout: .milliseconds(300))
+        let task = Task { try await harness.client.connect(to: destination()) }
+        harness.transport.inject(Data(Self.nonce.utf8))
+
+        do {
+            try await task.value
+            XCTFail("a node that never answers must not read as connected")
+        } catch let error as EchoLinkClientError {
+            XCTAssertEqual(error, .nodeDidNotAnswer)
+        }
+
+        let connected = await harness.client.isConnected
+        XCTAssertFalse(connected)
+    }
+
+    func testTheOpeningSDESIsRetransmittedUntilAnswered() async throws {
+        // The observed client sent it twice, ~0.8 s apart, before the node
+        // replied ~1.5 s in.
+        let harness = makeHarness(nodeAnswerTimeout: .seconds(2))
+        let task = Task { try await harness.client.connect(to: destination()) }
+        harness.transport.inject(Data(Self.nonce.utf8))
+
+        await waitForWrites(harness, 3)  // login + at least two SDES
+        harness.transport.inject(nodeAnswer())
+        try await task.value
+
+        XCTAssertGreaterThanOrEqual(harness.transport.sentCount, 3,
+                                    "the SDES must be resent while waiting")
+    }
+
+    func testInboundAudioCountsAsTheNodeAnswering() async throws {
+        // ECHOTEST's first reply in the capture was oNDATA text, before its
+        // RTCP — so anything from the peer means it is there.
+        let harness = makeHarness()
+        let task = Task { try await harness.client.connect(to: destination()) }
+        harness.transport.inject(Data(Self.nonce.utf8))
+        await waitForWrites(harness, 2)
+
+        harness.transport.inject(
+            EchoLinkProxyFrame(
+                type: .udpData, peer: Self.peer,
+                payload: Data("oNDATA*ECHOTEST*\r".utf8)
+            ).encoded)
+        try await task.value
+
+        let connected = await harness.client.isConnected
+        XCTAssertTrue(connected)
+    }
+
+    func testANodeGoodbyeEndsTheSession() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        let goodbye = EchoLinkProxyFrame(
+            type: .udpControl, peer: Self.peer,
+            payload: EchoLinkRTCPCompound.sessionClosing(ssrc: 9999).encoded
+        )
+        harness.transport.inject(goodbye.encoded)
+        for _ in 0 ..< 20_000 where await harness.client.isConnected {
+            await Task.yield()
+        }
+
+        let connected = await harness.client.isConnected
+        XCTAssertFalse(connected, "a BYE from the node ends the session")
+    }
+
+    func testDisconnectSendsAGoodbye() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+        harness.transport.clearSent()
+
+        await harness.client.disconnect()
+
+        let frames = try harness.transport.sent.map { try EchoLinkProxyFrame.parse($0).frame }
+        let byes = try frames
+            .filter { $0.type == .udpControl }
+            .map { try EchoLinkRTCPCompound.parse($0.payload) }
+            .filter(\.isGoodbye)
+        XCTAssertEqual(byes.count, 1,
+                       "the far end should see a clean end, not infer one from silence")
     }
 
     // MARK: - Receive

@@ -62,6 +62,12 @@ public enum EchoLinkClientError: Error, Equatable, CustomStringConvertible {
     /// Direct mode is not implemented. See the note on `EchoLinkClient`.
     case directModeUnavailable
     case proxy(EchoLinkProxyError)
+    /// The directory server refused the login, or never answered.
+    case directory(EchoLinkDirectoryError)
+    /// A directory login was asked for without both the things it needs.
+    case directoryLoginIncomplete
+    /// The node never answered the SDES that opens a session.
+    case nodeDidNotAnswer
 
     public var description: String {
         switch self {
@@ -71,6 +77,12 @@ public enum EchoLinkClientError: Error, Equatable, CustomStringConvertible {
             return "direct (non-proxied) EchoLink is not implemented — "
                 + "no capture of a direct session exists to build it against"
         case .proxy(let error): return "proxy: \(error)"
+        case .directory(let error): return "directory: \(error)"
+        case .directoryLoginIncomplete:
+            return "a directory login needs both an account password and a "
+                + "directory server address"
+        case .nodeDidNotAnswer:
+            return "the node did not answer — no reply to the SDES that opens a session"
         }
     }
 }
@@ -78,6 +90,10 @@ public enum EchoLinkClientError: Error, Equatable, CustomStringConvertible {
 /// Session events, in the shape `M17ClientEvent` already established.
 public enum EchoLinkClientEvent: Sendable, Equatable {
     case connecting
+    /// The directory server accepted our account login.
+    case directoryLoggedIn
+    /// The node answered the SDES, identifying itself.
+    case nodeAnswered(name: String)
     case connected(node: String)
     case disconnected(reason: String)
     case transmitting
@@ -138,6 +154,43 @@ public actor EchoLinkClient: NetworkClient {
         public var frameInterval: Duration
         /// The operator's callsign, for the proxy login and the directory.
         public var callsign: String
+
+        /// Shown to the far end in the SDES `NAME` item, alongside the
+        /// callsign.
+        public var operatorName: String
+
+        /// How this client identifies itself in the SDES `TOOL` item.
+        ///
+        /// Observed values are `EchoHam2.31` and `thebridge V 0.81`. Whether
+        /// any peer keys on this is unknown, so we send our own name rather
+        /// than impersonating a client we are not.
+        public var tool: String
+
+        /// The operator's own EchoLink account password (FR-3.4).
+        ///
+        /// `nil` skips the directory login. See the note on `connect(to:)` for
+        /// what that costs.
+        public var accountPassword: EchoLinkAccountPassword?
+
+        /// The directory server's address, for the `OPEN` that tunnels the
+        /// account login to it.
+        ///
+        /// Deliberately has **no default**. The proxy's `OPEN` carries a raw
+        /// IPv4 address and nothing here resolves DNS, so a default would mean
+        /// hardcoding one operator's choice of a third party's server into the
+        /// library. It is configuration.
+        public var directoryServer: EchoLinkPeerAddress?
+
+        /// How long to wait for the node to answer the opening SDES.
+        ///
+        /// The captures show a reply about 1.5 s in, after one retransmit, so
+        /// the default is generous rather than tight.
+        public var nodeAnswerTimeout: Duration
+
+        /// How often to resend the opening SDES while waiting.
+        ///
+        /// The observed client resent at ~0.8 s.
+        public var nodeAnswerRetryInterval: Duration
         /// The inbound jitter buffer (AU-3).
         public var jitterBuffer: JitterBuffer
         /// The received-audio leveller (RC-6/AU-4).
@@ -145,14 +198,26 @@ public actor EchoLinkClient: NetworkClient {
 
         public init(
             callsign: String,
+            operatorName: String = "",
+            tool: String = "swift-hamvoip",
+            accountPassword: EchoLinkAccountPassword? = nil,
+            directoryServer: EchoLinkPeerAddress? = nil,
             transmitTimeout: Duration = .seconds(180),
             frameInterval: Duration = .milliseconds(20),
+            nodeAnswerTimeout: Duration = .seconds(15),
+            nodeAnswerRetryInterval: Duration = .milliseconds(800),
             jitterBuffer: JitterBuffer = JitterBuffer(),
             leveller: AudioLeveller = AudioLeveller()
         ) {
             self.callsign = callsign
+            self.operatorName = operatorName
+            self.tool = tool
+            self.accountPassword = accountPassword
+            self.directoryServer = directoryServer
             self.transmitTimeout = transmitTimeout
             self.frameInterval = frameInterval
+            self.nodeAnswerTimeout = nodeAnswerTimeout
+            self.nodeAnswerRetryInterval = nodeAnswerRetryInterval
             self.jitterBuffer = jitterBuffer
             self.leveller = leveller
         }
@@ -179,6 +244,14 @@ public actor EchoLinkClient: NetworkClient {
     private let configuration: Configuration
     private let codec: any VoiceCodec
     private let makeTransport: TransportFactory
+
+    // An existential `any Clock` cannot be used generically, so the two things
+    // this type needs from the clock are captured as closures at init — the
+    // same shape `M17Client` uses, and for the same reason.
+    private let elapsedSinceOrigin: @Sendable () -> Duration
+    private let sleepFor: @Sendable (Duration) async throws -> Void
+    private let makeDirectorySession:
+        @Sendable (String, @escaping EchoLinkDirectorySession.Send) -> EchoLinkDirectorySession
     private let makeProxyClient:
         @Sendable (String, EchoLinkProxyPassword, any StreamTransport) -> EchoLinkProxyClient
 
@@ -192,6 +265,16 @@ public actor EchoLinkClient: NetworkClient {
     private var destination: EchoLinkDestination?
     private var transport: (any StreamTransport)?
     private var proxy: EchoLinkProxyClient?
+    /// Live only while a directory login is in flight, so a stray `0x02`
+    /// outside that window is ignored rather than fed to a finished session.
+    private var directory: EchoLinkDirectorySession?
+
+    /// True while `openNodeSession` is waiting. As everywhere else in this
+    /// module, the in-flight flag is its own state and not inferred from
+    /// `phase`, which the frame pump also writes.
+    private var awaitingNodeAnswer = false
+    /// Set once the node has said anything at all.
+    private var nodeAnswer: String?
 
     private var inbound = EchoLinkStreamAudio()
     private var transmitter = EchoLinkStreamTransmitter()
@@ -230,6 +313,12 @@ public actor EchoLinkClient: NetworkClient {
         self.watchdog = TransmitWatchdog(clock: clock)
 
         let sendableClock = clock
+        let origin = clock.now
+        self.elapsedSinceOrigin = { sendableClock.now.duration(to: origin) * -1 }
+        self.sleepFor = { duration in try await sendableClock.sleep(for: duration) }
+        self.makeDirectorySession = { callsign, send in
+            EchoLinkDirectorySession(callsign: callsign, clock: sendableClock, send: send)
+        }
         self.makeProxyClient =
             proxyClientFactory
             ?? { callsign, password, transport in
@@ -266,12 +355,47 @@ public actor EchoLinkClient: NetworkClient {
 
     // MARK: - NetworkClient: connecting
 
-    /// Logs in to the proxy, opens a channel to the peer, and starts the audio
-    /// path.
+    /// Logs in to the proxy and the directory, opens the node session, and
+    /// starts the audio path.
+    ///
+    /// ## The sequence, and why it is this one
+    ///
+    /// Straight from the captures, and two steps of it are not what the plan
+    /// assumed:
+    ///
+    /// 1. **Proxy login** — nonce, then callsign and digest (EL-5).
+    /// 2. **`OPEN` to the *directory server*** → `STATUS`. This is the only
+    ///    `OPEN` a real client ever sends.
+    /// 3. **Directory login** tunnelled as `0x02`, answered `OK` (EL-6).
+    /// 4. The proxy **`CLOSE`s that channel**. The session continues.
+    /// 5. **`RR + SDES` to the node** on the `0x06` channel, retransmitted
+    ///    until it answers.
+    ///
+    /// **There is no `OPEN` for the node.** That is the correction that matters
+    /// most here: across three captures and six distinct audio peers, `0x01
+    /// OPEN` was sent *only* for the directory server. The `0x01`/`0x02`/`0x03`
+    /// /`0x04` family is the tunnelled **TCP** connection; `0x05`/`0x06` are
+    /// connectionless and carry the peer's address in each frame header, so an
+    /// audio channel needs no setup at all. An earlier version of this method
+    /// opened a channel to the node, which no real client does — see the EL-10
+    /// notes.
+    ///
+    /// ## Skipping the directory login
+    ///
+    /// With no `accountPassword` (or no `directoryServer`) steps 2–4 are
+    /// skipped. Whether a node answers a client that never logged in is **not
+    /// established** — no capture shows the attempt — so this is offered as a
+    /// deliberate experiment, not as a supported mode. If the node does not
+    /// answer, `.nodeDidNotAnswer` is the likely result.
     public func connect(to destination: EchoLinkDestination) async throws {
         guard phase == .idle else { throw EchoLinkClientError.alreadyConnected }
         guard case .proxy(_, _, let password) = destination.route else {
             throw EchoLinkClientError.directModeUnavailable
+        }
+        // Half a configuration is a mistake, not an intention: a password with
+        // nowhere to send it would silently skip the login it was given for.
+        if (configuration.accountPassword == nil) != (configuration.directoryServer == nil) {
+            throw EchoLinkClientError.directoryLoginIncomplete
         }
 
         phase = .connecting
@@ -292,10 +416,18 @@ public actor EchoLinkClient: NetworkClient {
 
         do {
             try await proxy.login()
-            try await proxy.open(peer: destination.peer)
         } catch let error as EchoLinkProxyError {
             await releaseSession()
             throw EchoLinkClientError.proxy(error)
+        }
+
+        // The frame pump must be running before the directory login, because
+        // that login's reply arrives as a 0x02 frame through it.
+        startFramePump(proxy: proxy)
+
+        do {
+            try await logInToDirectoryIfConfigured(proxy: proxy)
+            try await openNodeSession(proxy: proxy, destination: destination)
         } catch {
             await releaseSession()
             throw error
@@ -303,9 +435,82 @@ public actor EchoLinkClient: NetworkClient {
 
         phase = .connected
         setState(.receiving)
-        startFramePump(proxy: proxy)
         startPlayoutLoop()
         emit(.connected(node: destination.node))
+    }
+
+    /// Steps 2–4: tunnel the account login to the directory server.
+    private func logInToDirectoryIfConfigured(proxy: EchoLinkProxyClient) async throws {
+        guard let accountPassword = configuration.accountPassword,
+              let server = configuration.directoryServer
+        else { return }
+
+        do {
+            try await proxy.open(peer: server)
+        } catch let error as EchoLinkProxyError {
+            throw EchoLinkClientError.proxy(error)
+        }
+
+        let session = makeDirectorySession(configuration.callsign) { [weak proxy] bytes in
+            // Tunnelled: the same login line, inside a 0x02 frame. EL-6's seam
+            // exists exactly so this is the only difference from direct mode.
+            guard let proxy else { throw EchoLinkProxyError.streamClosed }
+            try await proxy.send(EchoLinkProxyFrame(type: .data, payload: bytes))
+        }
+        directory = session
+
+        do {
+            try await session.login(password: accountPassword)
+        } catch let error as EchoLinkDirectoryError {
+            directory = nil
+            throw EchoLinkClientError.directory(error)
+        }
+        directory = nil
+        emit(.directoryLoggedIn)
+    }
+
+    /// Step 5: the SDES exchange that actually opens a node session.
+    private func openNodeSession(
+        proxy: EchoLinkProxyClient,
+        destination: EchoLinkDestination
+    ) async throws {
+        let opening = EchoLinkRTCPCompound.sessionOpening(
+            callsign: configuration.callsign,
+            operatorName: configuration.operatorName,
+            localTime: localTimeHHMM(),
+            tool: configuration.tool
+        )
+        let frame = EchoLinkProxyFrame(
+            type: .udpControl,
+            peer: destination.peer,
+            payload: opening.encoded
+        )
+
+        awaitingNodeAnswer = true
+        defer { awaitingNodeAnswer = false }
+
+        let deadline = elapsedSinceOrigin() + configuration.nodeAnswerTimeout
+        while elapsedSinceOrigin() < deadline {
+            do {
+                try await proxy.send(frame)
+            } catch let error as EchoLinkProxyError {
+                throw EchoLinkClientError.proxy(error)
+            }
+            if nodeAnswer != nil { return }
+
+            // Retransmit until answered, as the observed client does.
+            try? await sleepFor(configuration.nodeAnswerRetryInterval)
+            if nodeAnswer != nil { return }
+        }
+        throw EchoLinkClientError.nodeDidNotAnswer
+    }
+
+    /// `HH:MM` local time, which is what the observed clients put in the SDES
+    /// `PHONE` item.
+    private func localTimeHHMM() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: Date())
     }
 
     /// Drops the session, stops the audio path and finishes the public streams.
@@ -415,21 +620,63 @@ public actor EchoLinkClient: NetworkClient {
         case .udpData:
             switch EchoLinkAudioChannelMessage.classify(frame.payload) {
             case .audio(let packet):
+                noteNodeAnswer(named: nil)
                 let reception = inbound.receive(packet)
                 if reception.isNewTalkspurt { emit(.talkspurtStarted) }
                 for timed in reception.frames { buffer.push(timed) }
             case .stationInfo(let text):
+                // The first thing ECHOTEST sent back was oNDATA text, before
+                // its RTCP — so this counts as the node answering.
+                noteNodeAnswer(named: nil)
                 emit(.stationInfo(text))
             case .unrecognised:
                 break
             }
+
+        case .udpControl:
+            guard let compound = try? EchoLinkRTCPCompound.parse(frame.payload) else { break }
+            if compound.isGoodbye {
+                Task { [weak self] in await self?.nodeSaidGoodbye() }
+                break
+            }
+            noteNodeAnswer(named: compound.sourceName)
+
+        case .data:
+            // The directory server's reply, tunnelled. Only meaningful while a
+            // directory login is in flight.
+            if let directory {
+                Task { await directory.received(frame.payload) }
+            }
+
         case .close:
-            Task { [weak self] in await self?.linkFinished() }
+            // ⚠️ A CLOSE is *not* the session ending. It closes the tunnelled
+            // TCP channel — which in a normal session is the directory
+            // connection being shut down on purpose, immediately after the
+            // login succeeds, with audio still to come. An earlier version
+            // treated any 0x03 as the link going down, which would have torn
+            // down every session a few hundred milliseconds after connecting.
+            //
+            // Audio channels are connectionless and have no CLOSE at all, so
+            // there is no case in which this means the node has gone.
+            break
+
         default:
-            // 0x06 control frames are observed but not decoded past their
-            // outer shape, and nothing on the path to a QSO needs them.
             break
         }
+    }
+
+    /// Record that the far end has said something, which is what "the node
+    /// answered" means — see `openNodeSession`.
+    private func noteNodeAnswer(named name: String?) {
+        guard awaitingNodeAnswer, nodeAnswer == nil else { return }
+        nodeAnswer = name ?? ""
+        emit(.nodeAnswered(name: name ?? destination?.node ?? "the node"))
+    }
+
+    private func nodeSaidGoodbye() async {
+        guard phase != .idle else { return }
+        await releaseSession()
+        emit(.disconnected(reason: "the node said goodbye"))
     }
 
     private func linkFinished() async {
@@ -475,10 +722,28 @@ public actor EchoLinkClient: NetworkClient {
     // MARK: - Teardown
 
     private func releaseSession() async {
+        // Say goodbye before tearing anything down, so the far end sees a
+        // clean end rather than inferring one from silence. Best effort: if
+        // the link is already gone this does nothing, which is why it is not
+        // allowed to throw.
+        if phase == .connected, let proxy, let destination {
+            try? await proxy.send(
+                EchoLinkProxyFrame(
+                    type: .udpControl,
+                    peer: destination.peer,
+                    payload: EchoLinkRTCPCompound.sessionClosing().encoded
+                )
+            )
+        }
+
         frameTask?.cancel()
         frameTask = nil
         playoutTask?.cancel()
         playoutTask = nil
+
+        awaitingNodeAnswer = false
+        nodeAnswer = nil
+        directory = nil
 
         await watchdog.cancel()
         await proxy?.close()
