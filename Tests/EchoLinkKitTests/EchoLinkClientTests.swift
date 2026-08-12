@@ -1,0 +1,441 @@
+// SPDX-License-Identifier: Apache-2.0
+
+import XCTest
+import EchoLinkKit
+import RadioCore
+import TestSupport
+
+/// EL-9 — the `NetworkClient` facade, driven from fixtures over mock
+/// transports. No socket is opened (AU-5).
+///
+/// The codec is a stub, deliberately. `EchoLinkClient` is written against
+/// `RadioCore.VoiceCodec` and never names GSM, so the sequencing, the packing
+/// and the watchdog are all covered whether or not the vendored codec is
+/// present — the precedent `M17Client` set for Codec2.
+final class EchoLinkClientTests: XCTestCase {
+    private static let callsign = "N0CALL"
+    private static let nonce = "6fc8b7e3"
+    private static let peer = EchoLinkPeerAddress(13, 57, 14, 183)
+
+    /// A 33-byte-per-frame, 160-sample-per-frame codec that does no signal
+    /// processing: exactly GSM 06.10's frame geometry, so every size assertion
+    /// in the client is exercised, with none of the codec's behaviour.
+    private struct StubCodec: VoiceCodec {
+        let samplesPerFrame = 160
+        let bytesPerFrame = 33
+
+        func encode(_ pcm: [Int16]) throws -> [UInt8] {
+            // First sample's low byte, repeated: enough to tell frames apart.
+            [UInt8](repeating: UInt8(truncatingIfNeeded: pcm.first ?? 0), count: bytesPerFrame)
+        }
+
+        func decode(_ frame: [UInt8]) throws -> [Int16] {
+            [Int16](repeating: Int16(frame.first ?? 0), count: samplesPerFrame)
+        }
+    }
+
+    private struct Harness {
+        let client: EchoLinkClient
+        let transport: MockStreamTransport
+    }
+
+    private func makeHarness(
+        transmitTimeout: Duration = .seconds(180)
+    ) -> Harness {
+        let transport = MockStreamTransport()
+        let client = EchoLinkClient(
+            codec: StubCodec(),
+            configuration: .init(
+                callsign: Self.callsign,
+                transmitTimeout: transmitTimeout,
+                frameInterval: .milliseconds(20)
+            ),
+            clock: ContinuousClock(),
+            transportFactory: { _ in transport }
+        )
+        return Harness(client: client, transport: transport)
+    }
+
+    private func destination() -> EchoLinkDestination {
+        EchoLinkDestination(
+            peer: Self.peer,
+            node: "*ECHOTEST*",
+            route: .proxy(host: "proxy.invalid", port: 8100, password: .publicProxy)
+        )
+    }
+
+    private func fixtureLines(_ name: String) throws -> [Data] {
+        try FixtureLoader.datagrams(name, in: Bundle.module)
+    }
+
+    private func statusSuccess() throws -> Data {
+        try fixtureLines("live-proxy-login-in.hex")[1]
+    }
+
+    /// Connects, feeding the proxy handshake as the client asks for it.
+    private func connect(_ harness: Harness) async throws {
+        let task = Task { try await harness.client.connect(to: destination()) }
+
+        // The proxy speaks first with its unframed nonce.
+        harness.transport.inject(Data(Self.nonce.utf8))
+        // Then answers the OPEN — but only once the client has actually sent
+        // it. See EchoLinkProxyClientTests.startOpen for why this matters.
+        for _ in 0 ..< 100_000 where harness.transport.sentCount < 2 {
+            await Task.yield()
+        }
+        harness.transport.inject(try statusSuccess())
+        try await task.value
+    }
+
+    // MARK: - Connect
+
+    func testConnectLogsInOpensTheChannelAndReportsReceiving() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        let connected = await harness.client.isConnected
+        XCTAssertTrue(connected)
+        XCTAssertEqual(harness.client.state, .receiving)
+
+        // What went on the wire: the login, then the OPEN naming the peer.
+        let writes = harness.transport.sent
+        XCTAssertEqual(
+            writes[0],
+            EchoLinkAuth.proxyLoginMessage(
+                callsign: Self.callsign, password: .publicProxy, nonce: Self.nonce
+            )
+        )
+        let open = try EchoLinkProxyFrame.parse(writes[1]).frame
+        XCTAssertEqual(open.type, .open)
+        XCTAssertEqual(open.peer, Self.peer)
+    }
+
+    func testConnectingTwiceIsRejected() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        do {
+            try await harness.client.connect(to: destination())
+            XCTFail("a second connect must be rejected")
+        } catch let error as EchoLinkClientError {
+            XCTAssertEqual(error, .alreadyConnected)
+        }
+    }
+
+    func testDirectModeIsRefusedRatherThanGuessedAt() async throws {
+        // FR-3.3 keeps direct mode reachable in the model, but no capture of a
+        // direct session exists, and building the socket setup from the
+        // plausible reading is what this module's position forbids.
+        let harness = makeHarness()
+        let direct = EchoLinkDestination(peer: Self.peer, node: "*ECHOTEST*", route: .direct)
+
+        do {
+            try await harness.client.connect(to: direct)
+            XCTFail("direct mode must not silently pretend to work")
+        } catch let error as EchoLinkClientError {
+            XCTAssertEqual(error, .directModeUnavailable)
+        }
+    }
+
+    func testProxyFailureSurfacesAndLeavesTheClientIdle() async throws {
+        let harness = makeHarness()
+        let task = Task { try await harness.client.connect(to: destination()) }
+        harness.transport.finish()
+
+        do {
+            try await task.value
+            XCTFail("connect must fail when the proxy hangs up")
+        } catch let error as EchoLinkClientError {
+            guard case .proxy = error else {
+                return XCTFail("expected .proxy, got \(error)")
+            }
+        }
+
+        let connected = await harness.client.isConnected
+        XCTAssertFalse(connected, "a failed connect must not leave a half-open session")
+        XCTAssertEqual(harness.client.state, .idle)
+    }
+
+    // MARK: - Receive
+
+    func testCapturedAudioReachesTheReceivedAudioStream() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        let audio = try fixtureLines("live-proxy-audio-in.hex")
+        let collected = Task { () -> [[Int16]] in
+            var frames: [[Int16]] = []
+            for await pcm in harness.client.receivedAudio {
+                frames.append(pcm)
+                if frames.count == 8 { break }
+            }
+            return frames
+        }
+
+        harness.transport.inject(audio)
+        let frames = try await collected.value
+
+        XCTAssertEqual(frames.count, 8)
+        XCTAssertTrue(frames.allSatisfy { $0.count == 160 },
+                      "one 20 ms frame of 8 kHz mono per tick")
+    }
+
+    func testANewTalkspurtIsReported() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        let events = Task { () -> [EchoLinkClientEvent] in
+            var seen: [EchoLinkClientEvent] = []
+            for await event in harness.client.events {
+                seen.append(event)
+                if seen.filter({ $0 == .talkspurtStarted }).count == 2 { break }
+            }
+            return seen
+        }
+
+        // The fixture spans a talkspurt boundary: 146..151 then 0..7.
+        harness.transport.inject(try fixtureLines("live-proxy-audio-in.hex"))
+        let seen = try await events.value
+
+        XCTAssertEqual(seen.filter { $0 == .talkspurtStarted }.count, 2,
+                       "the first packet, and the 151 -> 0 boundary")
+    }
+
+    func testStationInfoIsReportedAndNotPlayed() async throws {
+        // The 0x05 channel is not audio-only. Text played as speech is noise.
+        let harness = makeHarness()
+        try await connect(harness)
+
+        let events = Task { () -> EchoLinkClientEvent? in
+            for await event in harness.client.events {
+                if case .stationInfo = event { return event }
+            }
+            return nil
+        }
+
+        let info = EchoLinkProxyFrame(
+            type: .udpData,
+            peer: Self.peer,
+            payload: Data("oNDATA*ECHOTEST*\rConference\r".utf8)
+        )
+        harness.transport.inject(info.encoded)
+
+        guard case .stationInfo(let text) = try await events.value else {
+            return XCTFail("station info must be surfaced as an event")
+        }
+        XCTAssertTrue(text.hasPrefix("oNDATA"))
+    }
+
+    // MARK: - Transmit
+
+    func testTransmitEmitsAPacketEveryFourFrames() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+        harness.transport.clearSent()
+
+        try await harness.client.startTransmit()
+        guard case .transmitting = harness.client.state else {
+            return XCTFail("state must be .transmitting after startTransmit")
+        }
+
+        let pcm = [Int16](repeating: 1000, count: 160)
+        for index in 0 ..< 3 {
+            let early = try await harness.client.send(pcm: pcm)
+            XCTAssertNil(early, "frame \(index) must not complete a packet on its own")
+        }
+        let packet = try await harness.client.send(pcm: pcm)
+
+        XCTAssertEqual(packet?.codecFrames.count, 4)
+        XCTAssertEqual(harness.transport.sentCount, 1, "four 20 ms frames, one 80 ms packet")
+
+        let frame = try EchoLinkProxyFrame.parse(harness.transport.sentBytes).frame
+        XCTAssertEqual(frame.type, .udpData)
+        XCTAssertEqual(frame.peer, Self.peer)
+        XCTAssertEqual(frame.payload.count, EchoLinkRTPPacket.observedPacketSize)
+    }
+
+    func testSendWhileNotTransmittingIsDroppedNotThrown() async throws {
+        // A capture pipeline runs continuously. Dropping silently is the
+        // fail-safe direction: the failure mode is dead air, not an open
+        // microphone.
+        let harness = makeHarness()
+        try await connect(harness)
+        harness.transport.clearSent()
+
+        for _ in 0 ..< 8 {
+            let sent = try await harness.client.send(pcm: [Int16](repeating: 5, count: 160))
+            XCTAssertNil(sent)
+        }
+        XCTAssertEqual(harness.transport.sentCount, 0, "nothing may go out unkeyed")
+    }
+
+    func testStopTransmitFlushesRatherThanClippingTheOver() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+        try await harness.client.startTransmit()
+        harness.transport.clearSent()
+
+        // Two frames — not a full packet.
+        let pcm = [Int16](repeating: 700, count: 160)
+        _ = try await harness.client.send(pcm: pcm)
+        _ = try await harness.client.send(pcm: pcm)
+        XCTAssertEqual(harness.transport.sentCount, 0)
+
+        await harness.client.stopTransmit()
+
+        XCTAssertEqual(harness.transport.sentCount, 1, "the part-filled packet must go out")
+        let frame = try EchoLinkProxyFrame.parse(harness.transport.sentBytes).frame
+        let packet = try EchoLinkRTPPacket.parse(frame.payload)
+        XCTAssertEqual(packet.codecFrames.count, 2)
+        XCTAssertEqual(harness.client.state, .receiving)
+    }
+
+    func testStartTransmitIsIdempotent() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        try await harness.client.startTransmit()
+        guard case .transmitting(let since) = harness.client.state else {
+            return XCTFail("expected .transmitting")
+        }
+        try await harness.client.startTransmit()
+        guard case .transmitting(let stillSince) = harness.client.state else {
+            return XCTFail("expected .transmitting")
+        }
+        XCTAssertEqual(since, stillSince, "re-keying must not restart the over")
+    }
+
+    func testTransmitBeforeConnectIsRejected() async {
+        let harness = makeHarness()
+        do {
+            try await harness.client.startTransmit()
+            XCTFail("cannot transmit before connecting")
+        } catch {
+            XCTAssertEqual(error as? EchoLinkClientError, .notConnected)
+        }
+    }
+
+    // MARK: - The watchdog (SF-1)
+
+    func testWatchdogCutsTransmissionAtItsLimit() async throws {
+        // The safety requirement lives in the library, not the app.
+        let harness = makeHarness(transmitTimeout: .milliseconds(120))
+        try await connect(harness)
+
+        let timedOut = Task { () -> Duration? in
+            for await event in harness.client.events {
+                if case .transmitTimedOut(let after) = event { return after }
+            }
+            return nil
+        }
+
+        try await harness.client.startTransmit()
+        guard case .transmitting = harness.client.state else {
+            return XCTFail("expected .transmitting")
+        }
+
+        let after = try await timedOut.value
+        XCTAssertEqual(after, .milliseconds(120))
+        XCTAssertEqual(harness.client.state, .receiving,
+                       "the watchdog must return the client to receive, not leave it keyed")
+    }
+
+    func testAudioStopsGoingOutAfterTheWatchdogFires() async throws {
+        let harness = makeHarness(transmitTimeout: .milliseconds(80))
+        try await connect(harness)
+
+        let timedOut = Task { () -> Bool in
+            for await event in harness.client.events {
+                if case .transmitTimedOut = event { return true }
+            }
+            return false
+        }
+        try await harness.client.startTransmit()
+        _ = try await timedOut.value
+        harness.transport.clearSent()
+
+        for _ in 0 ..< 8 {
+            _ = try await harness.client.send(pcm: [Int16](repeating: 9, count: 160))
+        }
+        XCTAssertEqual(harness.transport.sentCount, 0,
+                       "a cut transmission must stay cut")
+    }
+
+    // MARK: - Disconnect
+
+    func testDisconnectClosesEverythingAndFinishesTheStreams() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        await harness.client.disconnect()
+
+        let connected = await harness.client.isConnected
+        XCTAssertFalse(connected)
+        XCTAssertEqual(harness.client.state, .idle)
+        XCTAssertTrue(harness.transport.isClosed)
+
+        var audio = harness.client.receivedAudio.makeAsyncIterator()
+        let next = await audio.next()
+        XCTAssertNil(next, "receivedAudio must finish")
+    }
+
+    func testDisconnectIsIdempotent() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+        await harness.client.disconnect()
+        await harness.client.disconnect()
+        XCTAssertEqual(harness.client.state, .idle)
+    }
+
+    func testDisconnectWhileTransmittingUnkeys() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+        try await harness.client.startTransmit()
+
+        await harness.client.disconnect()
+        XCTAssertEqual(harness.client.state, .idle, "PTT must not survive a disconnect")
+    }
+
+    // MARK: - The whole cycle
+
+    func testFullConnectReceiveTransmitDisconnectCycle() async throws {
+        // EL-9's done-when, as one test.
+        let harness = makeHarness()
+        try await connect(harness)
+
+        // Receive.
+        let heard = Task { () -> Int in
+            var count = 0
+            for await _ in harness.client.receivedAudio {
+                count += 1
+                if count == 4 { break }
+            }
+            return count
+        }
+        harness.transport.inject(Array(try fixtureLines("live-proxy-audio-in.hex").prefix(2)))
+        let received = try await heard.value
+        XCTAssertEqual(received, 4)
+
+        // Transmit.
+        harness.transport.clearSent()
+        try await harness.client.startTransmit()
+        for _ in 0 ..< 4 {
+            _ = try await harness.client.send(pcm: [Int16](repeating: 300, count: 160))
+        }
+        await harness.client.stopTransmit()
+        XCTAssertGreaterThanOrEqual(harness.transport.sentCount, 1)
+
+        // Disconnect.
+        await harness.client.disconnect()
+        XCTAssertEqual(harness.client.state, .idle)
+    }
+
+    // MARK: - Destination
+
+    func testProxyIsTheDefaultRoute() {
+        // FR-3.3: the proxy is the default, because direct mode is unusable
+        // behind the CGNAT the app's main target sits behind.
+        let destination = EchoLinkDestination(peer: Self.peer, node: "*ECHOTEST*")
+        XCTAssertTrue(destination.isProxied)
+    }
+}
