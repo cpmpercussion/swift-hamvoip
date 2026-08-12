@@ -182,3 +182,96 @@ no options, each verified byte for byte against a hand-built fixture. Low for
 the stream frame size, which was the moderate risk here until a live reflector
 settled it at 54 bytes; what remains is that the observation is one over from
 one transmitting client, so a second reflector disagreeing would reopen it.
+
+---
+
+## 2026-08-12 — EchoLink protocol knowledge from captures of a third-party client (OQ-9)
+
+**Task:** None open. OQ-9 is unresolved and Phase 6 is blocked; this entry
+records a boundary call made while *gathering* the evidence OQ-9 asks for, not
+while writing code. It is logged now, ahead of any Phase 6 task, because this
+file's stated purpose is to record decisions at the time they were made rather
+than reconstruct them later.
+
+**Source consulted:** three packet captures of the maintainer's own EchoLink
+sessions, 2026-08-12, taken with `tcpdump` on macOS while operating the
+maintainer's own station through EchoHam 2.31, a third-party macOS client that
+is not ours and whose source was not read. The captures are
+held outside both repositories, in the workspace's `experiment-data/`, and
+their SHA-256s are recorded in `echolink-oq9-result.txt` alongside them. Peers
+observed include `*ECHOTEST*`, which identifies itself on the wire as
+"thebridge V 0.81".
+
+**The call:** the protocol facts — proxy framing, the login challenge-response,
+the RTP and GSM-06.10 packing — were derived from these captures alone, by
+decoding the bytes. This is candidate (c) of OQ-9. Two aspects need justifying:
+
+1. The captures record a **third-party client's** behaviour, not our own. That
+   is unavoidable rather than convenient: candidate (c) necessarily means
+   someone else's client for as long as no first-party client exists, which is
+   precisely the situation Phase 6 is meant to end.
+2. One observed peer **is thebridge**, which LP-2 names as forbidden.
+
+**Why this is inside LP-1 and LP-2:** LP-2's own text permits the named
+implementations to "be referenced for behavioural observation only". Observing
+what thebridge and EchoHam put on the wire is exactly that, and is categorically
+different from reading their source — the same distinction the M17-2 entry above
+draws between C printed inside a specification and C in a project repository.
+LP-1 independently permits "packet captures of the author's own sessions".
+
+**What was NOT consulted:** no implementation source, at any level — not
+SvxLink, EchoLib, thebridge, MicroLink, DroidStar, or any other. No prose
+protocol write-ups either. Notably, **the EchoLink proxy protocol document that
+LP-1 expressly permits was also not read**: the 9-byte framing was derived from
+the captures alone, and corroborated by the fact that both handshake-bearing
+captures decode under it with zero leftover bytes in either direction. The
+derivation is therefore independent of any document, permitted or otherwise.
+
+**On the digest test:** the login construction —
+`MD5(password ‖ nonce-as-8-ASCII-characters)`, emitted as raw 16 bytes — was
+settled by offline arithmetic over data already present in the captures: 198
+candidate combinations hashed and compared against two recorded (nonce, digest)
+pairs from two different proxies. Exactly one combination reproduces both. No
+live server was probed and nothing was guessed at against a real proxy. The
+password proved to be the literal string `PUBLIC`, a published public-proxy
+convention rather than a secret recovered from anywhere.
+
+Worth recording because three of the four obvious assumptions were wrong: the
+order is password-first, not nonce-first; the nonce is hashed as its eight ASCII
+characters rather than the four bytes they spell; and the digest goes on the
+wire as raw binary, which is the **opposite** of what OQ-5 settled for IAX2's
+`MD5_RESULT` (lowercase 32-character hex). The two protocols demonstrably do not
+agree here, and an implementer assuming they do would find the failure silent.
+
+**Residual risk: moderate — higher than the M17-2 entry's.** Three reasons,
+recorded so they are not rediscovered as surprises:
+
+- **RFC 3550 does not describe this protocol as implemented.** The observed RTP
+  version bits are 3, not 2. Code written faithfully from the RFC would not
+  interoperate. The captures are the primary source here and the RFC is
+  background reading — materially weaker footing than IAX2 has with RFC 5456,
+  and the easiest thing to overstate when writing Phase 6.
+- **Captures record what happened, never what is permitted.** Four independent
+  peers all sent four GSM frames per packet; that is strong evidence about
+  practice and silent about the legal range.
+- **Single-peer captures cannot separate protocol properties from one client's
+  habits.** The first capture, against one peer, yielded two confident and wrong
+  conclusions — that SSRC is always zero and that sequence numbers start at zero.
+  A later capture spanning four peers corrected both: one peer sent a non-zero
+  SSRC, and inbound sequences ran from arbitrary origins. Any future EchoLink
+  capture work should span multiple peers for this reason.
+
+**Not resolved by this entry:** OQ-9 itself. Which of candidates (a)–(d) count
+as permitted sources remains the maintainer's decision. Candidate (d), prose
+write-ups, carries a laundering risk this entry takes no position on: with no
+published specification, most such prose derives from the very implementations
+LP-2 forbids, and whether a third party's summary of thebridge's source counts
+as "behavioural observation" or as the source at one remove is a reading of LP-2
+that only the maintainer can make.
+
+**A note on what this entry omits:** it names no capture filenames or paths,
+pointing at `echolink-oq9-result.txt` for the SHA-256s instead. This departs
+from `Tests/FIXTURES.md`, which names its source captures by path. The reason is
+that one of these captures contains a live account credential in cleartext and
+another contains the full EchoLink directory — 6548 third-party callsigns and
+6261 IP addresses. Nothing committed to this repository should help locate them.
