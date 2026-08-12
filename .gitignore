@@ -15,3 +15,7 @@ Package.resolved
 # workspace's experiment-data/, not here — this is a backstop, not the rule.
 *.pcap
 *-result.txt
+
+# Python bytecode from running scripts/ in place.
+__pycache__/
+*.pyc

@@ -56,3 +56,47 @@ Regenerate one with, for example:
     scripts/pcap-to-fixture.py wrap.pcap --stream 0 --dir in --range 6500:6545
 
 and pass `--summary` first to find the range worth cutting.
+
+## TCP captures (`--transport tcp`)
+
+IAX2 and M17 are datagram protocols, so a capture of one is already a sequence
+of frames. EchoLink over a proxy is not: it is TCP 8100, and a byte stream has
+no frame boundaries of its own. `--transport tcp` reassembles each direction
+and walks it with the 9-byte proxy header — type(1), peer IPv4(4), length(4,
+**little-endian**). The unit of `--range` and of the `[n]` index is therefore
+the **proxy frame**, not the TCP segment, and the two do not line up.
+
+    scripts/pcap-to-fixture.py <capture> --transport tcp --summary
+    scripts/pcap-to-fixture.py <capture> --transport tcp --range 0:3
+
+Four things differ from the UDP mode, each because getting it wrong is silent
+rather than loud:
+
+- **The capture must contain the TCP handshake.** Without a SYN the stream
+  begins at an arbitrary point inside a frame, and walking it emits a handful
+  of plausible-looking frames of pure misalignment before it happens to
+  resynchronise. The script refuses; `--assume-aligned` overrides it, and
+  should not be needed.
+- **The login exchange is not framed.** It precedes the framing: an 8-byte
+  ASCII hex nonce from the proxy, then the callsign LF-terminated and 16 raw
+  digest bytes from the client. It is split off and emitted as its own line.
+- **A stream must decode with zero bytes left over.** That is the check that
+  the framing is being read correctly — a wrong header size or endianness
+  desynchronises within a few frames. A capture stopped mid-frame is the one
+  legitimate exception, and needs `--allow-trailing`.
+- **Type `0x02` frames are refused.** In the EchoLink captures those carry the
+  operator's account password one way and the station directory — thousands of
+  other operators' callsigns and addresses — the other. `--allow-tcp-data`
+  overrides it for a frame that has been checked to hold neither.
+
+### The source captures are cited by digest, not by path
+
+For `live-*.hex` above, the fixture names its capture. The EchoLink captures
+are the deliberate exception: one holds a live credential and another the whole
+directory, and nothing committed here should help locate either. Their
+regeneration recipes therefore read `<capture>` and identify the file by its
+**SHA-256 only**, which is why `--name-capture` has no effect in TCP mode. The
+digests are recorded alongside the captures themselves, outside both repos.
+
+This is not an oversight to be tidied up later. It is the same call the OQ-9
+entry in `docs/reference/PROVENANCE.md` made, for the same reason.
