@@ -643,7 +643,8 @@ def main():
                         help="the peer's port; the peer holding it is 'the node'. "
                              "Default 4569 for udp, 8100 for tcp")
     parser.add_argument("--stream", type=int, default=0,
-                        help="which UDP conversation, in first-seen order (default 0)")
+                        help="which conversation — UDP flow or TCP connection — in "
+                             "first-seen order (default 0)")
     parser.add_argument("--dir", choices=("in", "out", "both"), default="both",
                         help="'in' = node->client only, 'out' = client->node only")
     parser.add_argument("--range", default=None, metavar="FIRST:LAST[,FIRST:LAST…]",
