@@ -864,7 +864,7 @@ other EL task may touch the manifest.
 
 ---
 
-### EL-1 — Teach `pcap-to-fixture.py` to read TCP streams
+### EL-1 — Teach `pcap-to-fixture.py` to read TCP streams ✅ DONE
 **Depends on:** nothing. **Blocks:** EL-2.
 **Files:** `scripts/pcap-to-fixture.py`, `Tests/FIXTURES.md`.
 
@@ -894,6 +894,28 @@ proxy frames with type, length and direction; a stream that does not fully
 decode is reported as an error rather than truncated; and `Tests/FIXTURES.md`
 documents the TCP mode alongside the UDP one.
 
+**Done, PR #16.** Two things the captures forced that this task did not
+anticipate, both now in the script:
+
+- **They are pcapng, not classic libpcap** — `tcpdump`'s default on macOS. The
+  reader could not open the files the task exists for, so `read_pcapng` joins
+  `read_pcap`.
+- **The login exchange is not framed.** It precedes the framing, which is why a
+  capture containing the TCP handshake fails to decode from byte 0 while one
+  beginning mid-session appears to work — the opposite of the intuition.
+  `split_handshake` takes it off the front.
+
+Three guards went in, each against something silent: a stream with no captured
+SYN is refused (`echolink-oq9.pcap` emits several plausible frames of pure
+misalignment before resynchronising); a stream must decode with zero bytes left
+over; and `0x02` frames are refused, checked across the whole selection before
+any output so a refusal cannot leave a half-written fixture.
+
+Verified: capture 3 decodes to 279 frames and capture 1 to 432, matching the
+hand analysis, and both recorded (nonce, digest) pairs reproduce byte for byte.
+The UDP path is unchanged — all six `live-*.hex` fixtures regenerate
+identically from the recipes recorded inside them.
+
 ---
 
 ### EL-2 — Proxy-framing and login fixtures ⚠️ hygiene-critical
@@ -922,13 +944,19 @@ Three hazards, none of them optional:
   same reason. Identify these captures by **SHA-256 only**, and record the
   exception in `Tests/FIXTURES.md` so the next person does not "fix" it.
 
-⚠️ **Unresolved, and the maintainer's call — do not decide it inside the task.**
-`experiment-data/README.md` says a capture that yields a fixture moves to the
-workspace root, where fixture-bearing captures live. These three cannot follow
-that rule without a versioned file pointing at a credential and a directory
-dump. The recommendation is that they stay in `experiment-data/` and are cited
-by digest, with both READMEs amended to carve out the exception — but the
-workspace files are outside this repo, so this task raises it and stops.
+✅ **Where the captures live is settled** (maintainer, 2026-08-12).
+`experiment-data/README.md` used to say that a capture yielding a fixture moves
+to the workspace root, where the fixture-bearing captures live and where
+`Tests/FIXTURES.md` names them by path. These three cannot follow that rule
+without a versioned file pointing at a credential and a directory dump, so the
+rule now has an escape hatch: **a capture holding data that is or could be
+private stays in `experiment-data/` whether or not a fixture was cut from it,
+and is cited by SHA-256 rather than by path.** In doubt it stays. The hatch is
+written up at the end of `experiment-data/README.md`, mirrored in the workspace
+`CLAUDE.md`, and the repository half is in the TCP section of
+`Tests/FIXTURES.md`. Nothing else about the provenance rule changes: the
+regeneration command is still recorded, octets are still never edited, and only
+the peer's half is checked in unless our own half is under test.
 
 **Done when:** the proxy handshake and a representative frame of each observed
 type are fixtures; no fixture contains a credential, a third-party callsign or

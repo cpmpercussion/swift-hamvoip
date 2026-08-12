@@ -275,3 +275,51 @@ from `Tests/FIXTURES.md`, which names its source captures by path. The reason is
 that one of these captures contains a live account credential in cleartext and
 another contains the full EchoLink directory — 6548 third-party callsigns and
 6261 IP addresses. Nothing committed to this repository should help locate them.
+
+---
+
+## 2026-08-12 — Fixture-bearing captures that cannot be named (EL-1/EL-2)
+
+**Task:** EL-1, and the rule EL-2 will work under. Logged now rather than when
+EL-2 cuts its fixtures, because the decision was made now.
+
+**The problem.** `Tests/FIXTURES.md` identifies a `live-*.hex` fixture's source
+capture by path, and the workspace's `experiment-data/README.md` said a capture
+that yields a fixture moves to the workspace root where such captures live.
+Both rules assume the capture's name is safe to write down. For the three
+EchoLink captures it is not: one holds a live account credential in cleartext
+and another the entire EchoLink directory, 6548 third-party callsigns and 6261
+IP addresses. A path in a committed file is a signpost to the data.
+
+**The call (maintainer, 2026-08-12).** The filing rule gains an escape hatch: a
+capture holding data that is or could be private — a credential of ours, or
+third-party traffic — **stays in `experiment-data/` whether or not a fixture
+was cut from it, and is cited by SHA-256 rather than by path.** In doubt it
+stays. The cost of the hatch is one inconsistent convention; the cost of the
+other mistake is somebody else's data on GitHub.
+
+This extends the call the OQ-9 entry above already made for prose, to captures
+that bear fixtures. It is the same reasoning, not a new one.
+
+**What did not change, and is worth being explicit about**, because "cited by
+digest" could be misread as a weaker audit trail: the fixture still records the
+command that regenerates it, octets are still never edited, the `[n]` index
+still makes an omitted frame visible, and only the peer's half is checked in
+unless our own half is under test. A digest identifies the source capture
+*more* precisely than a filename does — it detects a substituted file, which a
+path cannot. What is lost is only the convenience of knowing where the file
+sits, which is exactly the property that was dangerous here.
+
+**Mechanised, not left to discipline.** `pcap-to-fixture.py --transport tcp`
+writes `<capture>` and the digest into the recipe, and `--name-capture` has no
+effect in that mode, so a TCP fixture cannot accidentally carry a path. The
+same script refuses to emit type `0x02` frames without an explicit override —
+those are the frames carrying the password one way and the directory the other.
+Both were added in EL-1 (PR #16); neither depends on anyone remembering.
+
+**Residual risk: low, and it is human rather than technical.** The guards cover
+the EchoLink proxy path specifically. A future capture of some other protocol
+carrying third-party traffic gets no automatic protection, and the hatch will
+only be applied if whoever files it reads the rule. That is why the rule is
+stated in three places — `experiment-data/README.md`, the workspace `CLAUDE.md`
+and `Tests/FIXTURES.md` — rather than only where it was first needed.
