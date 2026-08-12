@@ -73,10 +73,32 @@ let package = Package(
             swiftSettings: codec2IsBuilt ? [.define("CODEC2")] : []
         ),
 
+        // EL-8. Vendored libgsm 1.0.22 (GSM 06.10), the codec EchoLink uses.
+        //
+        // Unlike Codec2 this is checked in as source rather than built into an
+        // XCFramework, and the difference is licensing, not taste: libgsm is
+        // BSD-style and LP-4 permits vendoring it, where Codec2's LGPL-2.1
+        // forces the dynamic-framework dance. So there is no build script, no
+        // binaryTarget, no conditional compilation and nothing for CI to set
+        // up — a bare checkout builds and tests the codec. Do not import the
+        // Codec2 pattern here.
+        //
+        // Only the library sources are vendored; the `toast` command-line tool
+        // that ships with it is not. The licence travels with the code in
+        // Sources/CGSM/LICENCE-libgsm.txt, as its terms require.
+        .target(
+            name: "CGSM",
+            // The vendored C is 1992-era and warns freely — implicit
+            // declarations, K&R prototypes. Those warnings are about upstream
+            // code nobody here should be editing, and left on they bury the
+            // warnings that are about our own.
+            cSettings: [.unsafeFlags(["-w"])]
+        ),
+
         // EchoLink over the proxy (TCP 8100) and the directory (TCP 5200).
         // Priority 2. No published specification — the wire format comes from
         // captures of our own sessions (OQ-9); see Tests/FIXTURES.md.
-        .target(name: "EchoLinkKit", dependencies: ["RadioCore"]),
+        .target(name: "EchoLinkKit", dependencies: ["RadioCore", "CGSM"]),
 
         // Test-only helpers shared by every test target: fixture loading and
         // the mock transport. Deliberately not exposed as a product — nothing
@@ -90,6 +112,7 @@ let package = Package(
             dependencies: [
                 "IAX2Kit",
                 "M17Kit",
+                "EchoLinkKit",
                 "RadioCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],

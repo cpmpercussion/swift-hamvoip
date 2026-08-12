@@ -719,3 +719,88 @@ question is still open rather than answered by default. The capture itself sits
 in the workspace with the AllStar ones, unversioned. Its provenance is recorded
 in the OQ-7 row of `DEVELOPMENT-PLAN.md`, which is what a fixture header would
 otherwise have carried.
+
+---
+
+## 8. `echolink` — EchoLink through a proxy (EL-10, Milestone M3)
+
+The live-validation harness for EchoLink, and the counterpart to `connect` for
+IAX2 and `m17` for M17. Everything below the CLI is `EchoLinkClient`.
+
+**Nothing in this repository has ever spoken to a real EchoLink proxy.** The
+protocol was recovered from captures of a *third-party* client's sessions
+(OQ-9), so this command is the first time our own reading of it meets a real
+one. That is Milestone M3, and it needs a human on air.
+
+```sh
+swift run hamvoip-cli echolink \
+    --proxy <proxy host> \
+    --peer 13.57.14.183 \
+    --node '*ECHOTEST*' \
+    --callsign <your callsign>
+```
+
+`*ECHOTEST*` is the obvious first contact: it echoes audio back, so one operator
+alone can confirm the round trip end to end — which is exactly what the capture
+work already demonstrated the path can do.
+
+Keys are the same as the other two commands: SPACE toggles PTT, `q` quits, `?`
+lists them.
+
+### Two passwords, and only one of them is secret
+
+A proxied EchoLink session carries two different secrets a few bytes apart on
+the same TCP connection, and confusing them is the easiest mistake here:
+
+| | What it is | Secret? |
+|---|---|---|
+| **Proxy password** | `--proxy-password`. `PUBLIC` on a public proxy — the literal string, and the only value ever observed. Hashed into the login digest, never sent in clear. | No |
+| **Account password** | Your own EchoLink account password. Relayed *in cleartext* to the directory server. | **Yes** |
+
+They are separate Swift types (`EchoLinkProxyPassword`,
+`EchoLinkAccountPassword`) so neither can be passed where the other belongs, and
+both redact themselves in `description` so an interpolation cannot put one in a
+log. There is deliberately no option for the account password: a password on the
+command line lands in shell history.
+
+### Before attempting M3: the directory-login gap
+
+This command does the **proxy** login only. The **directory** login is
+implemented and tested (`EchoLinkDirectorySession`, EL-6) but is not wired into
+`EchoLinkClient.connect`, so no account password is read or asked for.
+
+The captures show a real client logging in to the directory server *before* it
+opens a node channel. Whether a node channel works without that is **not
+established** — no capture shows the attempt. If the session fails at the first
+`OPEN`, suspect this first. The EL-10 entry in `DEVELOPMENT-PLAN.md` has the
+frame sequence and the two things wiring it up needs.
+
+### What a live run has to settle
+
+The unit tests cover everything that is a decision rather than an I/O call, all
+of it against fixtures cut from real traffic. What they cannot cover is whether
+our *reading* of the protocol is right — a fixture replays what happened, and
+agrees with us by construction. A live run tests:
+
+- that a real proxy accepts our login digest (both recorded vectors reproduce
+  offline, but only against captures of a client that was not us);
+- that a real node accepts an `OPEN` from a session logged in this way — see
+  the gap above;
+- that GSM 06.10 audio we *encode* is intelligible at the far end. Decoding is
+  already evidenced: `GSMVoiceCodecTests` decodes the captured frames a real
+  peer sent, and finds them audible rather than noise. The encode direction has
+  never been heard by anyone;
+- that the synthesised playout clock (EL-7) sounds like speech rather than like
+  a stutter, across a real talkspurt boundary;
+- that the SF-1 watchdog cuts transmission at its limit, as it did for M2.
+
+### The M3 sign-off checklist
+
+Same shape as the M2 checklist in §5. Record the result on the PR.
+
+- [ ] Proxy login accepted.
+- [ ] Channel opened to `*ECHOTEST*`.
+- [ ] Audio transmitted, and heard back intelligibly in the echo.
+- [ ] Inbound talkspurts reported, with no stutter across a boundary.
+- [ ] SF-1 watchdog cut transmission at its limit.
+- [ ] Clean teardown, terminal restored.

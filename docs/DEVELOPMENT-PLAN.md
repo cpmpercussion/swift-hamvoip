@@ -75,13 +75,19 @@ do not improvise a different design.
 **Updated 2026-08-09, at v0.1.** Everything below is checked against the tree,
 not remembered; if it disagrees with the repository, the repository is right.
 
-- `Package.swift` defines three library products — `RadioCore`, `IAX2Kit`,
-  `M17Kit` — plus the `hamvoip-cli` executable, a test-only `TestSupport`
-  target and four test targets. One dependency, `swift-argument-parser`,
-  authorised by CLI-1.
-- `swift build` and `swift test` are green on `main`: **616 tests, no
-  failures** (checked 2026-08-12, after M17-4/M17-5 merged). CI runs the SPDX
-  check on Ubuntu and build + test on macOS 14.
+- `Package.swift` defines four library products — `RadioCore`, `IAX2Kit`,
+  `M17Kit`, `EchoLinkKit` — plus the `hamvoip-cli` executable, the vendored
+  `CGSM` target, a test-only `TestSupport` target and five test targets. One
+  Swift dependency, `swift-argument-parser`, authorised by CLI-1; `CGSM` is
+  vendored C, not a dependency (EL-8, LP-4).
+- `swift build` and `swift test` are green: **779 tests, no failures**
+  (checked 2026-08-13, on the Phase 6 branch; 616 on `main` before it). CI runs
+  the SPDX check on Ubuntu and build + test on macOS 14.
+- **`EchoLinkKit` is complete except for the station list** (EL-11, still gated
+  on a capture). Proxy framing, proxy login, directory login, RTP, the
+  synthesised playout clock, GSM 06.10 and `EchoLinkClient` are all in and
+  tested against capture fixtures. Nothing in it has ever spoken to a real
+  proxy — that is Milestone M3, and EL-10 has the gap to close first.
 - `RadioCore` and `IAX2Kit` are complete. `M17Kit` has reflector control,
   base-40 callsigns and stream-packet parse/serialise, but **no codec wiring
   and no `M17Client`** — M17-4 and M17-5 are the remaining work there.
@@ -918,7 +924,7 @@ identically from the recipes recorded inside them.
 
 ---
 
-### EL-2 — Proxy-framing and login fixtures ⚠️ hygiene-critical
+### EL-2 — Proxy-framing and login fixtures ✅ DONE
 **Depends on:** EL-1. **Blocks:** EL-4.
 **Files:** `Tests/EchoLinkKitTests/Fixtures/live-proxy-*.hex`,
 `Tests/FIXTURES.md`.
@@ -966,7 +972,7 @@ stating the path exception and the `0x02` prohibition.
 
 ---
 
-### EL-3 — `StreamTransport`: the TCP seam
+### EL-3 — `StreamTransport`: the TCP seam ✅ DONE
 **Depends on:** nothing. **Blocks:** EL-4.
 **Files:** `Sources/RadioCore/StreamTransport.swift`,
 `Sources/RadioCore/NWStreamTransport.swift`,
@@ -1004,7 +1010,7 @@ is idempotent and finishes `incoming`, and no unit test opens a socket.
 
 ---
 
-### EL-4 — `EchoLinkKit` target and proxy frame codec
+### EL-4 — `EchoLinkKit` target and proxy frame codec ✅ DONE
 **Depends on:** EL-2, EL-3. **Blocks:** EL-5.
 **Files:** `Package.swift` (**the only EL task that may touch it**),
 `Sources/EchoLinkKit/EchoLinkKit.swift`,
@@ -1029,7 +1035,7 @@ survives parsing.
 
 ---
 
-### EL-5 — Proxy login and session lifecycle
+### EL-5 — Proxy login and session lifecycle ✅ DONE
 **Depends on:** EL-4. **Blocks:** EL-6.
 **Files:** `Sources/EchoLinkKit/EchoLinkProxyClient.swift`,
 `Sources/EchoLinkKit/EchoLinkAuth.swift`, `Tests/EchoLinkKitTests/…`.
@@ -1038,6 +1044,17 @@ An actor over `StreamTransport` running the observed handshake: proxy sends an
 8-byte ASCII hex nonce; client replies with its callsign LF-terminated followed
 by 16 raw digest bytes with no length prefix; proxy answers `0x04` status
 (`00 00 00 00` = success) and a `0x02` payload from the directory server.
+
+⚠️ **That last clause is wrong, and the code does not follow it** (plan rule 6:
+the evidence wins, and the discrepancy is reported rather than obeyed). In the
+capture the `0x04 STATUS` answers the `0x01 OPEN` that follows the login, and
+the `0x02 "OK"` is the *directory server's* answer to the directory login —
+both belong to later steps. **The proxy login itself is never acknowledged.** A
+proxy that rejects it simply drops the connection.
+
+So `login()` completes when the digest is written, and a bad password surfaces
+as `.streamClosed` from `open(peer:)`. Waiting for an acknowledgement that does
+not exist would hang forever.
 
 `EchoLinkAuth` is a pure function and gets its own exhaustive tests:
 `MD5(password ‖ nonce-as-8-ASCII-characters)` → 16 raw bytes. Pin both
@@ -1059,7 +1076,7 @@ as a typed error, and the reentrancy test exists.
 
 ---
 
-### EL-6 — Directory login (FR-3.1, part 1)
+### EL-6 — Directory login (FR-3.1, part 1) ✅ DONE
 **Depends on:** EL-5.
 **Files:** `Sources/EchoLinkKit/EchoLinkDirectory.swift`, `Tests/EchoLinkKitTests/…`.
 
@@ -1084,7 +1101,7 @@ password is never logged, echoed in an error, or written to a fixture.
 
 ---
 
-### EL-7 — RTP framing and sequence-keyed playout
+### EL-7 — RTP framing and sequence-keyed playout ✅ DONE
 **Depends on:** EL-4.
 **Files:** `Sources/EchoLinkKit/EchoLinkRTP.swift`,
 `Sources/EchoLinkKit/EchoLinkStreamAudio.swift`, `Tests/EchoLinkKitTests/…`.
@@ -1117,7 +1134,7 @@ discontinuity; and a recorded packet sequence plays out in order through a real
 
 ---
 
-### EL-8 — GSM 06.10 codec (FR-3.2, LP-4)
+### EL-8 — GSM 06.10 codec (FR-3.2, LP-4) ✅ DONE
 **Depends on:** nothing — pure, can run from the start.
 **Files:** `Sources/CGSM/` (vendored `libgsm`), `Sources/EchoLinkKit/GSMVoiceCodec.swift`,
 `Tests/EchoLinkKitTests/…`. Manifest changes coordinate with EL-4.
@@ -1137,7 +1154,7 @@ Swift files (vendored C keeps its own headers).
 
 ---
 
-### EL-9 — `EchoLinkClient` (the `NetworkClient` facade)
+### EL-9 — `EchoLinkClient` (the `NetworkClient` facade) ✅ DONE
 **Depends on:** EL-6, EL-7, EL-8.
 **Files:** `Sources/EchoLinkKit/EchoLinkClient.swift`, `Tests/EchoLinkKitTests/…`.
 
@@ -1162,7 +1179,7 @@ limit, and no test opens a socket.
 
 ---
 
-### EL-10 — `hamvoip-cli echolink` and live sign-off (**Milestone M3**)
+### EL-10 — `hamvoip-cli echolink` and live sign-off (**Milestone M3**) ⚠️ CODE DONE, M3 OUTSTANDING
 **Depends on:** EL-9.
 **Files:** `Sources/hamvoip-cli/EchoLinkCommand.swift`, registered in
 `HamVoIPCLI.swift`'s `subcommands:` array.
@@ -1179,6 +1196,37 @@ capture work already demonstrated the path can do.
 intelligible audio both ways, clean teardown — and records the sign-off on the
 PR. That is **Milestone M3**, and like M2 nothing in this repository can settle
 it.
+
+**Code done, 2026-08-13. M3 is outstanding and needs a human on air.** The
+command exists, the stack under it is tested, and `--help` says plainly that
+nothing here has ever spoken to a real proxy.
+
+⚠️ **One gap to resolve before attempting M3.** The session does the *proxy*
+login only. The *directory* login — the operator's own account password, which
+`EchoLinkDirectorySession` implements and tests (EL-6) — is **not wired into
+`EchoLinkClient.connect`**, so no account password is read or asked for.
+
+The captures show a real client doing this before it opens a node channel:
+
+    ==> 0x01 OPEN   peer <directory server>
+    <== 0x04 STATUS 00 00 00 00
+    ==> 0x02 TCP_DATA  'l' + callsign + separators + password + CR
+    <== 0x02 TCP_DATA  "OK"
+    <== 0x03 CLOSE
+    ==> 0x01 OPEN   peer <the node>
+
+Whether a node channel works *without* that first exchange is **not
+established** — no capture shows the attempt, so the answer is not in the
+evidence and guessing it is exactly what this phase does not do. Two things
+wiring it up needs that this task did not:
+
+- somewhere to put the directory server's address (the capture's is in the
+  first `OPEN`'s peer field, so it is configuration, not a constant), and
+- per-channel `CLOSE` handling. `EchoLinkClient` currently treats any `0x03` as
+  the link going down, which is right for a single-channel session and wrong
+  the moment the directory channel closes on purpose.
+
+If M3 fails at the first `OPEN`, suspect this before anything else.
 
 ---
 
