@@ -731,7 +731,14 @@ def main():
                              if arguments.transport != "udp" else [])
                           + [f"--stream {arguments.stream}", f"--dir {arguments.dir}"]
                           + ([f"--range {arguments.range}"] if arguments.range else [])
-                          + (["--full-frames-only"] if arguments.full_frames_only else []))
+                          + (["--full-frames-only"] if arguments.full_frames_only else [])
+                          # EL-2: the three TCP overrides change what the walk
+                          # will *accept*, so a recipe that omits them does not
+                          # regenerate the fixture — it is refused outright. A
+                          # recipe that cannot be run is not provenance.
+                          + (["--assume-aligned"] if arguments.assume_aligned else [])
+                          + (["--allow-trailing"] if arguments.allow_trailing else [])
+                          + (["--allow-tcp-data"] if arguments.allow_tcp_data else []))
         print("# Machine-generated. The captures themselves are not in the repository —")
         print("# they are the maintainer's own, and large. Regenerate with:")
         print(f"#   {recipe}")

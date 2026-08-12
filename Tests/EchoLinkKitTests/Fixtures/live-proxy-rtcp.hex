@@ -1,0 +1,37 @@
+# EL-2 — one 0x06 control frame each direction, for message-type coverage.
+#
+# Provenance: same capture and same QSO as `live-proxy-audio-in.hex`; see that
+# file's header. Cited by SHA-256, never by path.
+#
+# Both halves are here because type 0x06 is the last observed message type
+# without a fixture, and because both halves turned out to be clean:
+#
+#  * Ours, index [431], is a 24-byte RTCP with a receiver-report and a minimal
+#    SDES. It carries no callsign — the only text in it is a client build tag.
+#  * ECHOTEST's, index [430], carries an SDES whose CNAME is the literal ASCII
+#    string "CALLSIGN". The public test conference sends a placeholder, not a
+#    real callsign, so nothing here identifies a person.
+#
+# This is checked rather than assumed: a 0x06 frame from any of the other
+# captures WOULD carry an operator's callsign and location in its SDES, and
+# must not be cut.
+#
+# The payload is RTCP-shaped, packet type 201. Neither the control channel nor
+# station info is decoded past its outer shape anywhere in this repository, and
+# neither is on the path to a QSO — the fixture exists so that the frame codec
+# has evidence for all six observed types, not because anything parses it yet.
+# Machine-generated. The captures themselves are not in the repository —
+# they are the maintainer's own, and large. Regenerate with:
+#   scripts/pcap-to-fixture.py <capture> --transport tcp --stream 0 --dir both --range 430:431 --assume-aligned
+# Capture SHA-256: 2a8aa1ba78218170fcf3cf4c7a45c6c67fd3541192cdab895307f6a16699cd01
+#
+# Each line is one EchoLink proxy frame verbatim, reassembled from the
+# TCP stream: the 9-byte header — type(1), peer IPv4(4), length(4,
+# LITTLE-endian) — and its payload. `[n]` is the frame's index in
+# arrival order across both directions, so a gap in the indices is a
+# frame deliberately left out.
+
+# [430] 77.339s <== UDP CONTROL peer 13.57.14.183   100B  RTCP pt201
+06 0d390eb7 64000000 c0c900010000270fe1ca00160000270f010843414c4c5349474e02212a4543484f544553542a2028436f6e666572656e636520205b385d2920434f4e46030843414c4c5349474e040530383a34350610746865627269646765205620302e383100000002
+# [431] 77.565s ==> UDP CONTROL peer 13.57.14.183    24B  RTCP pt201
+06 0d390eb7 18000000 c0c9000100000000c1cb000300000000076a616e32303032
