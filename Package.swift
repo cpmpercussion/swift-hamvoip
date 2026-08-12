@@ -41,6 +41,7 @@ let package = Package(
         .library(name: "RadioCore", targets: ["RadioCore"]),
         .library(name: "IAX2Kit", targets: ["IAX2Kit"]),
         .library(name: "M17Kit", targets: ["M17Kit"]),
+        .library(name: "EchoLinkKit", targets: ["EchoLinkKit"]),
 
         // CLI-1. Deliberately **not** listed in `platforms` as macOS-only —
         // SwiftPM has no per-target platform restriction, and adding one at
@@ -71,6 +72,11 @@ let package = Package(
             dependencies: ["RadioCore"] + (codec2IsBuilt ? ["Codec2"] : []),
             swiftSettings: codec2IsBuilt ? [.define("CODEC2")] : []
         ),
+
+        // EchoLink over the proxy (TCP 8100) and the directory (TCP 5200).
+        // Priority 2. No published specification — the wire format comes from
+        // captures of our own sessions (OQ-9); see Tests/FIXTURES.md.
+        .target(name: "EchoLinkKit", dependencies: ["RadioCore"]),
 
         // Test-only helpers shared by every test target: fixture loading and
         // the mock transport. Deliberately not exposed as a product — nothing
@@ -105,6 +111,12 @@ let package = Package(
             dependencies: ["M17Kit", "RadioCore", "TestSupport"],
             resources: [.copy("Fixtures")],
             swiftSettings: codec2IsBuilt ? [.define("CODEC2")] : []
+        ),
+
+        .testTarget(
+            name: "EchoLinkKitTests",
+            dependencies: ["EchoLinkKit", "RadioCore", "TestSupport"],
+            resources: [.copy("Fixtures")]
         ),
 
         // The pure logic inside the CLI: argument validation, the level meter,
