@@ -79,8 +79,9 @@ not remembered; if it disagrees with the repository, the repository is right.
   `M17Kit` — plus the `hamvoip-cli` executable, a test-only `TestSupport`
   target and four test targets. One dependency, `swift-argument-parser`,
   authorised by CLI-1.
-- `swift build` and `swift test` are green on `main`: **537 tests, no
-  failures.** CI runs the SPDX check on Ubuntu and build + test on macOS 14.
+- `swift build` and `swift test` are green on `main`: **616 tests, no
+  failures** (checked 2026-08-12, after M17-4/M17-5 merged). CI runs the SPDX
+  check on Ubuntu and build + test on macOS 14.
 - `RadioCore` and `IAX2Kit` are complete. `M17Kit` has reflector control,
   base-40 callsigns and stream-packet parse/serialise, but **no codec wiring
   and no `M17Client`** — M17-4 and M17-5 are the remaining work there.
@@ -114,8 +115,8 @@ Phase 2  IAX2Kit          IAX-1 … IAX-9      (needs RC-1..RC-4)
 Phase 3  CLI harness      CLI-1              (needs IAX-8)
 Phase 4  SwiftUI app      APP-1 … APP-4      (unblocked: OQ-3/3b/4 resolved)
 Phase 5  BLE PTT          BLE-1 … BLE-3      (needs APP-2)
-Phase 6  EchoLink         —                  (unblocked: OQ-1 + OQ-9 resolved;
-                                              task breakdown still to be cut)
+Phase 6  EchoLink         EL-1 … EL-10       (unblocked: OQ-1 + OQ-9 resolved;
+                                              EL-8 has no dependencies)
 Phase 7  M17Kit           M17-1 … M17-5      (M17-1 ✅ done, OQ-2 resolved)
 ```
 
@@ -126,6 +127,8 @@ with no unmet dependency may proceed in parallel on separate branches.
 against `MockTransport` from recorded IAX2 fixtures — no radio required.
 **Milestone M2** (end of Phase 3): a human completes a live QSO with an
 AllStar node using the CLI harness on macOS.
+**Milestone M3** (end of Phase 6, task EL-10): a human completes a live
+EchoLink QSO using the CLI harness.
 
 ---
 
@@ -805,13 +808,357 @@ capture already yielded two wrong conclusions — see the PROVENANCE.md OQ-9 ent
 
 Cutting new captures remains the maintainer's action to run, not an agent's.
 
-This phase now gets its own task breakdown (directory TCP 5200, RTP/GSM UDP
-5198/5199, proxy transport default-on-cellular per FR-3.3, vendored
-BSD-licensed `libgsm` per LP-4). The proxy framing and the login
-challenge-response (`MD5(password ‖ nonce-as-8-ASCII-characters)`, raw 16 bytes
-on the wire — the **opposite** of OQ-5's hex for IAX2) are already derived from
-captures and recorded in the PROVENANCE.md OQ-9 entry; the first task should
-turn those into fixtures under `Tests/FIXTURES.md` before code depends on them.
+The task breakdown below was cut 2026-08-12. It covers the directory on TCP
+5200, RTP/GSM on UDP 5198/5199, the proxy transport (mandatory and
+default-on-cellular per FR-3.3), and vendored BSD-licensed `libgsm` per LP-4.
+
+### What is already known, and how well
+
+Everything the captures settled is written up in `experiment-data/echolink-oq9-result.txt`
+(SHA-256s of the three captures are in the same file) and the boundary call is
+logged in the PROVENANCE.md OQ-9 entry. Four facts drive the task shapes below
+and are repeated here because getting any of them wrong is silent:
+
+1. **Proxy framing:** a 9-byte header — type(1), peer IPv4 raw octets(4),
+   payload length(4) — and that length is **little-endian**. It is the one
+   length field in this tree that is not big-endian; RFC 5456 and M17 are both
+   the other way. Types observed: `0x01` open, `0x02` TCP/directory data,
+   `0x03` close, `0x04` status, `0x05` UDP data (the 5198 channel), `0x06` UDP
+   control (the 5199 channel).
+2. **Login digest:** `MD5(password ‖ nonce-as-8-ASCII-characters)`, emitted as
+   **raw 16 bytes**. Password-first, the nonce hashed as its eight ASCII
+   characters rather than the four bytes they spell, and raw binary on the wire
+   — the **opposite** of OQ-5's lowercase hex for IAX2. Three of those four
+   were the obvious guess and all three were wrong. The proxy password is a
+   configuration value (observed only as the public-proxy literal `PUBLIC`);
+   the operator's account password never enters proxy authentication and is
+   relayed onward inside a `0x02` frame.
+3. **RTP is not RFC 3550 as written.** Version bits are **3**, not 2. Code
+   written faithfully from the RFC does not interoperate. Payload type 3
+   (GSM 06.10), 144-byte packets = 12-byte header + 4 × 33-byte GSM frames =
+   80 ms, held across all 475 RTP packets from four independent peers.
+4. **The RTP timestamp is always zero** — across all four peers, both
+   directions. It is a protocol property, not one client's quirk, and it means
+   the existing `JitterBuffer` has nothing to key on. See EL-7.
+
+Two things are evidenced *less* well than the above, and tasks must not
+overstate them. SSRC and sequence origin are **not** fixed: a single-peer
+capture produced two confident wrong conclusions (SSRC always zero, sequences
+start at zero) that a four-peer capture corrected. And captures record what
+happened, never what is *permitted* — four peers agreeing on 4 GSM frames per
+packet is strong evidence about practice and silent about the legal range.
+Parse permissively, emit what was observed.
+
+### Sequencing
+
+```
+EL-1 ─→ EL-2 ─┬─→ EL-4 ─┬─→ EL-5 ─→ EL-6 ─┬─→ EL-9 ─→ EL-10
+EL-3 ─────────┘         └─→ EL-7 ─────────┤
+EL-8 (no dependencies, any time) ─────────┘
+```
+
+`EL-8` (the codec) depends on nothing and can run in parallel from the start.
+`EL-4` owns the only `Package.swift` change in this phase — per plan rule 9, no
+other EL task may touch the manifest.
+
+---
+
+### EL-1 — Teach `pcap-to-fixture.py` to read TCP streams
+**Depends on:** nothing. **Blocks:** EL-2.
+**Files:** `scripts/pcap-to-fixture.py`, `Tests/FIXTURES.md`.
+
+The whole EchoLink capture set is TCP 8100 — the proxy tunnels the directory
+session and both UDP channels inside it, so a 5198/5199/5200 filter comes back
+empty. The existing script cannot read any of it: `udp_datagrams()` hard-filters
+on IP protocol 17, and there is no reassembly, no handling of out-of-order or
+retransmitted segments, and no notion of application framing. "One datagram per
+line" has no direct analogue in a byte stream.
+
+What carries over unchanged is worth keeping: `read_pcap`, `strip_link_layer`,
+the SHA-256 provenance header, and the `--dir`/`--range`/`--summary` plumbing
+are all transport-agnostic. What is IAX2-specific — `describe()` and
+`hex_line()` — needs an EchoLink counterpart that decodes the 9-byte proxy
+header and labels the frame type.
+
+The unit for `--range` and the `[n]` index becomes **the proxy frame**, not the
+TCP segment. Frame boundaries do not coincide with segment boundaries, so the
+script must reassemble each direction into a byte stream, then walk it
+header-by-header. A wrong header size or endianness desynchronises within a few
+frames, which is also the correctness check: **the whole stream must decode
+with zero leftover bytes in either direction**, and the script should say so
+rather than trailing off silently.
+
+**Done when:** the script cuts a fixture from a TCP capture; `--summary` lists
+proxy frames with type, length and direction; a stream that does not fully
+decode is reported as an error rather than truncated; and `Tests/FIXTURES.md`
+documents the TCP mode alongside the UDP one.
+
+---
+
+### EL-2 — Proxy-framing and login fixtures ⚠️ hygiene-critical
+**Depends on:** EL-1. **Blocks:** EL-4.
+**Files:** `Tests/EchoLinkKitTests/Fixtures/live-proxy-*.hex`,
+`Tests/FIXTURES.md`.
+
+Turn the captured proxy framing and login handshake into fixtures **before any
+code depends on them**, exactly as IAX-9 did for IAX2. The fixture directory
+is created here; the test target that reads it arrives in EL-4.
+
+Three hazards, none of them optional:
+
+- **`echolink-oq9-2.pcap` contains the operator's account password in
+  cleartext**, as an ASCII `0x02` frame in the client→proxy direction. Treat it
+  like `HAMVOIP_SECRET`. Only the **peer's half** may be checked in — which is
+  the standing `Tests/FIXTURES.md` rule, and here it is load-bearing rather
+  than tidy.
+- **`echolink-oq9-3.pcap` contains the entire EchoLink directory** — 6548
+  third-party callsigns and 6261 IP addresses. **No fixture cut from it may
+  include a `0x02` frame.** The directory protocol gets its fixtures from a
+  deliberately truncated list instead; see EL-6.
+- **The source captures must not be named by path in any versioned file.** This
+  departs from `Tests/FIXTURES.md`, which names its captures by path, and the
+  departure is deliberate: the OQ-9 provenance entry made the same call for the
+  same reason. Identify these captures by **SHA-256 only**, and record the
+  exception in `Tests/FIXTURES.md` so the next person does not "fix" it.
+
+⚠️ **Unresolved, and the maintainer's call — do not decide it inside the task.**
+`experiment-data/README.md` says a capture that yields a fixture moves to the
+workspace root, where fixture-bearing captures live. These three cannot follow
+that rule without a versioned file pointing at a credential and a directory
+dump. The recommendation is that they stay in `experiment-data/` and are cited
+by digest, with both READMEs amended to carve out the exception — but the
+workspace files are outside this repo, so this task raises it and stops.
+
+**Done when:** the proxy handshake and a representative frame of each observed
+type are fixtures; no fixture contains a credential, a third-party callsign or
+an IP address belonging to anyone else; each carries its regeneration command
+and its capture's SHA-256; and `Tests/FIXTURES.md` has an EchoLink section
+stating the path exception and the `0x02` prohibition.
+
+---
+
+### EL-3 — `StreamTransport`: the TCP seam
+**Depends on:** nothing. **Blocks:** EL-4.
+**Files:** `Sources/RadioCore/StreamTransport.swift`,
+`Sources/RadioCore/NWStreamTransport.swift`,
+`Tests/TestSupport/MockStreamTransport.swift`, `Tests/RadioCoreTests/…`.
+
+Nothing in the tree speaks TCP. `DatagramTransport` is message-oriented and
+`NWDatagramTransport` is the only `NWConnection` user, on `NWParameters.udp`.
+EchoLink needs a stream seam for both the proxy (TCP 8100) and the direct
+directory connection (TCP 5200), and it needs one for the same reason
+`DatagramTransport` exists: AU-5, no sockets in unit tests.
+
+Mirror the existing seam rather than inventing a new shape:
+
+```swift
+public protocol StreamTransport: Sendable {
+    var incoming: AsyncStream<Data> { get }   // arrival order; chunk boundaries meaningless
+    func send(_ bytes: Data) async throws
+    func close() async
+}
+```
+
+The one thing that must be explicit in the doc comment: **`incoming` yields
+whatever the network hands over, and its chunk boundaries carry no meaning.**
+A caller that assumes one yielded `Data` is one protocol frame will work in
+testing and fail on a real connection. Reassembly belongs to the caller
+(EL-4's frame decoder), not here.
+
+`NWStreamTransport` uses `NWParameters.tcp` per PD-1 — `Network.framework`,
+never BSD sockets. `MockStreamTransport` goes in `TestSupport` and must be able
+to deliver a frame **split across two chunks** and **two frames in one chunk**,
+because those are the cases a decoder gets wrong.
+
+**Done when:** both split and coalesced delivery are covered by tests, `close()`
+is idempotent and finishes `incoming`, and no unit test opens a socket.
+
+---
+
+### EL-4 — `EchoLinkKit` target and proxy frame codec
+**Depends on:** EL-2, EL-3. **Blocks:** EL-5.
+**Files:** `Package.swift` (**the only EL task that may touch it**),
+`Sources/EchoLinkKit/EchoLinkKit.swift`,
+`Sources/EchoLinkKit/ProxyFrame.swift`, `Tests/EchoLinkKitTests/…`.
+
+Add the `.library`/`.target`/`.testTarget` triple — `EchoLinkKit` depending on
+`RadioCore`, `EchoLinkKitTests` with `.copy("Fixtures")` — and the pure value
+types for the proxy framing. No I/O, no actor: parse and serialise only, the
+same shape as `M17ReflectorProtocol.swift`.
+
+The header is type(1) + peer IPv4(4, raw octets) + length(4, **little-endian**)
++ payload. Write the endianness out in a comment naming this task; it is the
+single most likely thing to be "corrected" later by someone who has just been
+reading the IAX2 code.
+
+Parse permissively. An unknown message type is not a parse failure — the
+observed six are what four clients happened to send, not the permitted set.
+
+**Done when:** every EL-2 fixture round-trips byte-for-byte, a truncated header
+and a truncated payload are distinguishable errors, and an unknown type
+survives parsing.
+
+---
+
+### EL-5 — Proxy login and session lifecycle
+**Depends on:** EL-4. **Blocks:** EL-6.
+**Files:** `Sources/EchoLinkKit/EchoLinkProxyClient.swift`,
+`Sources/EchoLinkKit/EchoLinkAuth.swift`, `Tests/EchoLinkKitTests/…`.
+
+An actor over `StreamTransport` running the observed handshake: proxy sends an
+8-byte ASCII hex nonce; client replies with its callsign LF-terminated followed
+by 16 raw digest bytes with no length prefix; proxy answers `0x04` status
+(`00 00 00 00` = success) and a `0x02` payload from the directory server.
+
+`EchoLinkAuth` is a pure function and gets its own exhaustive tests:
+`MD5(password ‖ nonce-as-8-ASCII-characters)` → 16 raw bytes. Pin both
+recorded (nonce, digest) pairs from the captures as test vectors — they come
+from two different proxies and two different nonces, which is what rules out
+coincidence. Add a test asserting the digest is **not** hex-encoded, naming
+OQ-5, so the IAX2 convention cannot leak in later.
+
+⚠️ **Actor reentrancy (plan rule 10).** This is a continuation-parking API:
+`login()` awaits a send and then waits for the reply. Use a dedicated in-flight
+flag, or park in the same actor-isolated synchronous region as the terminal
+check. This exact shape cost a 4%-of-runs hang in M17-3. A test must deliver
+the reply from *inside* the awaited send — see
+`testConnectReturnsWhenAcknIsProcessedDuringSend`.
+
+**Done when:** login succeeds against `MockStreamTransport` replaying the
+fixtures, both digest vectors pass, a `0x04` status other than zero is surfaced
+as a typed error, and the reentrancy test exists.
+
+---
+
+### EL-6 — Directory client (FR-3.1) ⛔ needs a capture the maintainer must cut
+**Depends on:** EL-5.
+**Files:** `Sources/EchoLinkKit/EchoLinkDirectory.swift`, `Tests/EchoLinkKitTests/…`.
+
+Directory login and station list over TCP 5200, tunnelled as `0x02` frames when
+proxied. The login line is `'l'` + callsign + two separator bytes + password +
+CR, all ASCII — known from the captures, and it is exactly the credential EL-2
+forbids checking in.
+
+**This task is gated on evidence that does not exist yet.** The only capture of
+a full station list is the one carrying 6548 other operators' callsigns, and
+EL-2 forbids cutting a fixture from it. The station-list *format* therefore has
+no usable fixture. Do not work around this by hand-building a fixture from the
+directory in that capture — that is the same data with the provenance filed
+off.
+
+What is needed is a capture of a session with a **deliberately truncated**
+station list, which is the maintainer's action to run, not an agent's. Until
+then EL-6 stops after the login exchange, which EL-5's fixtures do cover.
+
+**Done when:** login over 5200 works both proxied and direct; station-list
+parsing is implemented against a truncated-list fixture, or the task is closed
+short with the gap recorded here.
+
+---
+
+### EL-7 — RTP framing and sequence-keyed playout
+**Depends on:** EL-4.
+**Files:** `Sources/EchoLinkKit/EchoLinkRTP.swift`,
+`Sources/EchoLinkKit/EchoLinkStreamAudio.swift`, `Tests/EchoLinkKitTests/…`.
+
+Value types for the 12-byte RTP header and the 4 × 33-byte GSM payload, plus
+the piece that makes them playable. **Version bits are 3.** Accept 3; do not
+"fix" it to 2, and do not reject 2 either.
+
+The real work here is that **`JitterBuffer` keys on timestamps only** — a
+32-bit millisecond stream clock — and the EchoLink timestamp is always zero.
+The sequence number is the only ordering signal, and it is opaque: origins are
+arbitrary (inbound sequences ran 2126..23460 with three discontinuities) and it
+wraps at 16 bits. So the kit must synthesise the clock the buffer needs, the
+way `IAX2MiniTimestampExpander` and `M17FrameNumberExpander` already do for
+their own wire counters — but latching an **arbitrary** origin at first packet
+rather than counting from zero.
+
+Each 144-byte packet is 80 ms and splits into four 33-byte GSM frames of 20 ms
+each, so it pushes four `TimedFrame`s at `origin + seq × 80 + i × 20`. Handle
+the wrap, and re-latch on a discontinuity large enough to be a new talkspurt
+rather than reordering — three such gaps appear in the four-peer capture, so
+this is the common case, not an edge case.
+
+Do not key on SSRC or assume it is zero: one observed peer sent 1787057786.
+
+**Done when:** header parse/serialise round-trips the fixtures; the expander is
+tested across a 16-bit wrap, an arbitrary origin and a mid-stream
+discontinuity; and a recorded packet sequence plays out in order through a real
+`JitterBuffer`.
+
+---
+
+### EL-8 — GSM 06.10 codec (FR-3.2, LP-4)
+**Depends on:** nothing — pure, can run from the start.
+**Files:** `Sources/CGSM/` (vendored `libgsm`), `Sources/EchoLinkKit/GSMVoiceCodec.swift`,
+`Tests/EchoLinkKitTests/…`. Manifest changes coordinate with EL-4.
+
+`libgsm` is BSD-style and LP-4 **permits vendoring it** — so unlike Codec2 this
+needs no dynamic XCFramework, no build script and no conditional compilation.
+That is the whole reason this task is small; do not import the Codec2 pattern.
+Bundle the licence text.
+
+Conform to `RadioCore.VoiceCodec`: 33 bytes per frame, 160 samples per frame,
+8 kHz mono S16 — which lines up with the existing 20 ms frame size everywhere
+else in the stack, so no 20/40 ms accommodation is needed here.
+
+**Done when:** encode→decode round-trips with energy intact, frame sizes are
+asserted, the licence ships, and the SPDX header rule is satisfied for the
+Swift files (vendored C keeps its own headers).
+
+---
+
+### EL-9 — `EchoLinkClient` (the `NetworkClient` facade)
+**Depends on:** EL-6, EL-7, EL-8.
+**Files:** `Sources/EchoLinkKit/EchoLinkClient.swift`, `Tests/EchoLinkKitTests/…`.
+
+The facade the app sees, in the shape `IAX2Client` and `M17Client` already
+share: `public actor EchoLinkClient: NetworkClient`, `typealias Destination =
+EchoLinkDestination`, a `nonisolated var state` backed by `TransmitStateBox`,
+the four required methods, plus the conventional `Configuration`,
+`TransportFactory`, `nonisolated let receivedAudio` and `events`, and an
+`init<C: Clock>` for deterministic tests.
+
+Wire in `TransmitWatchdog` (SF-1) — the safety requirement lives in the library,
+not the app. **Per FR-3.3 the proxy is the default on cellular**; the
+configuration must express that, and direct mode must remain reachable.
+
+Nothing in `RadioCore` should need to change. If the app would need an
+EchoLink-specific type, that is `NetworkClient` missing a capability — fix it
+there, not with a cast.
+
+**Done when:** a full connect → receive → transmit → disconnect cycle runs
+against mock transports from fixtures, the watchdog cuts transmission at its
+limit, and no test opens a socket.
+
+---
+
+### EL-10 — `hamvoip-cli echolink` and live sign-off (**Milestone M3**)
+**Depends on:** EL-9.
+**Files:** `Sources/hamvoip-cli/EchoLinkCommand.swift`, registered in
+`HamVoIPCLI.swift`'s `subcommands:` array.
+
+The `M17Command`/`ConnectCommand` template — the same six loops (event,
+receive, transmit, audio-signal, status ticker, key) — over `EchoLinkClient`.
+Reuse `NodeOptions`, `Terminal`, `LevelMeter`, `AudioFrameBridge`.
+
+`*ECHOTEST*` is the obvious first contact: it echoes audio back, so one
+operator alone can confirm the round trip end to end, which is exactly what the
+capture work already demonstrated the path can do.
+
+**Done when:** a human completes a live EchoLink QSO from the terminal —
+intelligible audio both ways, clean teardown — and records the sign-off on the
+PR. That is **Milestone M3**, and like M2 nothing in this repository can settle
+it.
+
+### Station info and the control channel — deliberately not a task yet
+
+`0x06` frames carry RTCP-shaped packets (type 201 with an SDES), and station
+info arrives on the `0x05` channel as text beginning `oNDATA`. Both are
+observed but neither is needed for a working QSO, and neither has been decoded
+past its outer shape. They become tasks when something needs them — writing
+them up now would be designing against one capture's worth of evidence.
 
 ## Phase 7 — M17Kit
 
