@@ -204,7 +204,7 @@ the open-questions table at the end of `docs/DEVELOPMENT-PLAN.md`.
    fault, not a codec fault.
 3. Minimal SwiftUI shell — on-screen PTT only.
 4. BLE PTT with learn mode.
-5. EchoLink (OQ-9 resolved 2026-08-12; sources fixed, tasks EL-1 … EL-10).
+5. EchoLink (OQ-9 resolved 2026-08-12; sources fixed, tasks EL-1 … EL-11).
 6. `M17Kit`.
 
 The ordering is deliberate. Building M17 first would mean debugging Codec2 and

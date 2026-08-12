@@ -115,8 +115,8 @@ Phase 2  IAX2Kit          IAX-1 … IAX-9      (needs RC-1..RC-4)
 Phase 3  CLI harness      CLI-1              (needs IAX-8)
 Phase 4  SwiftUI app      APP-1 … APP-4      (unblocked: OQ-3/3b/4 resolved)
 Phase 5  BLE PTT          BLE-1 … BLE-3      (needs APP-2)
-Phase 6  EchoLink         EL-1 … EL-10       (unblocked: OQ-1 + OQ-9 resolved;
-                                              EL-8 has no dependencies)
+Phase 6  EchoLink         EL-1 … EL-11       (unblocked: OQ-1 + OQ-9 resolved;
+                                              EL-8 free-standing, EL-11 gated)
 Phase 7  M17Kit           M17-1 … M17-5      (M17-1 ✅ done, OQ-2 resolved)
 ```
 
@@ -852,9 +852,10 @@ Parse permissively, emit what was observed.
 ### Sequencing
 
 ```
-EL-1 ─→ EL-2 ─┬─→ EL-4 ─┬─→ EL-5 ─→ EL-6 ─┬─→ EL-9 ─→ EL-10
+EL-1 ─→ EL-2 ─┬─→ EL-4 ─┬─→ EL-5 ─→ EL-6 ─┬─→ EL-9 ─→ EL-10   (M3)
 EL-3 ─────────┘         └─→ EL-7 ─────────┤
 EL-8 (no dependencies, any time) ─────────┘
+                             EL-6 ─→ EL-11 ⛔ gated, off the M3 path
 ```
 
 `EL-8` (the codec) depends on nothing and can run in parallel from the start.
@@ -914,7 +915,7 @@ Three hazards, none of them optional:
 - **`echolink-oq9-3.pcap` contains the entire EchoLink directory** — 6548
   third-party callsigns and 6261 IP addresses. **No fixture cut from it may
   include a `0x02` frame.** The directory protocol gets its fixtures from a
-  deliberately truncated list instead; see EL-6.
+  deliberately truncated list instead; see EL-11.
 - **The source captures must not be named by path in any versioned file.** This
   departs from `Tests/FIXTURES.md`, which names its captures by path, and the
   departure is deliberate: the OQ-9 provenance entry made the same call for the
@@ -1030,29 +1031,28 @@ as a typed error, and the reentrancy test exists.
 
 ---
 
-### EL-6 — Directory client (FR-3.1) ⛔ needs a capture the maintainer must cut
+### EL-6 — Directory login (FR-3.1, part 1)
 **Depends on:** EL-5.
 **Files:** `Sources/EchoLinkKit/EchoLinkDirectory.swift`, `Tests/EchoLinkKitTests/…`.
 
-Directory login and station list over TCP 5200, tunnelled as `0x02` frames when
+Log in to the directory server on TCP 5200, tunnelled as `0x02` frames when
 proxied. The login line is `'l'` + callsign + two separator bytes + password +
-CR, all ASCII — known from the captures, and it is exactly the credential EL-2
-forbids checking in.
+CR, all ASCII, and the server answers `OK`. Both halves are in the captures —
+and the request half is exactly the credential EL-2 forbids checking in, so the
+fixture is the server's reply, with the request hand-built from the shape.
 
-**This task is gated on evidence that does not exist yet.** The only capture of
-a full station list is the one carrying 6548 other operators' callsigns, and
-EL-2 forbids cutting a fixture from it. The station-list *format* therefore has
-no usable fixture. Do not work around this by hand-building a fixture from the
-directory in that capture — that is the same data with the provenance filed
-off.
+This is the operator's own account password (FR-3.4), not the proxy's `PUBLIC`.
+Two different secrets a few bytes apart on the same stream: the proxy digest of
+EL-5 never sees the account password, and this login never sees the proxy's.
+Keep them in separate types so neither can be passed where the other belongs.
 
-What is needed is a capture of a session with a **deliberately truncated**
-station list, which is the maintainer's action to run, not an agent's. Until
-then EL-6 stops after the login exchange, which EL-5's fixtures do cover.
+**Parsing the station list is not in this task — that is EL-11**, which is
+gated on a capture that does not exist yet. Nothing on the path to a QSO needs
+the list: an operator who knows the node they want can connect without it.
 
-**Done when:** login over 5200 works both proxied and direct; station-list
-parsing is implemented against a truncated-list fixture, or the task is closed
-short with the gap recorded here.
+**Done when:** login over 5200 succeeds both proxied and direct against
+`MockStreamTransport`, a rejected login is a typed error, and the account
+password is never logged, echoed in an error, or written to a fixture.
 
 ---
 
@@ -1151,6 +1151,40 @@ capture work already demonstrated the path can do.
 intelligible audio both ways, clean teardown — and records the sign-off on the
 PR. That is **Milestone M3**, and like M2 nothing in this repository can settle
 it.
+
+---
+
+### EL-11 — Station list ⛔ gate: needs a capture the maintainer must cut
+**Depends on:** EL-6. **Blocks:** nothing — deliberately off the path to M3.
+**Files:** `Sources/EchoLinkKit/EchoLinkDirectory.swift`, `Tests/EchoLinkKitTests/…`.
+
+Split out of EL-6 on 2026-08-12, because the login is evidenced and the list is
+not, and bundling them would have held a ready task behind a missing capture.
+
+Parse the station list the directory server returns after login: callsign, node
+number, status, location, address. Feeds a browse/search UI in Currawong later;
+the CLI has no need of it beyond a `--list` dump.
+
+**The gate.** The only capture of a full station list is the one carrying 6548
+other operators' callsigns and 6261 IP addresses, and EL-2 forbids cutting a
+`0x02` fixture from it. So the format has no usable fixture, and the obvious
+workaround is the wrong one: **hand-building a fixture from the directory in
+that capture is the same data with the provenance filed off.** Reading the list
+to learn the format and then typing out "representative" entries is the same
+act with an extra step.
+
+What unblocks it is a capture of a session whose station list is
+**deliberately truncated** — few enough entries, ideally of nodes the
+maintainer owns, that the fixture carries no one else's data. Cutting it is the
+maintainer's action to run, not an agent's.
+
+Until then this task does not start. It is not a blocker for anything: EL-9 and
+EL-10 need the login, not the list, and Milestone M3 is a QSO with a node whose
+address is already known.
+
+**Done when:** the list parses from a truncated-list fixture; a malformed or
+partial list is a typed error rather than a silent short read; and no fixture
+contains a callsign, location or address belonging to anyone else.
 
 ### Station info and the control channel — deliberately not a task yet
 
