@@ -43,8 +43,10 @@ final class IAX2ClientTests: XCTestCase {
         let clock: ManualTestClock
         let audio: AudioCollector
         let events: EventCollector
+        let radioEvents: RadioEventCollector
         let audioTask: Task<Void, Never>
         let eventTask: Task<Void, Never>
+        let radioEventTask: Task<Void, Never>
     }
 
     private func makeHarness(
@@ -67,9 +69,15 @@ final class IAX2ClientTests: XCTestCase {
             for await event in client.events { await events.append(event) }
             await events.finish()
         }
+        let radioEvents = RadioEventCollector()
+        let radioEventTask = Task {
+            for await event in client.radioEvents { await radioEvents.append(event) }
+            await radioEvents.finish()
+        }
         return Harness(
             client: client, transport: transport, clock: clock,
-            audio: audio, events: events, audioTask: audioTask, eventTask: eventTask)
+            audio: audio, events: events, radioEvents: radioEvents,
+            audioTask: audioTask, eventTask: eventTask, radioEventTask: radioEventTask)
     }
 
     private func tearDown(_ harness: Harness) async {
@@ -332,7 +340,7 @@ final class IAX2ClientTests: XCTestCase {
 
         let pcm = tone()
         for frame in pcm {
-            _ = try await harness.client.send(pcm: frame)
+            _ = try await harness.client.transmit(pcm: frame)
         }
         await harness.client.stopTransmit()
         XCTAssertEqual(harness.client.state, .receiving)
@@ -480,7 +488,7 @@ final class IAX2ClientTests: XCTestCase {
         // And it genuinely stopped transmitting: audio offered now is dropped
         // rather than keyed onto the air.
         let before = harness.transport.sentCount
-        let frame = try await harness.client.send(pcm: tone(frames: 1)[0])
+        let frame = try await harness.client.transmit(pcm: tone(frames: 1)[0])
         XCTAssertNil(frame, "audio after expiry is not sent")
         await settle()
         XCTAssertEqual(
@@ -800,7 +808,7 @@ final class IAX2ClientTests: XCTestCase {
         try await connect(harness)
         harness.transport.clearSent()
 
-        let frame = try await harness.client.send(pcm: tone(frames: 1)[0])
+        let frame = try await harness.client.transmit(pcm: tone(frames: 1)[0])
         XCTAssertNil(frame)
         await settle()
         XCTAssertEqual(harness.transport.sentCount, 0)
@@ -905,6 +913,99 @@ final class IAX2ClientTests: XCTestCase {
 
         await tearDown(harness)
     }
+
+    // MARK: - The mode-agnostic event stream (RC-10)
+
+    /// `events` and `radioEvents` are fed from one place, so a live session must
+    /// see the same things in the same order on both — and `radioEvents` is what
+    /// an application actually reads, so a gap here is a gap in the app.
+    func testRadioEventsMirrorTheModeSpecificStreamThroughAWholeSession() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        await waitForEvent(
+            { if case .connected = $0 { return true } else { return false } },
+            harness.events, "the call came up")
+
+        try await harness.client.startTransmit()
+        await harness.client.stopTransmit()
+
+        // An inbound DTMF digit, so the stream carries something that is neither
+        // lifecycle nor transmit state.
+        harness.transport.inject(
+            IAX2Frame.full(
+                IAX2FullFrame(
+                    sourceCallNumber: peerCallNumber,
+                    destinationCallNumber: localCallNumber,
+                    timestamp: 300,
+                    oSeqno: 2,
+                    iSeqno: 1,
+                    type: IAX2DTMFDigit.frameType,
+                    subclass: try IAX2DTMFDigit("7").subclass)
+            ).encoded())
+        await waitForEvent(
+            { if case .dtmf = $0 { return true } else { return false } },
+            harness.events, "the node sent a digit")
+        await settle()
+
+        let modeSpecific = await harness.events.events
+        let radio = await harness.radioEvents.events
+        XCTAssertEqual(
+            radio, modeSpecific.compactMap(\.radioEvent),
+            "radioEvents is exactly the translation of events, in order")
+
+        // And the specific things an app has to be able to see.
+        XCTAssertTrue(radio.contains(.connected))
+        XCTAssertTrue(radio.contains(.transmitting))
+        XCTAssertTrue(radio.contains(.receiving))
+        XCTAssertTrue(radio.contains { if case .dtmfReceived = $0 { return true } else { return false } })
+
+        await tearDown(harness)
+    }
+
+    /// SF-1 requires the operator to see the watchdog fire, and `radioEvents` is
+    /// the stream an application reads — so the expiry has to arrive there, with
+    /// its timeout intact, not only on the IAX2-specific stream.
+    func testWatchdogExpiryReachesTheModeAgnosticStream() async throws {
+        let timeout = Duration.seconds(3)
+        var configuration = IAX2Client.Configuration()
+        configuration.transmitTimeout = timeout
+        let harness = makeHarness(configuration: configuration)
+        try await connect(harness)
+
+        try await harness.client.startTransmit()
+        let armed = await harness.clock.waitUntilSleepers(2)
+        XCTAssertTrue(armed, "the watchdog never armed its deadline")
+        harness.clock.advance(by: timeout)
+        await waitForEvent(
+            { if case .transmitWatchdogExpired = $0 { return true } else { return false } },
+            harness.events, "the watchdog fired")
+        await settle()
+
+        let radio = await harness.radioEvents.events
+        XCTAssertTrue(
+            radio.contains(.transmitWatchdogExpired(timeout)),
+            "the watchdog expiry, carrying its own timeout, on the stream the app reads")
+        XCTAssertEqual(harness.client.state, .receiving, "and it actually unkeyed")
+
+        await tearDown(harness)
+    }
+
+    /// `disconnect()` is terminal for both streams, or a consumer's `for await`
+    /// never ends.
+    func testDisconnectFinishesTheModeAgnosticStreamToo() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        await harness.client.disconnect()
+        await settle()
+
+        let modeSpecificFinished = await harness.events.isFinished
+        let radioFinished = await harness.radioEvents.isFinished
+        XCTAssertTrue(modeSpecificFinished)
+        XCTAssertTrue(radioFinished, "or a consumer's `for await` never ends")
+        harness.transport.finish()
+    }
 }
 
 // MARK: - Collectors
@@ -935,6 +1036,15 @@ private actor EventCollector: FinishTracking {
     func contains(where predicate: (IAX2ClientEvent) -> Bool) -> Bool {
         events.contains(where: predicate)
     }
+}
+
+/// The mode-agnostic half of the same stream (RC-10).
+private actor RadioEventCollector: FinishTracking {
+    private(set) var events: [RadioEvent] = []
+    private(set) var isFinished = false
+
+    func append(_ event: RadioEvent) { events.append(event) }
+    func finish() { isFinished = true }
 }
 
 // MARK: - Reentrancy test doubles

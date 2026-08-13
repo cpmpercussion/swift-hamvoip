@@ -80,8 +80,8 @@ remembered; if it disagrees with the repository, the repository is right.
   `CGSM` target, a test-only `TestSupport` target and five test targets. One
   Swift dependency, `swift-argument-parser`, authorised by CLI-1; `CGSM` is
   vendored C, not a dependency (EL-8, LP-4).
-- `swift build` and `swift test` are green: **870 tests, no failures**
-  (checked 2026-08-13, after EL-11). One of those is skipped unless
+- `swift build` and `swift test` are green: **911 tests, no failures**
+  (checked 2026-08-13, after RC-10). One of those is skipped unless
   `HAMVOIP_ECHOLINK_STATION_LIST` names a directory-list download — the EL-11
   conformance test, which cannot ship its data. CI runs the SPDX check on
   Ubuntu and build + test on macOS 14.
@@ -92,6 +92,26 @@ remembered; if it disagrees with the repository, the repository is right.
   echolink`, audio intelligible both ways. `--list` was confirmed against a
   live directory server the same day — 6389 entries, count matching — so
   nothing in Phase 6 is now unproven on air.
+
+  **One declared-but-unbuilt piece, deliberately:** `Route.direct` throws
+  `.directModeUnavailable`, because no capture of a direct (non-proxied) session
+  exists and the port assignment and socket setup are therefore unobserved. The
+  framing is known — strip a proxy frame's 9-byte header and what remains is
+  what direct mode would put on the wire. FR-3.3 requires the *proxy* and makes
+  it the default on cellular, so nothing on mobile data is blocked, and no task
+  is open for this. Building it needs an on-air direct session captured first;
+  whether that is worth doing is a maintainer call, not an oversight.
+- **Released as `v0.3.0`, 2026-08-13** — the release that carries Phase 6.
+  `v0.2.0` predates `EchoLinkKit` entirely, so Currawong's `from: 0.2.0` pin
+  resolves forward to it without a manifest change.
+- **`NetworkClient` is now a seam an app can actually be written against**
+  (RC-10, 2026-08-13). It carries `radioEvents`, `receivedAudio` and
+  `send(pcm:)` besides `state` and the four verbs, so Phase 4 can report why a
+  link dropped without naming a protocol-specific type. All three clients
+  translate their own event vocabulary onto `RadioEvent` from inside their single
+  `emit`. **Note for anything already calling the clients directly:** the
+  frame-returning `send(pcm:)` is now `transmit(pcm:)`; `send(pcm:)` returns
+  `Void` and is the protocol requirement.
 - `RadioCore` and `IAX2Kit` are complete. `M17Kit` has reflector control,
   base-40 callsigns and stream-packet parse/serialise, but **no codec wiring
   and no `M17Client`** — M17-4 and M17-5 are the remaining work there.
@@ -120,7 +140,7 @@ has merged and the code it describes exists.
 
 ```
 Phase 0  Bootstrap        BOOT-1             (blocks everything)
-Phase 1  RadioCore        RC-1 … RC-8        (needs BOOT-1)
+Phase 1  RadioCore        RC-1 … RC-10       (needs BOOT-1)
 Phase 2  IAX2Kit          IAX-1 … IAX-9      (needs RC-1..RC-4)
 Phase 3  CLI harness      CLI-1              (needs IAX-8)
 Phase 4  SwiftUI app      APP-1 … APP-4      (unblocked: OQ-3/3b/4 resolved)
@@ -694,17 +714,27 @@ not misconfigured. And the failure is unreadable: `hamvoip-cli` reports
 points at the socket rather than at the node's routing, and gives nobody a
 reason to try the other address.
 
-**Done when:** such a node is either handled or diagnosed clearly. That is a
-design choice for the maintainer, not something a task should presume:
+**DECIDED 2026-08-13 — diagnose it, do not handle it. The maintainer's call.**
+The connected socket stays; what changes is the error. The observed harm is an
+unreadable message rather than a lost capability — the same client completed
+registration, MD5 authentication, call setup and a clean teardown against the
+same node's other address — so the fix is to say so, not to weaken the
+transport's binding to its peer for one node on one LAN. If a second such node
+turns up, handling it can be reconsidered with better evidence about which
+Network.framework primitive fits.
 
-- *Handle it* — receive from any source rather than from one peer. PD-1 keeps
-  this inside Network.framework, so confirm which primitive actually fits
-  before writing code; it weakens the transport's binding to its peer, which
-  wants thinking about before it is traded away.
-- *Diagnose it* — keep the connected socket and turn the failure into a
-  message that names the likely cause and suggests the node's other address.
+**Done when:** a datagram arriving from an address other than the dialled peer,
+or a send failing the way this one did, produces an error that names the likely
+cause — the peer answered from a different address — and suggests trying the
+node's other address. A test drives that at the `DatagramTransport` seam.
 
-Either way AU-5 stands: no sockets in unit tests, so the mismatch must be
+The rejected alternative, recorded so it is not re-litigated from scratch:
+*handle it* — receive from any source rather than from one peer. PD-1 keeps this
+inside Network.framework, so it would need confirming which primitive actually
+fits before writing code, and it trades away the transport's binding to its
+peer.
+
+AU-5 stands: no sockets in unit tests, so the mismatch must be
 modelled at the `DatagramTransport` seam rather than reproduced against a real
 multi-homed host.
 
@@ -732,6 +762,55 @@ own task.
 **Done when:** no allocation occurs on the tap thread (verify by inspection and,
 if practical, an allocation-counting test on the chunker); frames still arrive
 as exact 160-sample buffers; existing tests still pass.
+
+---
+
+### RC-10 — `NetworkClient` carries events, audio and a transmit seam ✅ DONE
+**Depends on:** RC-1. **Files:** `Sources/RadioCore/RadioEvent.swift`,
+`NetworkClient.swift`, all three clients + tests.
+
+`NetworkClient` had `state` and four verbs. That is enough to drive a PTT button
+and nothing else: an app could not report *why* a link dropped without knowing
+about `IAX2CallTermination`, could not read received audio, and could not offer
+captured audio — so it could not be written against the protocol at all, which
+is the one thing the protocol exists for. Phase 4 would have discovered this on
+its first screen.
+
+Added `RadioEvent`, `RadioDisconnectReason` and `RadioAudioIssue` — one coarse,
+mode-agnostic vocabulary, carrying `String?` details rather than mode-specific
+types so that adding a mode does not change its shape — plus three protocol
+requirements: `radioEvents`, `receivedAudio` and `send(pcm:)`. Each client keeps
+its own detailed `events` stream and translates onto the shared one from inside
+its single `emit`, so the two cannot disagree about what happened or in what
+order.
+
+**This task has unusual provenance.** It was written, finished and left
+uncommitted in a background job's worktree, found during a pre-0.3.0 branch
+audit, and preserved on `salvage/rc-10-radio-events` before being ported. The
+port is not a rebase: the original predated `M17Client` and `EchoLinkClient`, so
+two of the three translations are new, and three cases
+(`remoteTransmitStarted`, `remoteTransmitEnded`, `stationInfo`) were added
+because a third mode showed the vocabulary was short.
+
+Two decisions worth not re-litigating:
+
+- **The translation returns `RadioEvent?`.** IAX2 maps totally; EchoLink drops
+  `directoryLoggedIn` and `nodeAnswered`, which happen *inside* a `connect(to:)`
+  that has not returned, so no application can act on them. `nil` is a decision
+  recorded per case, not a gap.
+- **The frame-returning `send(pcm:)` became `transmit(pcm:)`** on all three
+  clients, and `send(pcm:)` is now the Void-returning protocol requirement. A
+  witness may not return a value the requirement does not, and the requirement
+  must not — an `IAX2VoiceFrame` is exactly the RFC 5456 detail the seam exists
+  to keep out of an app. Anything wanting to know what reached the wire (the CLI
+  counts frames) calls `transmit(pcm:)`. Breaking for `IAX2Kit`/`M17Kit`
+  consumers, which is why it landed in 0.3.0 rather than later.
+
+**Done when:** a whole session — connect, transmit, read an event, read audio,
+disconnect — runs against nothing but `NetworkClient`, proven by a fake client
+in `RadioCoreTests` that is a plain `final class` rather than an actor; every
+mode's mapping table is asserted case by case; and a live IAX2 session shows
+`radioEvents` is exactly `events.compactMap(\.radioEvent)`, in order.
 
 ## Phase 3 — CLI harness
 

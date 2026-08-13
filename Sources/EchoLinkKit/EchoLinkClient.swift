@@ -97,6 +97,30 @@ public enum EchoLinkClientError: Error, Equatable, CustomStringConvertible {
     }
 }
 
+/// Why an EchoLink session ended.
+///
+/// Typed rather than a `String`, so that the mode-agnostic translation
+/// (`RadioEvent`) can tell a local hang-up from a node saying goodbye without
+/// matching on prose. The strings this replaced were "local request", "the node
+/// said goodbye" and "the link closed"; classifying by string would have been a
+/// bug waiting for somebody to reword a message.
+public enum EchoLinkDisconnectReason: Sendable, Equatable, CustomStringConvertible {
+    /// ``EchoLinkClient/disconnect()`` was called.
+    case localRequest
+    /// The node sent its own teardown — the far end hung up.
+    case remoteRequest
+    /// The tunnelled channel closed underneath the session.
+    case linkClosed
+
+    public var description: String {
+        switch self {
+        case .localRequest: return "local request"
+        case .remoteRequest: return "the node said goodbye"
+        case .linkClosed: return "the link closed"
+        }
+    }
+}
+
 /// Session events, in the shape `M17ClientEvent` already established.
 public enum EchoLinkClientEvent: Sendable, Equatable {
     case connecting
@@ -105,7 +129,7 @@ public enum EchoLinkClientEvent: Sendable, Equatable {
     /// The node answered the SDES, identifying itself.
     case nodeAnswered(name: String)
     case connected(node: String)
-    case disconnected(reason: String)
+    case disconnected(reason: EchoLinkDisconnectReason)
     case transmitting
     case receiving
     /// A new inbound talkspurt began — someone else started speaking.
@@ -114,6 +138,56 @@ public enum EchoLinkClientEvent: Sendable, Equatable {
     case stationInfo(String)
     /// The transmit watchdog cut transmission (SF-1).
     case transmitTimedOut(after: Duration)
+}
+
+// MARK: - Translation onto RadioCore's mode-agnostic events
+
+extension EchoLinkClientEvent {
+    /// This event as `NetworkClient` sees it (RC-10).
+    ///
+    /// **`nil` for two cases**, and deliberately: ``directoryLoggedIn`` and
+    /// ``nodeAnswered(name:)`` are steps *inside* `connect(to:)`, which has not
+    /// returned yet, so an application awaiting it cannot act on them — and the
+    /// ``RadioEvent/connected`` that follows immediately is what it wants. They
+    /// stay on ``EchoLinkClient/events`` for a harness that is narrating the
+    /// sequence, which is exactly what `hamvoip-cli echolink` does with them.
+    public var radioEvent: RadioEvent? {
+        switch self {
+        case .connecting:
+            return .connecting
+        case .directoryLoggedIn, .nodeAnswered:
+            return nil
+        case .connected:
+            // The node's name is dropped: the application named the
+            // destination, so it already knows what it connected to.
+            return .connected
+        case .disconnected(let reason):
+            return .disconnected(reason.radioDisconnectReason)
+        case .transmitting:
+            return .transmitting
+        case .receiving:
+            return .receiving
+        case .talkspurtStarted:
+            // No callsign: EchoLink identifies the session, not each talkspurt,
+            // and there is no per-over station identity on the audio channel.
+            return .remoteTransmitStarted(station: nil)
+        case .stationInfo(let text):
+            return .stationInfo(text)
+        case .transmitTimedOut(let timeout):
+            return .transmitWatchdogExpired(timeout)
+        }
+    }
+}
+
+extension EchoLinkDisconnectReason {
+    /// This reason as `NetworkClient` sees it (RC-10).
+    public var radioDisconnectReason: RadioDisconnectReason {
+        switch self {
+        case .localRequest: return .localRequest
+        case .remoteRequest: return .remoteRequest(detail: nil)
+        case .linkClosed: return .transportFailure()
+        }
+    }
 }
 
 // MARK: - Client
@@ -303,6 +377,15 @@ public actor EchoLinkClient: NetworkClient {
     /// Session events.
     public nonisolated let events: AsyncStream<EchoLinkClientEvent>
 
+    /// `NetworkClient`'s mode-agnostic view of ``events`` (RC-10).
+    ///
+    /// The same events in the same order, translated by
+    /// ``EchoLinkClientEvent/radioEvent`` — which drops the two intermediate
+    /// login steps, so this stream is shorter than ``events`` rather than a
+    /// relabelling of it. Both are fed from one place, so they cannot disagree
+    /// about what happened.
+    public nonisolated let radioEvents: AsyncStream<RadioEvent>
+
     public nonisolated var state: TransmitState { stateBox.value }
 
     // MARK: Injected
@@ -384,6 +467,7 @@ public actor EchoLinkClient: NetworkClient {
     private nonisolated let stateBox = TransmitStateBox()
     private nonisolated let audioContinuation: AsyncStream<[Int16]>.Continuation
     private nonisolated let eventContinuation: AsyncStream<EchoLinkClientEvent>.Continuation
+    private nonisolated let radioEventContinuation: AsyncStream<RadioEvent>.Continuation
 
     // MARK: Init
 
@@ -438,6 +522,10 @@ public actor EchoLinkClient: NetworkClient {
         var escapedEvents: AsyncStream<EchoLinkClientEvent>.Continuation!
         self.events = AsyncStream { escapedEvents = $0 }
         self.eventContinuation = escapedEvents
+
+        var escapedRadioEvents: AsyncStream<RadioEvent>.Continuation!
+        self.radioEvents = AsyncStream { escapedRadioEvents = $0 }
+        self.radioEventContinuation = escapedRadioEvents
     }
 
     /// The real transport (PD-1). Never used by a unit test.
@@ -760,9 +848,10 @@ public actor EchoLinkClient: NetworkClient {
     public func disconnect() async {
         let wasActive = phase != .idle
         await releaseSession()
-        if wasActive { emit(.disconnected(reason: "local request")) }
+        if wasActive { emit(.disconnected(reason: .localRequest)) }
         audioContinuation.finish()
         eventContinuation.finish()
+        radioEventContinuation.finish()
     }
 
     // MARK: - NetworkClient: transmitting
@@ -821,7 +910,7 @@ public actor EchoLinkClient: NetworkClient {
     /// released is this client's job, and dropping silently is the fail-safe
     /// direction — the failure mode is dead air, not an open microphone.
     @discardableResult
-    public func send(pcm: [Int16]) async throws -> EchoLinkRTPPacket? {
+    public func transmit(pcm: [Int16]) async throws -> EchoLinkRTPPacket? {
         guard case .transmitting = state, phase == .connected else { return nil }
         guard pcm.count == codec.samplesPerFrame else {
             throw EchoLinkClientError.wrongSampleCount(
@@ -832,6 +921,18 @@ public actor EchoLinkClient: NetworkClient {
         guard let packet = transmitter.push(encoded) else { return nil }
         try await sendAudio(packet)
         return packet
+    }
+
+    /// `NetworkClient`'s transmit seam: ``transmit(pcm:)``, with the packet
+    /// discarded.
+    ///
+    /// Two methods rather than one because a witness may not return a value the
+    /// requirement does not — and the requirement should not, since an
+    /// `EchoLinkRTPPacket` is exactly the protocol detail the seam exists to keep
+    /// out of an application. Three calls in four legitimately produce no packet:
+    /// EchoLink frames 80 ms and this takes 20 ms.
+    public func send(pcm: [Int16]) async throws {
+        _ = try await transmit(pcm: pcm)
     }
 
     private func sendAudio(_ packet: EchoLinkRTPPacket) async throws {
@@ -928,13 +1029,13 @@ public actor EchoLinkClient: NetworkClient {
     private func nodeSaidGoodbye() async {
         guard phase != .idle else { return }
         await releaseSession()
-        emit(.disconnected(reason: "the node said goodbye"))
+        emit(.disconnected(reason: .remoteRequest))
     }
 
     private func linkFinished() async {
         guard phase != .idle else { return }
         await releaseSession()
-        emit(.disconnected(reason: "the link closed"))
+        emit(.disconnected(reason: .linkClosed))
     }
 
     // MARK: - Playout
@@ -1102,7 +1203,10 @@ public actor EchoLinkClient: NetworkClient {
         stateBox.value = new
     }
 
+    /// The one place events leave this client, so ``events`` and ``radioEvents``
+    /// cannot drift apart or disagree on ordering.
     private func emit(_ event: EchoLinkClientEvent) {
         eventContinuation.yield(event)
+        if let radio = event.radioEvent { radioEventContinuation.yield(radio) }
     }
 }

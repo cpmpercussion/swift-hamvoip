@@ -183,11 +183,11 @@ final class M17ClientTests: XCTestCase {
         try await harness.client.startTransmit()
 
         // The first half is held back; the second completes the datagram.
-        let first = try await harness.client.send(pcm: frame(1))
+        let first = try await harness.client.transmit(pcm: frame(1))
         XCTAssertNil(first, "the first 20 ms frame is held for its partner")
         XCTAssertEqual(harness.transport.sentCount, 0)
 
-        let second = try await harness.client.send(pcm: frame(2))
+        let second = try await harness.client.transmit(pcm: frame(2))
         XCTAssertNotNil(second, "the second 20 ms frame completes a 40 ms datagram")
         _ = await waitForSent(1, harness.transport)
 
@@ -207,7 +207,7 @@ final class M17ClientTests: XCTestCase {
         harness.transport.clearSent()
         try await harness.client.startTransmit()
 
-        for index in 0..<6 { _ = try await harness.client.send(pcm: frame(Int16(index))) }
+        for index in 0..<6 { _ = try await harness.client.transmit(pcm: frame(Int16(index))) }
         _ = await waitForSent(3, harness.transport)
 
         let numbers = try harness.transport.sent.prefix(3).map {
@@ -226,8 +226,8 @@ final class M17ClientTests: XCTestCase {
         for _ in 0..<2 {
             harness.transport.clearSent()
             try await harness.client.startTransmit()
-            _ = try await harness.client.send(pcm: frame(1))
-            _ = try await harness.client.send(pcm: frame(2))
+            _ = try await harness.client.transmit(pcm: frame(1))
+            _ = try await harness.client.transmit(pcm: frame(2))
             _ = await waitForSent(1, harness.transport)
             streamIDs.append(try M17StreamPacket.parse(harness.transport.sent[0]).streamID)
             await harness.client.stopTransmit()
@@ -247,7 +247,7 @@ final class M17ClientTests: XCTestCase {
 
         // A capture pipeline runs continuously; knowing PTT is up is the
         // client's job, and dropping is the fail-safe direction.
-        let sent = try await harness.client.send(pcm: frame(1))
+        let sent = try await harness.client.transmit(pcm: frame(1))
         XCTAssertNil(sent)
         await settle()
         XCTAssertEqual(harness.transport.sentCount, 0)
@@ -260,8 +260,8 @@ final class M17ClientTests: XCTestCase {
         try await connect(harness)
         harness.transport.clearSent()
         try await harness.client.startTransmit()
-        _ = try await harness.client.send(pcm: frame(1))
-        _ = try await harness.client.send(pcm: frame(2))
+        _ = try await harness.client.transmit(pcm: frame(1))
+        _ = try await harness.client.transmit(pcm: frame(2))
         _ = await waitForSent(1, harness.transport)
 
         await harness.client.stopTransmit()

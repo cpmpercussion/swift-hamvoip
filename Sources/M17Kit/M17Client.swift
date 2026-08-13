@@ -102,6 +102,85 @@ public enum M17ClientEvent: Sendable, Equatable {
     case disconnected(M17DisconnectReason?)
 }
 
+// MARK: - Translation onto RadioCore's mode-agnostic events
+
+extension M17ClientEvent {
+    /// This event as `NetworkClient` sees it (RC-10).
+    ///
+    /// Never `nil` for this mode: every case maps. What is dropped is detail
+    /// inside the cases — the module letter, which `M17Client.linkedModule`
+    /// still answers for, and the stream ID, which identifies an over on the
+    /// wire and means nothing above the protocol.
+    public var radioEvent: RadioEvent? {
+        switch self {
+        case .connecting:
+            return .connecting
+        case .linked:
+            return .connected
+        case .streamStarted(let source, _):
+            return .remoteTransmitStarted(station: source.callsign)
+        case .streamEnded(let source, let reason):
+            // `preempted` is the one an operator needs distinguished: it means
+            // somebody was talked over, not that an over ended.
+            return .remoteTransmitEnded(
+                station: source.callsign, displaced: reason == .preempted)
+        case .streamRejected(let rejection):
+            return .incomingAudioDropped(rejection.radioAudioIssue)
+        case .transmitting:
+            return .transmitting
+        case .receiving:
+            return .receiving
+        case .transmitWatchdogExpired(let timeout):
+            return .transmitWatchdogExpired(timeout)
+        case .disconnected(let reason):
+            // No reason means the transport went away underneath the link.
+            return .disconnected(reason?.radioDisconnectReason ?? .transportFailure())
+        }
+    }
+}
+
+extension M17DisconnectReason {
+    /// This reason as `NetworkClient` sees it (RC-10).
+    public var radioDisconnectReason: RadioDisconnectReason {
+        switch self {
+        case .localRequest:
+            return .localRequest
+        case .rejectedByReflector:
+            // A NACK means the link never existed — usually the module letter
+            // or the callsign, both of which the operator can fix.
+            return .rejected(detail: "the reflector sent NACK")
+        case .remoteRequest:
+            return .remoteRequest(detail: "the reflector sent DISC")
+        case .connectTimeout:
+            return .connectTimedOut(nil)
+        case .keepaliveTimeout:
+            // The reflector stopped sending PING. It is gone; it just never
+            // said so, which is what `linkTimedOut` means.
+            return .linkTimedOut(nil)
+        case .transportClosed:
+            return .transportFailure()
+        }
+    }
+}
+
+extension M17StreamReceiver.Rejection {
+    /// This rejection as `NetworkClient` sees it (RC-10).
+    public var radioAudioIssue: RadioAudioIssue {
+        switch self {
+        case .encrypted:
+            // Deliberately visible rather than silent (FR-2.5): the audio is
+            // not missing, it is unlistenable, and there is no decrypt path.
+            return .encrypted
+        // A failed CRC, a payload that is not two codec frames and a packet
+        // from a stream we are not playing are all "arrived, could not be
+        // turned into samples". The distinctions are M17 distinctions and stay
+        // on `M17Client.events`.
+        case .crcFailed, .malformedPayload, .wrongStream:
+            return .undecodable(detail: description)
+        }
+    }
+}
+
 // MARK: - M17Client
 
 /// The M17 mode as the application sees it (M17-5).
@@ -187,6 +266,13 @@ public actor M17Client: NetworkClient {
     /// Session events.
     public nonisolated let events: AsyncStream<M17ClientEvent>
 
+    /// `NetworkClient`'s mode-agnostic view of ``events`` (RC-10).
+    ///
+    /// The same events in the same order, translated by
+    /// ``M17ClientEvent/radioEvent``. Both streams are fed from one place, so
+    /// they cannot disagree about what happened.
+    public nonisolated let radioEvents: AsyncStream<RadioEvent>
+
     public nonisolated var state: TransmitState { stateBox.value }
 
     // MARK: Injected
@@ -228,6 +314,7 @@ public actor M17Client: NetworkClient {
     private nonisolated let stateBox = TransmitStateBox()
     private nonisolated let audioContinuation: AsyncStream<[Int16]>.Continuation
     private nonisolated let eventContinuation: AsyncStream<M17ClientEvent>.Continuation
+    private nonisolated let radioEventContinuation: AsyncStream<RadioEvent>.Continuation
 
     // MARK: Init
 
@@ -278,6 +365,10 @@ public actor M17Client: NetworkClient {
         var escapedEvents: AsyncStream<M17ClientEvent>.Continuation!
         self.events = AsyncStream { escapedEvents = $0 }
         self.eventContinuation = escapedEvents
+
+        var escapedRadioEvents: AsyncStream<RadioEvent>.Continuation!
+        self.radioEvents = AsyncStream { escapedRadioEvents = $0 }
+        self.radioEventContinuation = escapedRadioEvents
     }
 
     /// The real transport (PD-1). Never used by a unit test.
@@ -368,6 +459,7 @@ public actor M17Client: NetworkClient {
         if wasActive { emit(.disconnected(.localRequest)) }
         audioContinuation.finish()
         eventContinuation.finish()
+        radioEventContinuation.finish()
     }
 
     // MARK: - NetworkClient: transmitting
@@ -442,7 +534,7 @@ public actor M17Client: NetworkClient {
     ///   client's job, and silently dropping is the fail-safe direction —
     ///   the failure mode is dead air, not an open microphone.
     @discardableResult
-    public func send(pcm: [Int16]) async throws -> M17StreamPacket? {
+    public func transmit(pcm: [Int16]) async throws -> M17StreamPacket? {
         guard case .transmitting = state, phase == .connected,
             var transmitter, let link
         else { return nil }
@@ -461,6 +553,19 @@ public actor M17Client: NetworkClient {
         self.transmitter = transmitter
         try await link.send(packet)
         return packet
+    }
+
+    /// `NetworkClient`'s transmit seam: ``transmit(pcm:)``, with the packet
+    /// discarded.
+    ///
+    /// Two methods rather than one because a witness may not return a value the
+    /// requirement does not — and the requirement should not, since an
+    /// `M17StreamPacket` is exactly the protocol detail the seam exists to keep
+    /// out of an application. Note that half the calls legitimately produce no
+    /// packet at all: M17 frames 40 ms and this takes 20 ms, so every other
+    /// frame is held back.
+    public func send(pcm: [Int16]) async throws {
+        _ = try await transmit(pcm: pcm)
     }
 
     // MARK: - The event pump
@@ -602,7 +707,10 @@ public actor M17Client: NetworkClient {
         stateBox.value = next
     }
 
+    /// The one place events leave this client, so ``events`` and ``radioEvents``
+    /// cannot drift apart or disagree on ordering.
     private func emit(_ event: M17ClientEvent) {
         eventContinuation.yield(event)
+        if let radio = event.radioEvent { radioEventContinuation.yield(radio) }
     }
 }
