@@ -238,13 +238,29 @@ private final class EchoLinkSession: @unchecked Sendable {
     func run() async throws {
         await printBanner()
 
+        // Started BEFORE connect, not with the other loops after it.
+        //
+        // connect() emits an event per step — the directory login, the node
+        // answering — and those are exactly what you need when it fails
+        // part-way. Starting the pump with the other loops meant a failed
+        // connect printed only its final error, so "proxy login worked, the
+        // directory accepted us, the node never answered" was indistinguishable
+        // from "nothing worked at all". That cost real time during the first
+        // live attempt.
+        let eventPump = Task { await self.runEventLoop() }
+
         await console.log(
             "Connecting to \(destination.node) at \(destination.peer) "
                 + "via proxy as \(callsign)…")
         do {
             try await client.connect(to: destination)
         } catch {
+            // The event pump has been running since before connect, so the
+            // steps that DID succeed are already on screen above this line.
+            // Give the last few events a moment to drain before the summary.
+            try? await Task.sleep(for: .milliseconds(50))
             await console.log("FAILED: \(error)")
+            eventPump.cancel()
             throw ExitCode.failure
         }
         await console.log("Connected to \(destination.node).")
@@ -273,7 +289,7 @@ private final class EchoLinkSession: @unchecked Sendable {
         if terminal != nil { keyReader = KeyReader() }
 
         await withTaskGroup(of: Void.self) { group in
-            group.addTask { await self.runEventLoop() }
+            group.addTask { _ = await eventPump.value }
             group.addTask { await self.runReceiveLoop() }
             group.addTask { await self.runTransmitLoop() }
             group.addTask { await self.runAudioSignalLoop() }
