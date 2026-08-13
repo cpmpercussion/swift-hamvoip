@@ -8,6 +8,18 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-13
+
+One feature, cut as its own release so Currawong can pin it: **an operator no
+longer has to read a web page before using EchoLink.**
+
+The app is the reason this is a release rather than a CLI convenience. FR-3.3
+makes the proxy the default on cellular, so every EchoLink session Currawong
+opens needs a proxy host — and up to now the only way to get one was for a human
+to open echolink.org, read a table of 932 rows, and type one in. The library half
+of `--auto-proxy` (`EchoLinkProxySelector` and friends) is what the app's
+composition root will call instead.
+
 ### Added
 
 - **EL-12: public proxy discovery.** `hamvoip-cli echolink --auto-proxy` finds a
@@ -520,7 +532,8 @@ DMR, System Fusion (YSF), D-STAR, P25 and NXDN. All require AMBE or AMBE+2,
 which is patent-encumbered (NG-1). No MMDVM or USB modem support (NG-2), no MFi
 (NG-3), and no RF layer (NG-4).
 
-[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/cpmpercussion/swift-hamvoip/releases/tag/v0.1.0

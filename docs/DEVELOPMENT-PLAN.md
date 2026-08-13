@@ -104,6 +104,12 @@ remembered; if it disagrees with the repository, the repository is right.
 - **Released as `v0.3.0`, 2026-08-13** — the release that carries Phase 6.
   `v0.2.0` predates `EchoLinkKit` entirely, so Currawong's `from: 0.2.0` pin
   resolves forward to it without a manifest change.
+- **Released as `v0.4.0`, 2026-08-13** — EL-12, public proxy discovery. Cut as
+  its own release because the app needs it: FR-3.3 makes the proxy the default on
+  cellular, so every EchoLink session Currawong opens needs a proxy host, and
+  until this there was no way to get one that did not involve a human reading
+  echolink.org. `EchoLinkProxySelector` is what the composition root calls
+  instead.
 - **`NetworkClient` is now a seam an app can actually be written against**
   (RC-10, 2026-08-13). It carries `radioEvents`, `receivedAudio` and
   `send(pcm:)` besides `state` and the four verbs, so Phase 4 can report why a
