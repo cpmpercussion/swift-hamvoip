@@ -70,8 +70,12 @@ final class EchoLinkProxyClientTests: XCTestCase {
     ) async -> Task<Void, Error> {
         let before = harness.transport.sentCount
         let task = Task { try await harness.client.open(peer: peer) }
-        for _ in 0 ..< 100_000 where harness.transport.sentCount == before {
+        // Deadline-bounded, not iteration-bounded: a fixed number of yields is
+        // not a wait, and on a loaded machine it expires before the write.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while harness.transport.sentCount == before, ContinuousClock.now < deadline {
             await Task.yield()
+            try? await Task.sleep(for: .milliseconds(1))
         }
         return task
     }
@@ -383,9 +387,7 @@ final class EchoLinkProxyClientTests: XCTestCase {
         }
 
         // Bounded cooperative wait — a regression must fail this test, not hang it.
-        for _ in 0 ..< 200_000 where await !completed.isSignalled {
-            await Task.yield()
-        }
+        await waitWhile { await !completed.isSignalled }
 
         let returned = await completed.isSignalled
         open.cancel()

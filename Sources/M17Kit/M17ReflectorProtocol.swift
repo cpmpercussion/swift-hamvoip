@@ -564,7 +564,7 @@ public struct M17StreamType: Hashable, Sendable {
 /// This contradicts the specification as written, so it is recorded as an
 /// observation about what reflectors actually send, not as a correction to the
 /// document. The capture is retained outside the repository, with the other
-/// live captures. See `docs/CLI.md` §7 and the OQ-7 row of
+/// live captures. See `docs/CLI.md` §8 and the OQ-7 row of
 /// `docs/DEVELOPMENT-PLAN.md`.
 ///
 /// Scope: M17-3 parses the header so the connection layer can *recognise* a

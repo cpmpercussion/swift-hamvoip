@@ -162,7 +162,55 @@ key handling; the session runs until the node hangs up or `--duration` elapses.
 
 ---
 
-## 3. The secret
+## 3. Per-operator defaults: `~/.config/swift-hamvoip/`
+
+The values that never change between runs live in a config directory, so they
+do not have to be typed or exported every time:
+
+```
+~/.config/swift-hamvoip/CALLSIGN            your callsign
+~/.config/swift-hamvoip/ECHOLINK_PASSWORD   your EchoLink account password
+~/.config/swift-hamvoip/HAMVOIP_SECRET      the IAX2 node secret
+```
+
+`$XDG_CONFIG_HOME` is honoured if it is set.
+
+The layout is deliberately dull: **one file per value, named for the setting,
+containing nothing but the value.** No format, no parser, no escaping rules,
+nothing to get wrong — `cat` shows you a setting and `echo >` sets one. Each
+file's name is the environment variable it stands in for, which is the whole
+convention: if you know the variable, you know the file. A trailing newline is
+trimmed, so `echo VK1XYZ > CALLSIGN` does what it looks like.
+
+```sh
+mkdir -p ~/.config/swift-hamvoip
+echo 'VK1XYZ' > ~/.config/swift-hamvoip/CALLSIGN
+printf '%s' 'the-password' > ~/.config/swift-hamvoip/ECHOLINK_PASSWORD
+chmod 600 ~/.config/swift-hamvoip/ECHOLINK_PASSWORD
+```
+
+**Precedence: command line → environment → config file → interactive prompt.**
+The file sits below the environment so a one-off override never needs an edit,
+and above the prompt so the common case is silent. It is the order `git` and
+`ssh` use for their own per-user configuration.
+
+With a `CALLSIGN` file in place, `--callsign` becomes optional everywhere it
+was required. Omitting it *and* having no file is an error that names both
+places, because "callsign is required" is no help to somebody who thought they
+had set it.
+
+The commands say where a credential came from, so a stale file is findable:
+
+```
+Callsign VK1XYZ; account password from /Users/you/.config/swift-hamvoip/ECHOLINK_PASSWORD.
+```
+
+`chmod 600` the password files. If one is readable by other users on the
+machine the CLI says so once, on stderr, and carries on — a permission bit is
+the operator's call about their own machine, and refusing to run would be a
+worse failure than the risk it prevents.
+
+## 4. The secret
 
 **Never pass a password as a plain command-line argument if you can avoid it.**
 `argv` is readable by every process on the machine through `ps`, and your shell
@@ -217,7 +265,7 @@ is about.
 
 ---
 
-## 4. The OQ-5 experiment
+## 5. The OQ-5 experiment
 
 §7 does the same thing for OQ-7, against an M17 reflector instead of a node.
 
@@ -375,7 +423,7 @@ settled by §8.6.15.
 
 ---
 
-## 5. Milestone M2 sign-off checklist
+## 6. Milestone M2 sign-off checklist
 
 ### Result — 2026-08-09, ASL3 node in a UTM VM ✅ PASSED
 
@@ -513,7 +561,7 @@ hung up" and knowing why.
 
 ---
 
-## 6. What is tested, and what a node has to test
+## 7. What is tested, and what a node has to test
 
 Unit-tested (`Tests/HamVoIPCLITests/`, no hardware, no network):
 
@@ -550,7 +598,7 @@ authentication, and whether DTMF reaches its command processor. That is what
 
 ---
 
-## 7. The OQ-7 experiment
+## 8. The OQ-7 experiment
 
 > **Settled 2026-08-11: the frame is 54 bytes.** The evidence is in
 > "What the answer was", below, and in the OQ-7 row of `DEVELOPMENT-PLAN.md`.
@@ -722,7 +770,7 @@ otherwise have carried.
 
 ---
 
-## 8. `echolink` — EchoLink through a proxy (EL-10, Milestone M3)
+## 9. `echolink` — EchoLink through a proxy (EL-10, Milestone M3)
 
 The live-validation harness for EchoLink, and the counterpart to `connect` for
 IAX2 and `m17` for M17. Everything below the CLI is `EchoLinkClient`.
@@ -735,10 +783,15 @@ one. That is Milestone M3, and it needs a human on air.
 ```sh
 swift run hamvoip-cli echolink \
     --proxy <proxy host> \
+    --directory-server <directory server IPv4> \
     --peer 13.57.14.183 \
-    --node '*ECHOTEST*' \
-    --callsign <your callsign>
+    --node '*ECHOTEST*'
 ```
+
+With `CALLSIGN` and `ECHOLINK_PASSWORD` in `~/.config/swift-hamvoip/` (§3),
+neither `--callsign` nor a password prompt is needed. Add `--callsign` to
+override for one run, or `--no-directory-login` to skip the account login
+entirely.
 
 `*ECHOTEST*` is the obvious first contact: it echoes audio back, so one operator
 alone can confirm the round trip end to end — which is exactly what the capture

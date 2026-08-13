@@ -276,6 +276,11 @@ public actor EchoLinkClient: NetworkClient {
     /// Set once the node has said anything at all.
     private var nodeAnswer: String?
 
+    /// True from the moment a teardown is claimed until it finishes. Its own
+    /// flag rather than a reading of `phase`, because `releaseSession` has to
+    /// suspend part-way through and two callers must not both get in.
+    private var isReleasing = false
+
     private var inbound = EchoLinkStreamAudio()
     private var transmitter = EchoLinkStreamTransmitter()
     private var buffer: JitterBuffer
@@ -722,18 +727,36 @@ public actor EchoLinkClient: NetworkClient {
     // MARK: - Teardown
 
     private func releaseSession() async {
-        // Say goodbye before tearing anything down, so the far end sees a
-        // clean end rather than inferring one from silence. Best effort: if
-        // the link is already gone this does nothing, which is why it is not
-        // allowed to throw.
-        if phase == .connected, let proxy, let destination {
-            try? await proxy.send(
-                EchoLinkProxyFrame(
-                    type: .udpControl,
-                    peer: destination.peer,
-                    payload: EchoLinkRTCPCompound.sessionClosing().encoded
-                )
+        // ⚠️ Plan rule 10, in teardown rather than in a request/response.
+        //
+        // Saying goodbye means awaiting a send, and an actor is reentrant
+        // across that await — so `disconnect()` and the frame pump noticing the
+        // stream end can both be inside this function at once, both see
+        // `phase == .connected`, and both send a BYE. That is what
+        // `testDisconnectSendsAGoodbye` caught, intermittently and only under
+        // load.
+        //
+        // The fix is the pattern used everywhere else here: decide and claim
+        // the teardown in one synchronous, actor-isolated region with no await
+        // in it, and only then suspend.
+        guard !isReleasing else { return }
+        isReleasing = true
+        let farewell: EchoLinkProxyFrame? = {
+            guard phase == .connected, let destination else { return nil }
+            return EchoLinkProxyFrame(
+                type: .udpControl,
+                peer: destination.peer,
+                payload: EchoLinkRTCPCompound.sessionClosing().encoded
             )
+        }()
+        let proxyForFarewell = proxy
+        phase = .idle
+        // ---- end of the region that must not suspend ----
+
+        if let farewell, let proxyForFarewell {
+            // Best effort: if the link is already gone this does nothing, which
+            // is why it is not allowed to throw.
+            try? await proxyForFarewell.send(farewell)
         }
 
         frameTask?.cancel()
@@ -751,12 +774,12 @@ public actor EchoLinkClient: NetworkClient {
         await transport?.close()
         transport = nil
 
-        phase = .idle
         destination = nil
         inbound.reset()
         transmitter.reset()
         buffer.reset()
         setState(.idle)
+        isReleasing = false
     }
 
     // MARK: - Plumbing

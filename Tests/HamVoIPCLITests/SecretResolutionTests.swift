@@ -57,10 +57,22 @@ final class SecretResolutionTests: XCTestCase {
     }
 
     func testEverySourceDescribesItself() {
-        for source in [SecretPrompt.Source.commandLine, .environment, .prompt, .none] {
+        let sources: [SecretPrompt.Source] = [
+            .commandLine,
+            .environment(SecretPrompt.environmentVariable),
+            .configFile("/somewhere/HAMVOIP_SECRET"),
+            .prompt,
+            .none,
+        ]
+        for source in sources {
             XCTAssertFalse(source.description.isEmpty)
         }
         XCTAssertTrue(
-            SecretPrompt.Source.environment.description.contains(SecretPrompt.environmentVariable))
+            SecretPrompt.Source.environment(SecretPrompt.environmentVariable)
+                .description.contains(SecretPrompt.environmentVariable))
+        XCTAssertTrue(
+            SecretPrompt.Source.configFile("/somewhere/HAMVOIP_SECRET")
+                .description.contains("/somewhere/HAMVOIP_SECRET"),
+            "the banner must name the file, so a stale value is findable")
     }
 }

@@ -60,7 +60,7 @@ struct OQ7Command: AsyncParsableCommand {
               INCONCLUSIVE   the link worked, nobody talked
 
             A SETTLED verdict of 54 agrees with what M17Kit implements. Any other verdict \
-            disagrees with a settled question: keep the capture and read docs/CLI.md §7 \
+            disagrees with a settled question: keep the capture and read docs/CLI.md §8 \
             before changing a constant.
 
             To keep a capture of the run, run tcpdump alongside:
@@ -69,7 +69,7 @@ struct OQ7Command: AsyncParsableCommand {
 
             Write captures and --report files outside the repository — both name the \
             callsigns they heard. .gitignore covers them as a backstop, not as \
-            permission to leave them in the tree. See docs/CLI.md §7.
+            permission to leave them in the tree. See docs/CLI.md §8.
             """)
 
     @Option(name: .long, help: ArgumentHelp(

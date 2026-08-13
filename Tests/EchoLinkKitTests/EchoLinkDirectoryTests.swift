@@ -58,8 +58,10 @@ final class EchoLinkDirectoryTests: XCTestCase {
         writes: Writes
     ) async -> Task<Void, Error> {
         let task = Task { try await session.login(password: Self.password) }
-        for _ in 0 ..< 100_000 where await writes.data.isEmpty {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while await writes.data.isEmpty, ContinuousClock.now < deadline {
             await Task.yield()
+            try? await Task.sleep(for: .milliseconds(1))
         }
         return task
     }
@@ -169,8 +171,10 @@ final class EchoLinkDirectoryTests: XCTestCase {
         }
 
         let task = Task { try await session.login(password: Self.password) }
-        for _ in 0 ..< 100_000 where transport.sentCount == 0 {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while transport.sentCount == 0, ContinuousClock.now < deadline {
             await Task.yield()
+            try? await Task.sleep(for: .milliseconds(1))
         }
         await session.received(try capturedOKPayload())
         try await task.value
@@ -296,9 +300,7 @@ final class EchoLinkDirectoryTests: XCTestCase {
             await completed.signal()
         }
 
-        for _ in 0 ..< 200_000 where await !completed.isSignalled {
-            await Task.yield()
-        }
+        await waitWhile { await !completed.isSignalled }
 
         let returned = await completed.isSignalled
         task.cancel()

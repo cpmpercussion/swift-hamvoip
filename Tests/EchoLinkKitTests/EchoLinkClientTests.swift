@@ -45,7 +45,12 @@ final class EchoLinkClientTests: XCTestCase {
         transmitTimeout: Duration = .seconds(180),
         accountPassword: EchoLinkAccountPassword? = nil,
         directoryServer: EchoLinkPeerAddress? = nil,
-        nodeAnswerTimeout: Duration = .seconds(2)
+        // Generous on purpose. These tests inject the node's answer as soon
+        // as the write appears, so a long timeout costs nothing in wall-clock
+        // — but a short one turns a loaded CI machine into a spurious
+        // .nodeDidNotAnswer. Only the test that *wants* a timeout sets a
+        // short one.
+        nodeAnswerTimeout: Duration = .seconds(20)
     ) -> Harness {
         let transport = MockStreamTransport()
         let client = EchoLinkClient(
@@ -82,9 +87,23 @@ final class EchoLinkClientTests: XCTestCase {
     }
 
     /// Waits until the client has written at least `count` chunks.
-    private func waitForWrites(_ harness: Harness, _ count: Int) async {
-        for _ in 0 ..< 200_000 where harness.transport.sentCount < count {
+    ///
+    /// Deadline-bounded rather than iteration-bounded, and that distinction is
+    /// the whole point: a `for _ in 0 ..< 200_000 { await Task.yield() }` loop
+    /// is not a synchronisation primitive. On a loaded machine those yields are
+    /// consumed by other work and the loop expires *before* the client has done
+    /// anything, so the test injects its reply at the wrong moment and fails —
+    /// intermittently, and only under load, which is the worst kind. A wall
+    /// clock waits longer when the machine is slower, which is what was meant.
+    private func waitForWrites(
+        _ harness: Harness,
+        _ count: Int,
+        timeout: Duration = .seconds(10)
+    ) async {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while harness.transport.sentCount < count, ContinuousClock.now < deadline {
             await Task.yield()
+            try? await Task.sleep(for: .milliseconds(1))
         }
     }
 
@@ -285,7 +304,9 @@ final class EchoLinkClientTests: XCTestCase {
 
         // Another CLOSE, well after connecting.
         harness.transport.inject(EchoLinkProxyFrame(type: .close).encoded)
-        for _ in 0 ..< 5_000 { await Task.yield() }
+        // Give the CLOSE a moment to be processed; the assertion below is
+        // that it changed nothing.
+        try? await Task.sleep(for: .milliseconds(50))
 
         let connected = await harness.client.isConnected
         XCTAssertTrue(connected, "a CLOSE closes a tunnelled channel, not the session")
@@ -392,7 +413,7 @@ final class EchoLinkClientTests: XCTestCase {
     func testTheOpeningSDESIsRetransmittedUntilAnswered() async throws {
         // The observed client sent it twice, ~0.8 s apart, before the node
         // replied ~1.5 s in.
-        let harness = makeHarness(nodeAnswerTimeout: .seconds(2))
+        let harness = makeHarness(nodeAnswerTimeout: .seconds(20))
         let task = Task { try await harness.client.connect(to: destination()) }
         harness.transport.inject(Data(Self.nonce.utf8))
 
@@ -432,9 +453,7 @@ final class EchoLinkClientTests: XCTestCase {
             payload: EchoLinkRTCPCompound.sessionClosing(ssrc: 9999).encoded
         )
         harness.transport.inject(goodbye.encoded)
-        for _ in 0 ..< 20_000 where await harness.client.isConnected {
-            await Task.yield()
-        }
+        await waitWhile { await harness.client.isConnected }
 
         let connected = await harness.client.isConnected
         XCTAssertFalse(connected, "a BYE from the node ends the session")
@@ -454,6 +473,33 @@ final class EchoLinkClientTests: XCTestCase {
             .filter(\.isGoodbye)
         XCTAssertEqual(byes.count, 1,
                        "the far end should see a clean end, not infer one from silence")
+    }
+
+    func testConcurrentTeardownsSendOnlyOneGoodbye() async throws {
+        // Plan rule 10, in teardown. Saying goodbye means awaiting a send, and
+        // an actor is reentrant across that await — so two teardown paths
+        // (disconnect(), and the frame pump noticing the stream end) could both
+        // be inside releaseSession(), both see phase == .connected, and both
+        // send a BYE.
+        //
+        // This reproduced as an intermittent failure of the test above, at
+        // roughly one run in eight and only under load. Racing the two paths
+        // deliberately is what makes it a test rather than a coincidence.
+        let harness = makeHarness()
+        try await connect(harness)
+        harness.transport.clearSent()
+
+        async let first: Void = harness.client.disconnect()
+        async let second: Void = harness.client.disconnect()
+        harness.transport.finish()
+        _ = await (first, second)
+
+        let byes = try harness.transport.sent
+            .map { try EchoLinkProxyFrame.parse($0).frame }
+            .filter { $0.type == .udpControl }
+            .map { try EchoLinkRTCPCompound.parse($0.payload) }
+            .filter(\.isGoodbye)
+        XCTAssertLessThanOrEqual(byes.count, 1, "exactly one teardown may claim the goodbye")
     }
 
     // MARK: - Receive
@@ -737,5 +783,22 @@ final class EchoLinkClientTests: XCTestCase {
         // behind the CGNAT the app's main target sits behind.
         let destination = EchoLinkDestination(peer: Self.peer, node: "*ECHOTEST*")
         XCTAssertTrue(destination.isProxied)
+    }
+}
+
+/// Spins until `condition` goes false, or a wall-clock deadline passes.
+///
+/// Deliberately not a fixed iteration count. Those look like waits and are not:
+/// under load the yields get consumed by other work and the loop expires before
+/// the thing it is waiting for has happened, which fails the assertion that
+/// follows — intermittently, and only on a busy machine.
+func waitWhile(
+    _ timeout: Duration = .seconds(10),
+    _ condition: () async -> Bool
+) async {
+    let deadline = ContinuousClock.now.advanced(by: timeout)
+    while await condition(), ContinuousClock.now < deadline {
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(1))
     }
 }

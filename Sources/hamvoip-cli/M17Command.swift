@@ -48,8 +48,11 @@ struct M17Command: AsyncParsableCommand {
     @Option(name: .long, help: "Module to link, a single letter A-Z.")
     var module: String
 
-    @Option(name: .long, help: "Your callsign — travels in every packet's SRC field.")
-    var callsign: String
+    @Option(name: .long, help: ArgumentHelp(
+        """
+        Your callsign — travels in every packet's SRC field. Defaults to the         CALLSIGN file in ~/.config/swift-hamvoip/.
+        """))
+    var callsign: String?
 
     @Flag(name: .long, inversion: .prefixedNo, help: "Open the microphone and speaker.")
     var audio: Bool = true
@@ -87,7 +90,7 @@ struct M17Command: AsyncParsableCommand {
         let session = try M17Session(
             destination: M17Destination(
                 host: host, port: port, module: moduleLetter,
-                callsign: callsign.uppercased()),
+                callsign: try ConfigFile.requireCallsign(commandLineValue: callsign).uppercased()),
             transmitTimeout: .seconds(transmitTimeout),
             useAudioDevices: audio,
             duration: duration.map { .seconds($0) })

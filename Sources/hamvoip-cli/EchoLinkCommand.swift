@@ -73,8 +73,11 @@ struct EchoLinkCommand: AsyncParsableCommand {
     @Option(name: .long, help: "The node's callsign, for display. E.g. *ECHOTEST*")
     var node: String = "(unnamed node)"
 
-    @Option(name: .long, help: "Your callsign.")
-    var callsign: String
+    @Option(name: .long, help: ArgumentHelp(
+        """
+        Your callsign. Defaults to the CALLSIGN file in ~/.config/swift-hamvoip/.
+        """))
+    var callsign: String?
 
     @Option(name: .long, help: "Your name, shown to the far end alongside the callsign.")
     var operatorName: String = ""
@@ -105,6 +108,7 @@ struct EchoLinkCommand: AsyncParsableCommand {
 
         var accountPassword: EchoLinkAccountPassword?
         var directory: EchoLinkPeerAddress?
+        var passwordSource: SecretPrompt.Source = .none
         if directoryLogin {
             guard let directoryServer else {
                 throw ValidationError(
@@ -118,7 +122,16 @@ struct EchoLinkCommand: AsyncParsableCommand {
                         + "'\(directoryServer)'")
             }
             directory = address
-            accountPassword = EchoLinkAccountPassword(try Self.readAccountPassword())
+            let (secret, source) = try Self.readAccountPassword()
+            accountPassword = EchoLinkAccountPassword(secret)
+            passwordSource = source
+        }
+
+        // Said once, on stderr, before anything else prints: a live credential
+        // in a file every user on the machine can read is worth knowing about.
+        // Reported, not enforced — see `ConfigFile.permissionWarning`.
+        if let warning = ConfigFile.permissionWarning(for: Self.accountPasswordName) {
+            FileHandle.standardError.write(Data((warning + "\n").utf8))
         }
 
         let session = try EchoLinkSession(
@@ -131,7 +144,9 @@ struct EchoLinkCommand: AsyncParsableCommand {
                     password: EchoLinkProxyPassword(proxyPassword)
                 )
             ),
-            callsign: callsign.uppercased(),
+            callsign: try ConfigFile.requireCallsign(commandLineValue: callsign)
+                .uppercased(),
+            passwordSource: passwordSource,
             operatorName: operatorName,
             accountPassword: accountPassword,
             directoryServer: directory,
@@ -142,28 +157,29 @@ struct EchoLinkCommand: AsyncParsableCommand {
         try await session.run()
     }
 
-    /// The account password, from the environment or an unechoed prompt.
+    /// The environment variable, and the config file name, for the account
+    /// password.
+    static let accountPasswordName = "ECHOLINK_PASSWORD"
+
+    /// The account password, from the environment, the config file, or an
+    /// unechoed prompt — in that order.
     ///
     /// Same precedence and same reasoning as the IAX2 path's secret handling
-    /// (`docs/CLI.md` §3): there is no command-line option, because one would
+    /// (`docs/CLI.md` §4): there is no command-line option, because one would
     /// put a live credential into shell history.
-    private static func readAccountPassword() throws -> String {
-        if let fromEnvironment = ProcessInfo.processInfo.environment["ECHOLINK_PASSWORD"],
-           !fromEnvironment.isEmpty {
-            return fromEnvironment
-        }
-        guard isatty(STDIN_FILENO) == 1 else {
+    private static func readAccountPassword() throws -> (String, SecretPrompt.Source) {
+        let resolved = try SecretPrompt.resolve(
+            commandLineValue: nil,
+            name: accountPasswordName,
+            promptText: "EchoLink account password: ")
+
+        guard !resolved.secret.isEmpty else {
             throw ValidationError(
-                "No $ECHOLINK_PASSWORD and standard input is not a terminal, so there "
-                    + "is nowhere to prompt. Set the environment variable, or pass "
-                    + "--no-directory-login.")
+                "No account password. Set $\(accountPasswordName), put one in "
+                    + "~/.config/swift-hamvoip/\(accountPasswordName), run this on a "
+                    + "terminal and type one, or pass --no-directory-login.")
         }
-        guard let entered = String(validatingUTF8: getpass("EchoLink account password: ")),
-              !entered.isEmpty
-        else {
-            throw ValidationError("No password entered.")
-        }
-        return entered
+        return (resolved.secret, resolved.source)
     }
 }
 
@@ -172,6 +188,7 @@ private final class EchoLinkSession: @unchecked Sendable {
 
     private let destination: EchoLinkDestination
     private let callsign: String
+    private let passwordSource: SecretPrompt.Source
     private let useAudioDevices: Bool
     private let duration: Duration?
     private let client: EchoLinkClient
@@ -189,6 +206,7 @@ private final class EchoLinkSession: @unchecked Sendable {
     init(
         destination: EchoLinkDestination,
         callsign: String,
+        passwordSource: SecretPrompt.Source,
         operatorName: String,
         accountPassword: EchoLinkAccountPassword?,
         directoryServer: EchoLinkPeerAddress?,
@@ -198,6 +216,7 @@ private final class EchoLinkSession: @unchecked Sendable {
     ) throws {
         self.destination = destination
         self.callsign = callsign
+        self.passwordSource = passwordSource
         self.useAudioDevices = useAudioDevices
         self.duration = duration
         self.client = EchoLinkClient(
@@ -464,6 +483,12 @@ private final class EchoLinkSession: @unchecked Sendable {
         await console.log(
             "An EchoLink node is a shared channel and may be a radio transmitter. "
                 + "Transmitting requires a licence.")
+        // Where the credential came from, as the IAX2 path does: somebody who
+        // can see it arrived from argv is somebody who can go and fix their
+        // shell history.
+        if case .none = passwordSource {} else {
+            await console.log("Callsign \(callsign); account password from \(passwordSource).")
+        }
     }
 
     private func printKeyBindings() async {
