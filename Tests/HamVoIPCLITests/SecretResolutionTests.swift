@@ -52,13 +52,13 @@ final class SecretResolutionTests: XCTestCase {
     func testTheCommandLineSourceNamesItsOwnHazard() {
         // The banner prints this. A user who can see where their secret came
         // from is a user who can go and clean up their shell history.
-        XCTAssertTrue(SecretPrompt.Source.commandLine.description.contains("argv"))
-        XCTAssertTrue(SecretPrompt.Source.commandLine.description.contains("history"))
+        XCTAssertTrue(SecretPrompt.Source.commandLine(flag: "--secret").description.contains("argv"))
+        XCTAssertTrue(SecretPrompt.Source.commandLine(flag: "--secret").description.contains("history"))
     }
 
     func testEverySourceDescribesItself() {
         let sources: [SecretPrompt.Source] = [
-            .commandLine,
+            .commandLine(flag: "--secret"),
             .environment(SecretPrompt.environmentVariable),
             .configFile("/somewhere/HAMVOIP_SECRET"),
             .prompt,

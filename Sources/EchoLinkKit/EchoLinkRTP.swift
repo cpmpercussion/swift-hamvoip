@@ -258,13 +258,18 @@ extension EchoLinkAudioChannelMessage {
     /// The marker station-info text begins with.
     public static let stationInfoPrefix = "oNDATA"
 
+    /// The same marker as bytes, computed once. `classify` runs on every
+    /// inbound `0x05` payload, audio included, so at 50 packets a second there
+    /// is no reason to rebuild a six-byte array each time.
+    static let stationInfoPrefixBytes = Array(stationInfoPrefix.utf8)
+
     /// Classify a `0x05` payload.
     ///
     /// Deliberately does not throw. A payload that is neither is
     /// `.unrecognised`, not an error, for the same reason an unknown proxy
     /// message type parses: it is a client we have not met, not a fault.
     public static func classify(_ bytes: Data) -> EchoLinkAudioChannelMessage {
-        if bytes.starts(with: Array(stationInfoPrefix.utf8)) {
+        if bytes.starts(with: stationInfoPrefixBytes) {
             let text = String(decoding: bytes, as: UTF8.self)
             return .stationInfo(text)
         }

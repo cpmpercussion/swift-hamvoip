@@ -66,9 +66,11 @@ public enum EchoLinkDirectoryError: Error, Equatable, CustomStringConvertible {
 /// hand-built from the shape the capture shows and tested against that shape
 /// rather than against octets.
 ///
-/// **Parsing the station list is not here — that is EL-11**, which is gated on
-/// a capture that does not exist yet. Nothing on the path to a QSO needs the
-/// list: an operator who knows the node they want can connect without it.
+/// **Parsing the station list is not here — it is `EchoLinkStationList`**
+/// (EL-11), and fetching it is `EchoLinkClient.fetchStationList()`. Kept apart
+/// because nothing on the path to a QSO needs the list: an operator who knows
+/// the node they want connects without it, and the list download is a second
+/// tunnelled channel opened after this login has already finished.
 public enum EchoLinkDirectory {
     /// The directory server's TCP port in direct mode.
     public static let defaultPort: UInt16 = 5200

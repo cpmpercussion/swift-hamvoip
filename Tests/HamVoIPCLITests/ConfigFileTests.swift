@@ -195,7 +195,7 @@ final class ConfigFileTests: XCTestCase {
             allowPrompt: false)
 
         XCTAssertEqual(resolved.secret, "from-argv")
-        XCTAssertEqual(resolved.source, .commandLine)
+        XCTAssertEqual(resolved.source, .commandLine(flag: "--secret"))
     }
 
     func testNothingAnywhereIsNoneRatherThanAHang() throws {

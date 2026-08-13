@@ -859,6 +859,197 @@ final class EchoLinkClientTests: XCTestCase {
         let destination = EchoLinkDestination(peer: Self.peer, node: "*ECHOTEST*")
         XCTAssertTrue(destination.isProxied)
     }
+
+    // MARK: - Station list (EL-11)
+
+    /// A small invented list. Not capture data — see `EchoLinkStationListTests`
+    /// for why this target has no station-list fixture and cannot have one.
+    private func inventedList() -> Data {
+        Data("""
+            @@@
+            2:64244576
+            N0CALL
+            Nowhere                    [ON 19:43]
+            100001
+            192.0.2.11
+            *ECHOTEST*
+            Audio test server          [ON 09:12]
+            9999
+            198.51.100.7
+            +++
+            """.utf8)
+    }
+
+    /// Connects for the directory alone: no node, no SDES, no answer to inject.
+    private func connectForDirectory(_ harness: Harness) async throws {
+        let task = Task {
+            try await harness.client.connect(to: destination(), mode: .directoryOnly)
+        }
+        harness.transport.inject(Data(Self.nonce.utf8))
+        // [0] proxy login, [1] OPEN to the directory server.
+        await waitForWrites(harness, 2)
+        harness.transport.inject(try statusSuccess())
+        // [2] the tunnelled account login.
+        await waitForWrites(harness, 3)
+        harness.transport.inject(
+            EchoLinkProxyFrame(type: .data, payload: Data("OK".utf8)).encoded)
+        try await task.value
+    }
+
+    /// `.directoryOnly` must stop after the directory login. If it opened a
+    /// node session, `--list` could fail because a node was unreachable — a
+    /// failure that has nothing to do with the station list.
+    func testDirectoryOnlyModeNeverOpensANodeSession() async throws {
+        let harness = makeHarness(
+            accountPassword: EchoLinkAccountPassword("secret"),
+            directoryServer: Self.peer,
+            // Short on purpose: if this mode did wait for a node, the test
+            // fails in a second instead of hanging for twenty.
+            nodeAnswerTimeout: .seconds(1))
+        try await connectForDirectory(harness)
+
+        let connected = await harness.client.isConnected
+        XCTAssertTrue(connected)
+
+        // The opening SDES is a 0x06 frame. None may have gone out.
+        let control = harness.transport.sent
+            .compactMap { try? EchoLinkProxyFrame.parse($0) }
+            .filter { $0.frame.type == .udpControl }
+        XCTAssertTrue(control.isEmpty, "directoryOnly sent an SDES to a node")
+    }
+
+    /// And the list can then be fetched over that session.
+    func testStationListCanBeFetchedWithoutEverReachingANode() async throws {
+        let harness = makeHarness(
+            accountPassword: EchoLinkAccountPassword("secret"),
+            directoryServer: Self.peer,
+            nodeAnswerTimeout: .seconds(1))
+        try await connectForDirectory(harness)
+
+        let before = harness.transport.sentCount
+        let task = Task { try await harness.client.fetchStationList(timeout: .seconds(10)) }
+        await waitForWrites(harness, before + 1)
+        harness.transport.inject(try statusSuccess())
+        await waitForWrites(harness, before + 2)
+        harness.transport.inject(
+            EchoLinkProxyFrame(type: .data, payload: inventedList()).encoded)
+
+        let list = try await task.value
+        XCTAssertEqual(list.stations.count, 2)
+    }
+
+    /// The whole point of the reader: the list arrives split across frames at
+    /// boundaries that fall inside records. Splitting mid-field here is what
+    /// the real 129-frame download did.
+    func testStationListArrivesAcrossFramesAndParses() async throws {
+        let harness = makeHarness(
+            accountPassword: EchoLinkAccountPassword("secret"),
+            directoryServer: Self.peer)
+        try await connectWithDirectory(harness)
+
+        let before = harness.transport.sentCount
+        let task = Task { try await harness.client.fetchStationList(timeout: .seconds(10)) }
+
+        // [n] OPEN for the second directory channel. `proxy.open` waits for
+        // the STATUS before the request goes out, so the status must be fed
+        // between the two writes rather than after both — waiting for both
+        // first deadlocks until the open times out.
+        await waitForWrites(harness, before + 1)
+        harness.transport.inject(try statusSuccess())
+        // [n+1] the "f0" request.
+        await waitForWrites(harness, before + 2)
+
+        let bytes = Array(inventedList())
+        for chunk in stride(from: 0, to: bytes.count, by: 17) {
+            let slice = Data(bytes[chunk ..< min(chunk + 17, bytes.count)])
+            harness.transport.inject(
+                EchoLinkProxyFrame(type: .data, payload: slice).encoded)
+        }
+
+        let list = try await task.value
+        XCTAssertEqual(list.declaredCount, 2)
+        XCTAssertEqual(list.stations.map(\.callsign), ["N0CALL", "*ECHOTEST*"])
+        XCTAssertEqual(list.stations[0].nodeNumber, 100_001)
+        XCTAssertEqual(list.stations[1].status, "ON")
+    }
+
+    /// The request is the three measured bytes, sent on a channel of its own —
+    /// the capture shows a *second* OPEN rather than the login channel reused.
+    func testFetchOpensASecondChannelAndSendsTheMeasuredRequest() async throws {
+        let harness = makeHarness(
+            accountPassword: EchoLinkAccountPassword("secret"),
+            directoryServer: Self.peer)
+        try await connectWithDirectory(harness)
+
+        let before = harness.transport.sentCount
+        let task = Task { try await harness.client.fetchStationList(timeout: .seconds(2)) }
+        await waitForWrites(harness, before + 1)
+        harness.transport.inject(try statusSuccess())
+        await waitForWrites(harness, before + 2)
+
+        let written = harness.transport.sent
+        let open = try EchoLinkProxyFrame.parse(written[before])
+        let request = try EchoLinkProxyFrame.parse(written[before + 1])
+        XCTAssertEqual(open.frame.type, .open)
+        XCTAssertEqual(request.frame.type, .data)
+        XCTAssertEqual(Array(request.frame.payload), [0x66, 0x30, 0x0D])
+
+        _ = try? await task.value
+    }
+
+    /// A download that stalls must not read as a complete short list. This is
+    /// the failure the whole reader exists to make loud.
+    func testAStalledDownloadIsATimeoutErrorNotAShortList() async throws {
+        let harness = makeHarness(
+            accountPassword: EchoLinkAccountPassword("secret"),
+            directoryServer: Self.peer)
+        try await connectWithDirectory(harness)
+
+        let before = harness.transport.sentCount
+        let task = Task { try await harness.client.fetchStationList(timeout: .milliseconds(300)) }
+        await waitForWrites(harness, before + 1)
+        harness.transport.inject(try statusSuccess())
+        await waitForWrites(harness, before + 2)
+
+        // Half a list, and then nothing.
+        let half = Data(Array(inventedList()).prefix(60))
+        harness.transport.inject(EchoLinkProxyFrame(type: .data, payload: half).encoded)
+
+        do {
+            _ = try await task.value
+            XCTFail("expected a stalled download to throw")
+        } catch let error as EchoLinkClientError {
+            guard case .stationList(.missingTerminator) = error else {
+                return XCTFail("expected .stationList(.missingTerminator), got \(error)")
+            }
+        }
+    }
+
+    func testFetchingWithoutASessionIsRejected() async {
+        let harness = makeHarness(directoryServer: Self.peer)
+        do {
+            _ = try await harness.client.fetchStationList()
+            XCTFail("expected .notConnected")
+        } catch let error as EchoLinkClientError {
+            XCTAssertEqual(error, .notConnected)
+        } catch {
+            XCTFail("expected EchoLinkClientError, got \(error)")
+        }
+    }
+
+    /// `connect` must not have grown a 433 kB download. M3 signed off the
+    /// sequence as it stands, and the list is not on the path to a QSO.
+    func testConnectDoesNotFetchTheStationList() async throws {
+        let harness = makeHarness(
+            accountPassword: EchoLinkAccountPassword("secret"),
+            directoryServer: Self.peer)
+        try await connectWithDirectory(harness)
+
+        let requests = harness.transport.sent.compactMap { try? EchoLinkProxyFrame.parse($0) }
+            .filter { $0.frame.type == .data
+                && Array($0.frame.payload) == Array(EchoLinkStationList.stationListRequest) }
+        XCTAssertTrue(requests.isEmpty, "connect sent a station-list request")
+    }
 }
 
 /// Spins until `condition` goes false, or a wall-clock deadline passes.
