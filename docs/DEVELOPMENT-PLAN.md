@@ -1599,6 +1599,66 @@ survive: "not needed for a QSO" was inferred from what the frames *looked* like,
 not from tracing what a session actually required. Checking which peers ever
 receive an `OPEN` took one pass over the captures and would have caught it.
 
+### EL-12 — Public proxy discovery (`--auto-proxy`) ✅ DONE
+**Depends on:** EL-10. **Blocks:** nothing; the app wants it (see below).
+**Files:** `Sources/EchoLinkKit/EchoLinkProxyDirectory.swift`,
+`Sources/hamvoip-cli/EchoLinkCommand.swift` (`--auto-proxy`),
+`Tests/EchoLinkKitTests/EchoLinkProxyDirectoryTests.swift`,
+`Tests/EchoLinkKitTests/Fixtures/proxyfind-sample.xml`.
+
+Added 2026-08-13, from the operator's complaint that using EchoLink meant
+opening echolink.org and reading a proxy list by hand before every session.
+
+**There is no proxy directory protocol, and this task is not one.** EchoLink
+publishes the same list two ways: `proxylist.jsp`, an HTML table for humans, and
+`proxyFind.jsp`, which returns XML pre-filtered to the proxies that are both
+public and `Ready`, sorted by distance ascending. Fetched in the same second on
+2026-08-13 the page had 932 rows of which **282** were `Ready`, and the XML had
+**282** entries with no discrepancy either way — so the endpoint is the same
+data in a form that needs no HTML parsing, and this is a web fetch, not a wire
+protocol. Nothing here touches LP-1/LP-2: the source is the service operator's
+own published endpoint.
+
+Three design points, each of which cost a measurement to establish:
+
+1. **`Ready` is not enough, so each candidate is probed.** A public proxy is
+   single-user; the status is a poll snapshot; a taken proxy accepts the TCP
+   connection and then hangs up without a nonce. The probe connects, reads the
+   8-byte greeting, sends **nothing**, and closes. On the first live run,
+   VK2BSD #4 in Sydney — 465 km away and listed `Ready` — did not answer, and
+   the session went to Chile. A distance-sorted first pick would have failed
+   with `proxy: the proxy stream closed`.
+2. **Distance orders the candidates; latency chooses between them.** From VK1
+   there was nothing under 5000 km on 2026-08-13, so great-circle kilometres
+   say very little. The probe timeout is 3 s because the live run measured
+   **1363 ms** to greet a Chilean proxy with DNS and handshake included; 2 s
+   left no margin, and being too short discards working proxies silently.
+3. **`lat`/`lon` are accepted by the endpoint and deliberately not sent.** IP
+   geolocation was accurate to ~11 km for a Canberra request, which is noise at
+   these distances — so sending real coordinates would mean a location
+   permission in the app and the operator's position handed to a third party,
+   for nothing measurable.
+
+Etiquette is part of the task rather than an afterthought: `robots.txt` disallows
+only `/links.jsp`, probes are one round trip each and capped
+(`--proxy-candidates`, default 5, and a 15-candidate ceiling), and every
+auto-selected run says on stderr that public proxies are shared and echolink.org
+asks for brief use. The answer for sustained use is a **private proxy**
+(`EchoLinkProxy.jar` on a host with a public IP), which `--proxy` already
+supports.
+
+The library half is deliberately app-ready: `EchoLinkProxySelector`,
+`EchoLinkPublicProxySource` (the fetch seam, so no test makes an HTTP request —
+AU-5), `EchoLinkProxyProbe` (its transport injected, so no test opens a socket)
+and `EchoLinkProxyListParser`. It is **not** on `NetworkClient` and should not
+be: it produces the `host`/`port` for an `EchoLinkDestination.Route.proxy`, and
+in Currawong that makes it composition-root work.
+
+**Done when:** the parser round-trips a fixture of the real document including
+its awkward cases, selection and probing are tested without a socket or an HTTP
+request, and `--auto-proxy` picks a proxy on a live run. ✅ All three;
+34 tests, and the live run above.
+
 ## Phase 7 — M17Kit
 
 ### M17-1 — Codec2 XCFramework spike ⛔ gate (OQ-2) — RESOLVED ✅ DONE

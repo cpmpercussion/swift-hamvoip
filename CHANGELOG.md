@@ -8,6 +8,30 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- **EL-12: public proxy discovery.** `hamvoip-cli echolink --auto-proxy` finds a
+  proxy instead of making the operator read echolink.org's list by hand: it
+  fetches the XML that `proxyFind.jsp` serves, probes the nearest few candidates
+  by reading their 8-byte greeting, and uses the quickest that answers. On the
+  first live run a Sydney proxy 465 km away and listed `Ready` did not answer
+  and a Chilean one did — which is the whole argument for probing rather than
+  believing the list, since a public proxy carries one client at a time and the
+  status is only a poll snapshot.
+
+  New in `EchoLinkKit`, and usable from an app as well as the CLI:
+  `EchoLinkProxySelector`, `EchoLinkProxyProbe`, `EchoLinkProxyListParser`,
+  `EchoLinkPublicProxy`, and `EchoLinkPublicProxySource` — the fetch seam that
+  keeps HTTP out of the unit tests, as `StreamTransport` keeps sockets out
+  (AU-5). It sits below `NetworkClient` rather than on it: what it produces is
+  the host and port for an `EchoLinkDestination.Route.proxy`.
+
+### Changed
+
+- `hamvoip-cli echolink --proxy` is no longer required on its own — either it or
+  `--auto-proxy` must be given, and passing both is an error. Existing command
+  lines that name a proxy are unaffected.
+
 ## [0.3.0] — 2026-08-13
 
 EchoLink. `EchoLinkKit` goes from nothing to a complete client — proxy

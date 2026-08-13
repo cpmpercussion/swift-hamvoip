@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!--
+  A trimmed sample of https://www.echolink.org/proxyFind.jsp, fetched
+  2026-08-13. NOT a packet capture: this is a published web document, so the
+  FIXTURES.md provenance rules for capture-derived fixtures do not apply and
+  no capture backs it.
+
+  The full response that day held 282 entries, every one of them Ready,
+  public, and on port 8100 — which is why the awkward cases below had to be
+  written rather than found. Entries are marked accordingly:
+
+    OBSERVED  copied verbatim from the response, including the values.
+    SYNTHETIC invented to exercise a path the real response never takes.
+              Addresses are under .invalid (RFC 2606) so they can never
+              resolve to somebody's machine.
+-->
+<proxylist>
+<!-- OBSERVED -->
+<proxy name="CE5RPY 091">
+<desc><![CDATA[Gentileza REDCHILE.org]]></desc>
+<distance>10914.669502093946</distance>
+<status>Ready</status>
+<address>proxy92.redchile.org</address>
+<port>8100</port>
+<version>1.2.5c</version>
+<public>true</public>
+</proxy>
+<!-- OBSERVED -->
+<proxy name="CE5RPY 085">
+<desc><![CDATA[Gentileza REDCHILE.org]]></desc>
+<distance>10914.669502093946</distance>
+<status>Ready</status>
+<address>proxy86.redchile.org</address>
+<port>8100</port>
+<version>1.2.5c</version>
+<public>true</public>
+</proxy>
+<!-- SYNTHETIC: nearer than the observed pair, so distance ordering is testable -->
+<proxy name="NEAR PROXY">
+<desc><![CDATA[Somewhere close]]></desc>
+<distance>42.5</distance>
+<status>Ready</status>
+<address>near.example.invalid</address>
+<port>8100</port>
+<version>1.2.5c</version>
+<public>true</public>
+</proxy>
+<!-- SYNTHETIC: no <port> at all, so the assumed 8100 is testable -->
+<proxy name="NO PORT">
+<desc><![CDATA[Port element absent]]></desc>
+<distance>100.0</distance>
+<status>Ready</status>
+<address>noport.example.invalid</address>
+<version>1.2.5c</version>
+<public>true</public>
+</proxy>
+<!-- SYNTHETIC: no <distance>, which must sort last rather than first -->
+<proxy name="NO DISTANCE">
+<desc><![CDATA[Distance element absent]]></desc>
+<status>Ready</status>
+<address>nodistance.example.invalid</address>
+<port>8100</port>
+<version>1.2.5c</version>
+<public>true</public>
+</proxy>
+<!-- SYNTHETIC: the endpoint only lists ready proxies, but the field exists -->
+<proxy name="BUSY PROXY">
+<desc><![CDATA[Taken]]></desc>
+<distance>1.0</distance>
+<status>Busy</status>
+<address>busy.example.invalid</address>
+<port>8100</port>
+<version>1.2.5c</version>
+<public>true</public>
+</proxy>
+<!-- SYNTHETIC: not advertised for public use -->
+<proxy name="PRIVATE PROXY">
+<desc><![CDATA[Somebody's own]]></desc>
+<distance>2.0</distance>
+<status>Ready</status>
+<address>private.example.invalid</address>
+<port>8100</port>
+<version>1.2.5c</version>
+<public>false</public>
+</proxy>
+<!-- SYNTHETIC: unreadable port — skipped, because a guessed port is worse -->
+<proxy name="BAD PORT">
+<desc><![CDATA[Port is not a number]]></desc>
+<distance>3.0</distance>
+<status>Ready</status>
+<address>badport.example.invalid</address>
+<port>not-a-port</port>
+<version>1.2.5c</version>
+<public>true</public>
+</proxy>
+<!-- SYNTHETIC: no address — nothing to connect to, so skipped -->
+<proxy name="NO ADDRESS">
+<desc><![CDATA[Address element absent]]></desc>
+<distance>4.0</distance>
+<status>Ready</status>
+<port>8100</port>
+<version>1.2.5c</version>
+<public>true</public>
+</proxy>
+</proxylist>
