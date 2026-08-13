@@ -70,6 +70,10 @@ public enum EchoLinkClientError: Error, Equatable, CustomStringConvertible {
     case nodeDidNotAnswer
     /// `send(pcm:)` was handed something other than one codec frame.
     case wrongSampleCount(expected: Int, actual: Int)
+    /// The station list would not parse, or never finished arriving.
+    case stationList(EchoLinkStationListError)
+    /// A second `fetchStationList` while one is already running.
+    case stationListInFlight
 
     public var description: String {
         switch self {
@@ -87,6 +91,8 @@ public enum EchoLinkClientError: Error, Equatable, CustomStringConvertible {
             return "the node did not answer — no reply to the SDES that opens a session"
         case .wrongSampleCount(let expected, let actual):
             return "expected one codec frame of \(expected) samples, got \(actual)"
+        case .stationList(let error): return "station list: \(error)"
+        case .stationListInFlight: return "a station list download is already running"
         }
     }
 }
@@ -331,6 +337,15 @@ public actor EchoLinkClient: NetworkClient {
     /// outside that window is ignored rather than fed to a finished session.
     private var directory: EchoLinkDirectorySession?
 
+    /// Station-list download state (EL-11). The in-flight flag is its own
+    /// state rather than `stationListReader != nil`, for the reason the whole
+    /// module repeats: the frame pump writes the reader, so inferring "is a
+    /// download running?" from something the completion path also touches is
+    /// the actor-reentrancy hazard this tree has already paid for once.
+    private var stationListInFlight = false
+    private var stationListReader: EchoLinkStationListReader?
+    private var stationListResult: Result<EchoLinkStationList, Error>?
+
     /// True while `openNodeSession` is waiting. As everywhere else in this
     /// module, the in-flight flag is its own state and not inferred from
     /// `phase`, which the frame pump also writes.
@@ -557,6 +572,110 @@ public actor EchoLinkClient: NetworkClient {
         emit(.directoryLoggedIn)
     }
 
+    // MARK: - Station list (EL-11)
+
+    /// Download the directory's station list.
+    ///
+    /// **Deliberately not part of `connect`.** Nothing on the path to a QSO
+    /// needs the list — an operator who knows the node they want connects
+    /// without it — and `connect` is the path that Milestone M3 signed off. A
+    /// 433 kB download in the middle of it would add three seconds and a new
+    /// failure mode to a sequence that works.
+    ///
+    /// ## The sequence, from the capture
+    ///
+    ///     ==> OPEN   (directory server)          a *second* channel
+    ///     ==> DATA   "f0" CR                     the request
+    ///     <== STATUS success
+    ///     <== DATA   "@@@" … "+++"               the list, across 129 frames
+    ///
+    /// The second `OPEN` is the part worth stating: the login channel is not
+    /// reused. In the capture the proxy `CLOSE`s the login channel while the
+    /// list is still arriving on the new one, which is also why
+    /// `EchoLinkClient` must not treat a `CLOSE` as the session ending.
+    ///
+    /// ⚠️ **Never run against a live server.** Every rule this depends on was
+    /// read off a capture; the request has never been sent by this code. The
+    /// parse is conformance-tested against the real 6444-entry download, but
+    /// the *fetch* is not, and cannot be until someone runs it — the same
+    /// standing caveat the rest of Phase 6 carried until M3.
+    ///
+    /// - Parameter timeout: how long to wait for the terminator. The reference
+    ///   download took 2.6 seconds; the default allows for a slow link rather
+    ///   than for a stalled one.
+    /// - Returns: the parsed list.
+    /// - Throws: `EchoLinkClientError.stationList` if it will not parse or
+    ///   never completes, `.notConnected` if there is no session.
+    public func fetchStationList(
+        timeout: Duration = .seconds(60)
+    ) async throws -> EchoLinkStationList {
+        guard let proxy, phase == .connected else { throw EchoLinkClientError.notConnected }
+        guard let server = configuration.directoryServer else {
+            throw EchoLinkClientError.directoryLoginIncomplete
+        }
+        guard !stationListInFlight else { throw EchoLinkClientError.stationListInFlight }
+
+        stationListInFlight = true
+        stationListReader = EchoLinkStationListReader()
+        stationListResult = nil
+        defer {
+            stationListInFlight = false
+            stationListReader = nil
+            stationListResult = nil
+        }
+
+        do {
+            try await proxy.open(peer: server)
+            try await proxy.send(EchoLinkProxyFrame(
+                type: .data, peer: server, payload: EchoLinkStationList.stationListRequest))
+        } catch let error as EchoLinkProxyError {
+            throw EchoLinkClientError.proxy(error)
+        }
+
+        // Poll rather than park a continuation. The frame pump writes
+        // `stationListResult`, and this is the one place in the module where a
+        // continuation buys nothing: the download takes seconds and arrives in
+        // a hundred frames, so a short poll is neither a latency nor a wakeup
+        // concern — and it cannot lose a completion to the reentrancy window
+        // that `EchoLinkDirectorySession` needs its in-flight flag for.
+        let deadline = elapsedSinceOrigin() + timeout
+        while elapsedSinceOrigin() < deadline {
+            if let result = stationListResult {
+                return try result.get()
+            }
+            try? await sleepFor(.milliseconds(50))
+        }
+
+        // A stall, not a short list. `finish()` turns however far it got into
+        // an error that says so.
+        guard let reader = stationListReader else {
+            throw EchoLinkClientError.stationList(.missingTerminator(afterRecords: 0))
+        }
+        do {
+            return try reader.finish()
+        } catch let error as EchoLinkStationListError {
+            throw EchoLinkClientError.stationList(error)
+        }
+    }
+
+    /// Feed a `0x02` payload to an in-flight station-list download.
+    ///
+    /// Returns `true` if it was consumed, so the caller knows not to treat it
+    /// as a directory-login reply.
+    private func feedStationList(_ payload: Data) -> Bool {
+        guard stationListInFlight, stationListResult == nil else { return false }
+        do {
+            if let list = try stationListReader?.append(payload) {
+                stationListResult = .success(list)
+            }
+        } catch let error as EchoLinkStationListError {
+            stationListResult = .failure(EchoLinkClientError.stationList(error))
+        } catch {
+            stationListResult = .failure(error)
+        }
+        return true
+    }
+
     /// Step 5: the SDES exchange that actually opens a node session.
     private func openNodeSession(
         proxy: EchoLinkProxyClient,
@@ -736,8 +855,11 @@ public actor EchoLinkClient: NetworkClient {
             noteNodeAnswer(named: compound.sourceName)
 
         case .data:
-            // The directory server's reply, tunnelled. Only meaningful while a
-            // directory login is in flight.
+            // Two things arrive tunnelled on 0x02, and only one of them can be
+            // in flight at a time: the directory login's reply, and the station
+            // list. The list is checked first because a login is not running
+            // while one is downloading.
+            if feedStationList(frame.payload) { break }
             if let directory {
                 Task { await directory.received(frame.payload) }
             }

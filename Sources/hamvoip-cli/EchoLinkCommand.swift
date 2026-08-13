@@ -30,10 +30,15 @@ struct EchoLinkCommand: AsyncParsableCommand {
             heard by everyone connected to it, and on many nodes goes out over \
             the air. Nothing is sent until PTT is pressed.
 
-            NOT YET VALIDATED ON AIR BY THIS SOFTWARE. The protocol here was \
-            recovered from packet captures of the maintainer's own sessions with \
-            a third-party client; this client has never connected to a proxy. \
-            Expect to be the first.
+            VALIDATED ON AIR 2026-08-13 (Milestone M3): a QSO through *ECHOTEST*, \
+            audio intelligible both ways. The protocol was recovered from packet \
+            captures of the maintainer's own sessions with a third-party client \
+            rather than from a specification, so expect rough edges — but the \
+            audio path itself has been heard working.
+
+            The one part still unproven on air is --list. The station-list FORMAT \
+            is conformance-tested against a real 6444-entry download; the request \
+            that asks for one has never been sent by this software.
 
             *ECHOTEST* is the obvious first contact: it echoes audio back, so one \
             operator alone can confirm the round trip end to end.
@@ -119,12 +124,26 @@ struct EchoLinkCommand: AsyncParsableCommand {
     @Option(name: .long, help: "End the session after this many seconds.")
     var duration: Int?
 
+    @Flag(name: .long, help: ArgumentHelp(
+        """
+        Download the directory station list, print it, and exit without \
+        starting a QSO. Needs the account login, so it cannot be combined \
+        with --no-directory-login. The full list is around 6500 stations; \
+        pipe it through a pager or grep.
+        """))
+    var list: Bool = false
+
     func run() async throws {
         guard let peerAddress = EchoLinkPeerAddress(peer) else {
             throw ValidationError("--peer must be a dotted-quad IPv4 address, got '\(peer)'")
         }
         guard transmitTimeout > 0 else {
             throw ValidationError("--transmit-timeout must be positive")
+        }
+        guard !list || directoryLogin else {
+            throw ValidationError(
+                "--list needs the directory login: the station list comes from the "
+                    + "directory server, so --no-directory-login has nothing to ask.")
         }
 
         var accountPassword: EchoLinkAccountPassword?
@@ -176,7 +195,8 @@ struct EchoLinkCommand: AsyncParsableCommand {
             nodeAnswerTimeout: .seconds(nodeAnswerTimeout),
             jitterTarget: .milliseconds(jitterMs),
             useAudioDevices: audio,
-            duration: duration.map { .seconds($0) }
+            duration: duration.map { .seconds($0) },
+            listStationsOnly: list
         )
         try await session.run()
     }
@@ -215,6 +235,7 @@ private final class EchoLinkSession: @unchecked Sendable {
     private let passwordSource: SecretPrompt.Source
     private let useAudioDevices: Bool
     private let duration: Duration?
+    private let listStationsOnly: Bool
     private let client: EchoLinkClient
     private let console: Console
     private let bridge = AudioFrameBridge()
@@ -239,13 +260,15 @@ private final class EchoLinkSession: @unchecked Sendable {
         nodeAnswerTimeout: Duration,
         jitterTarget: Duration,
         useAudioDevices: Bool,
-        duration: Duration?
+        duration: Duration?,
+        listStationsOnly: Bool = false
     ) throws {
         self.destination = destination
         self.callsign = callsign
         self.passwordSource = passwordSource
         self.useAudioDevices = useAudioDevices
         self.duration = duration
+        self.listStationsOnly = listStationsOnly
         self.client = EchoLinkClient(
             codec: try GSMVoiceCodec(),
             configuration: EchoLinkClient.Configuration(
@@ -298,6 +321,13 @@ private final class EchoLinkSession: @unchecked Sendable {
             throw ExitCode.failure
         }
         // The .connected event already logged this through the event pump.
+
+        if listStationsOnly {
+            defer { eventPump.cancel() }
+            try await printStationList()
+            await client.disconnect()
+            return
+        }
 
         if useAudioDevices {
             await startAudioDevices()
@@ -527,9 +557,19 @@ private final class EchoLinkSession: @unchecked Sendable {
 
     private func printBanner() async {
         await console.log("hamvoip-cli echolink — EchoLink audio (EL-10, Milestone M3)")
+        // Milestone M3 passed 2026-08-13: a human completed a QSO through
+        // *ECHOTEST* with this command. The protocol still came from captures
+        // rather than a specification, which is worth saying — but the blanket
+        // "never connected to a proxy" warning is now false and would be the
+        // wrong thing to leave in front of an operator.
         await console.log(
-            "NOT YET VALIDATED ON AIR BY THIS SOFTWARE: this client has never connected "
-                + "to an EchoLink proxy. The protocol came from captures, not a spec.")
+            "Audio path validated on air 2026-08-13 (Milestone M3). The protocol was "
+                + "recovered from packet captures, not a specification: expect rough edges.")
+        if listStationsOnly {
+            await console.log(
+                "The station list itself has NOT been fetched on air by this software — "
+                    + "the format is conformance-tested against a capture, the request is not.")
+        }
         await console.log(
             "An EchoLink node is a shared channel and may be a radio transmitter. "
                 + "Transmitting requires a licence.")
@@ -539,6 +579,28 @@ private final class EchoLinkSession: @unchecked Sendable {
         if case .none = passwordSource {} else {
             await console.log("Callsign \(callsign); account password from \(passwordSource).")
         }
+    }
+
+    /// Download the station list and print it, one station a line (EL-11).
+    ///
+    /// Tab-separated rather than aligned: 6500 lines are going through `grep`
+    /// or a pager, not being read as a table.
+    private func printStationList() async throws {
+        await console.log("Requesting the station list…")
+        let list = try await client.fetchStationList()
+
+        for station in list.stations {
+            let node = station.nodeNumber.map(String.init) ?? "-"
+            await console.log(
+                [station.callsign, node, station.status ?? "-",
+                 station.address, station.location].joined(separator: "\t"))
+        }
+        for notice in list.notices where !notice.isEmpty {
+            await console.log("# \(notice)")
+        }
+        await console.log(
+            "# \(list.stations.count) station(s), \(list.notices.count) notice(s); "
+                + "the server declared \(list.declaredCount).")
     }
 
     private func printKeyBindings() async {

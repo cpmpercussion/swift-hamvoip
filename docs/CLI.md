@@ -775,10 +775,13 @@ otherwise have carried.
 The live-validation harness for EchoLink, and the counterpart to `connect` for
 IAX2 and `m17` for M17. Everything below the CLI is `EchoLinkClient`.
 
-**Nothing in this repository has ever spoken to a real EchoLink proxy.** The
-protocol was recovered from captures of a *third-party* client's sessions
-(OQ-9), so this command is the first time our own reading of it meets a real
-one. That is Milestone M3, and it needs a human on air.
+**✅ Milestone M3 passed, 2026-08-13**: a live QSO through `*ECHOTEST*`, audio
+intelligible both ways, clean teardown. The protocol was recovered from captures
+of a *third-party* client's sessions (OQ-9) rather than from a specification, so
+expect rough edges — but our reading of it has now met a real proxy, a real
+directory server and a real node.
+
+The one thing here that has **never** run on air is `--list` (§9.1).
 
 ```sh
 swift run hamvoip-cli echolink \
@@ -869,11 +872,12 @@ agrees with us by construction. A live run tests:
   a stutter, across a real talkspurt boundary;
 - that the SF-1 watchdog cuts transmission at its limit, as it did for M2.
 
-### Live status, 2026-08-13
+### Live status, 2026-08-13 — M3 passed
 
-**The session connects.** Proxy login, directory login and the node handshake
-all work on air: `*ECHOTEST*` answers by name and its station info arrives.
-What remains for M3 is audio — run with `--audio`, press space, talk, listen.
+**The session connects and carries audio.** Proxy login, directory login, the
+node handshake and speech in both directions all work on air: `*ECHOTEST*`
+answers by name, its station info arrives, and it echoes back what it is told.
+That is Milestone M3.
 
 Getting there turned up a three-part bug in the directory login, the important
 part being that the `ONLINE` line is what registers a station as *available*.
@@ -955,14 +959,56 @@ still drops out, lower it if the delay is annoying. A direct (non-proxied) path
 would not need anything like this much — an argument for direct mode, not
 against the default.
 
-### The M3 sign-off checklist
+### The M3 sign-off checklist — ✅ signed off 2026-08-13
 
-Same shape as the M2 checklist in §5. Record the result on the PR.
+Same shape as the M2 checklist in §5.
 
-- [ ] Proxy login accepted.
-- [x] Directory login accepted — confirmed 2026-08-13.
-- [x] `*ECHOTEST*` answered the opening SDES — confirmed 2026-08-13.
-- [ ] Audio transmitted, and heard back intelligibly in the echo.
-- [ ] Inbound talkspurts reported, with no stutter across a boundary.
-- [ ] SF-1 watchdog cut transmission at its limit.
-- [ ] Clean teardown, terminal restored.
+- [x] Proxy login accepted.
+- [x] Directory login accepted.
+- [x] `*ECHOTEST*` answered the opening SDES.
+- [x] **Audio transmitted, and heard back intelligibly in the echo** — the
+      milestone. It took several rounds of tuning to get there; §"If the audio
+      grinds" above is what those rounds found.
+- [x] Clean teardown.
+
+Two rows the sign-off did not report on separately, left open rather than
+ticked on the strength of the session having gone well:
+
+- [ ] Inbound talkspurts reported, with no stutter across a boundary. The
+      stutter *was* chased and fixed (EL-7's arrival clock and pause
+      threshold), so this is very likely fine — but "the QSO sounded good" is
+      not the same observation.
+- [ ] SF-1 watchdog cut transmission at its limit. Not exercised: it fires
+      after three minutes and no over ran that long. The same check passed for
+      M2 against IAX2, and the watchdog lives in `RadioCore` rather than in
+      either protocol kit, so this is a re-confirmation rather than an
+      untested path.
+
+### 9.1 `--list` — the station directory (EL-11)
+
+Downloads the directory's station list, prints it, and exits without starting a
+QSO. Needs the account login, so it cannot be combined with
+`--no-directory-login`.
+
+```sh
+swift run hamvoip-cli echolink \
+    --proxy <proxy host> \
+    --directory-server <directory server IPv4> \
+    --peer 13.57.14.183 --node '*ECHOTEST*' \
+    --list | less
+```
+
+One station a line, tab-separated: callsign, node number, status, address,
+location. Around 6500 lines, so pipe it. Lines beginning `#` are the server's
+own trailing notices and the summary count.
+
+**This has never been run against a live directory server.** The list *format*
+is conformance-tested against a real 6444-entry download and the parser is
+strict about short reads — a truncated list is an error, not a small list — but
+the request that asks for one has only ever been read off a capture, never
+sent. The banner says so when `--list` is passed. If it fails, the most likely
+causes are the second `OPEN` (the capture shows the login channel is not
+reused) or a directory server that wants something other than `f0` CR.
+
+The list is deliberately **not** fetched during a normal `connect`: it is 433 kB
+and nothing on the path to a QSO needs it.

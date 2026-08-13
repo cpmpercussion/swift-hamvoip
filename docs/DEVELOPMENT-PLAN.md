@@ -72,22 +72,26 @@ do not improvise a different design.
 
 ## 2. Current state
 
-**Updated 2026-08-09, at v0.1.** Everything below is checked against the tree,
-not remembered; if it disagrees with the repository, the repository is right.
+**Updated 2026-08-13.** Everything below is checked against the tree, not
+remembered; if it disagrees with the repository, the repository is right.
 
 - `Package.swift` defines four library products — `RadioCore`, `IAX2Kit`,
   `M17Kit`, `EchoLinkKit` — plus the `hamvoip-cli` executable, the vendored
   `CGSM` target, a test-only `TestSupport` target and five test targets. One
   Swift dependency, `swift-argument-parser`, authorised by CLI-1; `CGSM` is
   vendored C, not a dependency (EL-8, LP-4).
-- `swift build` and `swift test` are green: **779 tests, no failures**
-  (checked 2026-08-13, on the Phase 6 branch; 616 on `main` before it). CI runs
-  the SPDX check on Ubuntu and build + test on macOS 14.
-- **`EchoLinkKit` is complete except for the station list** (EL-11, still gated
-  on a capture). Proxy framing, proxy login, directory login, RTP, the
-  synthesised playout clock, GSM 06.10 and `EchoLinkClient` are all in and
-  tested against capture fixtures. Nothing in it has ever spoken to a real
-  proxy — that is Milestone M3, and EL-10 has the gap to close first.
+- `swift build` and `swift test` are green: **870 tests, no failures**
+  (checked 2026-08-13, after EL-11). One of those is skipped unless
+  `HAMVOIP_ECHOLINK_STATION_LIST` names a directory-list download — the EL-11
+  conformance test, which cannot ship its data. CI runs the SPDX check on
+  Ubuntu and build + test on macOS 14.
+- **`EchoLinkKit` is complete, and Phase 6 is done.** Proxy framing, proxy
+  login, directory login, RTP, the synthesised playout clock, GSM 06.10,
+  `EchoLinkClient` and the station list are all in and tested. **Milestone M3
+  passed 2026-08-13**: a live QSO through `*ECHOTEST*` from `hamvoip-cli
+  echolink`, audio intelligible both ways. The one piece never run on air is
+  EL-11's `--list` *fetch* — the list format is conformance-tested against a
+  real 6444-entry download, but this software has never sent the request.
 - `RadioCore` and `IAX2Kit` are complete. `M17Kit` has reflector control,
   base-40 callsigns and stream-packet parse/serialise, but **no codec wiring
   and no `M17Client`** — M17-4 and M17-5 are the remaining work there.
@@ -121,8 +125,7 @@ Phase 2  IAX2Kit          IAX-1 … IAX-9      (needs RC-1..RC-4)
 Phase 3  CLI harness      CLI-1              (needs IAX-8)
 Phase 4  SwiftUI app      APP-1 … APP-4      (unblocked: OQ-3/3b/4 resolved)
 Phase 5  BLE PTT          BLE-1 … BLE-3      (needs APP-2)
-Phase 6  EchoLink         EL-1 … EL-11       (unblocked: OQ-1 + OQ-9 resolved;
-                                              EL-8 free-standing, EL-11 gated)
+Phase 6  EchoLink         EL-1 … EL-11       ✅ complete; M3 passed 2026-08-13
 Phase 7  M17Kit           M17-1 … M17-5      (M17-1 ✅ done, OQ-2 resolved)
 ```
 
@@ -134,7 +137,7 @@ against `MockTransport` from recorded IAX2 fixtures — no radio required.
 **Milestone M2** (end of Phase 3): a human completes a live QSO with an
 AllStar node using the CLI harness on macOS.
 **Milestone M3** (end of Phase 6, task EL-10): a human completes a live
-EchoLink QSO using the CLI harness.
+EchoLink QSO using the CLI harness. ✅ **passed 2026-08-13.**
 
 ---
 
@@ -792,7 +795,7 @@ call, locally notable in VK1. Trademark checked clear in class 9.
 - **BLE-3** — Runtime: apply learned mapping → press/release edges drive
   PTT; UI indicator for accessory link state.
 
-## Phase 6 — EchoLink ✅ UNBLOCKED (OQ-9 resolved 2026-08-12)
+## Phase 6 — EchoLink ✅ COMPLETE (M3 passed 2026-08-13)
 
 **Both gates are now cleared:** the terms (OQ-1, 2026-08-09) and the clean-room
 sourcing question (OQ-9, 2026-08-12). Permitted sources are fixed by the OQ-9
@@ -1179,7 +1182,7 @@ limit, and no test opens a socket.
 
 ---
 
-### EL-10 — `hamvoip-cli echolink` and live sign-off (**Milestone M3**) ⚠️ CODE DONE, M3 OUTSTANDING
+### EL-10 — `hamvoip-cli echolink` and live sign-off (**Milestone M3**) ✅ DONE — M3 PASSED 2026-08-13
 **Depends on:** EL-9.
 **Files:** `Sources/hamvoip-cli/EchoLinkCommand.swift`, registered in
 `HamVoIPCLI.swift`'s `subcommands:` array.
@@ -1197,9 +1200,17 @@ intelligible audio both ways, clean teardown — and records the sign-off on the
 PR. That is **Milestone M3**, and like M2 nothing in this repository can settle
 it.
 
-**Code done, 2026-08-13. M3 is outstanding and needs a human on air.** The
-command exists, the stack under it is tested, and `--help` says plainly that
-nothing here has ever spoken to a real proxy.
+**✅ Milestone M3 passed, 2026-08-13.** The maintainer completed a live
+EchoLink QSO from the terminal through `*ECHOTEST*`: audio intelligible both
+ways, clean teardown. That is the milestone, and like M2 nothing in this
+repository could settle it.
+
+Getting there took a run of audio-path work after the session first connected —
+the playout faults in EL-9, the stream clock and the pause threshold in EL-7 —
+each found by capturing our own audio beside a working client's and diffing,
+which is the method this project keeps coming back to. The `--help` and session
+banner no longer warn that the client has never spoken to a proxy, because that
+is no longer true; they say what was validated and when.
 
 #### The connect sequence, and two corrections it forced
 
@@ -1257,7 +1268,7 @@ Run against real public proxies and the real directory server, receive-only
 | Directory login (EL-6) | ✅ **confirmed on air** |
 | No `OPEN` for the node | ✅ the proxy accepted the session without one |
 | Node answers the SDES | ✅ **confirmed on air** (after the fix below) |
-| Audio both ways | ⏸ needs a human with a microphone |
+| Audio both ways | ✅ **confirmed on air**, 2026-08-13 — Milestone M3 |
 
 The two confirmations are the ones that mattered. A proxy in Chile that this
 code had never met opened with `653e0d35` — an 8-byte ASCII hex nonce, exactly
@@ -1325,43 +1336,131 @@ name:
     INFO oNDATACONF Audio test server [9]  <our callsign and name>  This test
          server simply records and plays back transmissions for testing purposes.
 
-**What is left for M3 is the part no agent can do:** run it with `--audio`,
-press space, talk, and listen to the echo. `--location` and `--operator-name`
-set what the far end displays.
+**M3 is signed off.** The remaining EchoLink work is EL-11's `--list` fetch,
+which is written but has never been run against a live directory server.
+`--location` and `--operator-name` set what the far end displays.
 
 ---
 
-### EL-11 — Station list ⛔ gate: needs a capture the maintainer must cut
+### EL-11 — Station list ✅ DONE (parser + fetch); the fetch is unproven on air
 **Depends on:** EL-6. **Blocks:** nothing — deliberately off the path to M3.
-**Files:** `Sources/EchoLinkKit/EchoLinkDirectory.swift`, `Tests/EchoLinkKitTests/…`.
+**Files:** `Sources/EchoLinkKit/EchoLinkStationList.swift`,
+`Sources/EchoLinkKit/EchoLinkClient.swift` (`fetchStationList`),
+`Sources/hamvoip-cli/EchoLinkCommand.swift` (`--list`),
+`Tests/EchoLinkKitTests/EchoLinkStationListTests.swift`.
 
 Split out of EL-6 on 2026-08-12, because the login is evidenced and the list is
 not, and bundling them would have held a ready task behind a missing capture.
 
-Parse the station list the directory server returns after login: callsign, node
+Parses the station list the directory server returns after login: callsign, node
 number, status, location, address. Feeds a browse/search UI in Currawong later;
-the CLI has no need of it beyond a `--list` dump.
+the CLI has it as a `--list` dump.
 
-**The gate.** The only capture of a full station list is the one carrying 6548
-other operators' callsigns and 6261 IP addresses, and EL-2 forbids cutting a
-`0x02` fixture from it. So the format has no usable fixture, and the obvious
-workaround is the wrong one: **hand-building a fixture from the directory in
-that capture is the same data with the provenance filed off.** Reading the list
-to learn the format and then typing out "representative" entries is the same
-act with an extra step.
+#### The gate, and how it was resolved — 2026-08-13
 
-What unblocks it is a capture of a session whose station list is
-**deliberately truncated** — few enough entries, ideally of nodes the
-maintainer owns, that the fixture carries no one else's data. Cutting it is the
-maintainer's action to run, not an agent's.
+The gate read: the only capture of a full station list carries 6548 other
+operators' callsigns and 6261 IP addresses, EL-2 forbids cutting a `0x02`
+fixture from it, and hand-typing "representative" entries is the same data with
+the provenance filed off. It wanted a capture with a **deliberately truncated**
+list, which nobody had.
 
-Until then this task does not start. It is not a blocker for anything: EL-9 and
-EL-10 need the login, not the list, and Milestone M3 is a QSO with a node whose
-address is already known.
+**Ungated by the maintainer on 2026-08-13, and closed without that capture** —
+because the gate was really two requirements wearing one coat, and only one of
+them needed a fixture:
 
-**Done when:** the list parses from a truncated-list fixture; a malformed or
-partial list is a typed error rather than a silent short read; and no fixture
-contains a callsign, location or address belonging to anyone else.
+- *No third-party data in the repository.* Non-negotiable, and unchanged.
+- *The format must be evidenced rather than guessed.* This is what a fixture
+  normally provides, and it turns out a fixture is not the only way to provide
+  it.
+
+So there is **no station-list fixture, and there is not meant to be one**.
+Evidence takes two other forms, both of which keep the data out of the tree:
+
+1. **A measurement over the real list, recorded below.** Every rule in the
+   parser is a counted fact about 6444 real entries, not a reading of three.
+2. **A conformance test that runs against the real download** —
+   `testTheRealListParses`. Skipped unless `HAMVOIP_ECHOLINK_STATION_LIST`
+   points at a copy, which is not committed and cannot be. CI never runs it;
+   anyone holding the capture can, and it asserts the tally below.
+
+The tests that *do* run in CI are built from invented callsigns and RFC 5737
+documentation addresses. They are not evidence and the file says so in as many
+words — what they test is that the parser implements the measured rules, not
+that the rules are right. The conformance test is what tests the rules.
+
+This is the same shape as the OQ-5 and OQ-7 resolutions: the claim lives in
+this document with its tally, the capture stays outside the repo, and the
+assertion is reproducible by whoever holds it.
+
+#### The grammar, measured
+
+Reference download: **6444 entries, 433 414 bytes, 129 proxy frames**, from
+`echolink-oq9-3.pcap` (cited by SHA-256 in `Tests/FIXTURES.md`, not by path).
+The request is `f0` CR, three bytes, sent on a **second** tunnelled channel —
+the login channel is not reused, and the proxy `CLOSE`s the login channel while
+the list is still arriving on the new one.
+
+    @@@                     LF      marker
+    <count>:<serial>        LF      6444:64244576
+    ─ repeated <count> times ─
+      <callsign>            LF
+      <location+status>     LF      fixed geometry, see below
+      <node number>         LF      may be blank
+      <address>             LF      dotted-quad IPv4
+    +++                             terminator, not LF-terminated
+
+| Measured | Value |
+|---|---|
+| Entries | 6444 declared, 6444 present |
+| Stations | 6441 |
+| Server notices (blank callsign, blank node, `127.0.0.1`) | 3 |
+| Status word `ON` / `BUSY` | 6059 / 382 — **and nothing else** |
+| Stations with no node number, or no time | 0 / 0 |
+| Conference names (leading `*`) | 227 |
+| Node-number range | 1005 – 1002775 |
+| Status bracket opens at column 27 | 6441 of 6441, no exceptions |
+| **Locations that themselves contain a bracket** | **3496** |
+
+**The one subtle field, and the trap in it.** The second line is not free text
+with a tag appended; it has fixed geometry, and the status bracket opens at
+column 27. Splitting on the *first* `[` is the obvious implementation and it is
+wrong for **3496 of 6441 entries — more than half** — because a location
+beginning `[Svx] 145.6625` or containing `[0/20]` is entirely ordinary. That
+reading reports a status of `Svx` for half the directory. The parser splits at
+the column and falls back to the last bracket; on the reference list the two
+rules disagree about nothing.
+
+Two smaller findings, both of which would have become bugs:
+
+- **The status word is not `ON`/`BUSY` plus a long tail.** An earlier pass over
+  this data said it was, and that was an artefact of the first-bracket bug
+  above — `Svx`, `ORP`, `ASL` were locations being misread as statuses. Every
+  one of the 6441 stations says `ON` or `BUSY`. It is still carried as text
+  rather than an enum: two values, one server, one day, is the sample we have
+  and not a closed set. **The conformance test caught this**, against a
+  hand-count that had it wrong.
+- **The list is not UTF-8.** A location field contains a `0xA0`, so a UTF-8
+  decode fails and takes the whole 433 kB download with it. Decoded as
+  ISO-8859-1, which cannot fail.
+
+#### What is done, and what is not
+
+Done: the parser, an incremental reader (the download splits records *and*
+fields across frames — one 16-byte frame carried `"N 12:42]\n730991\n"`),
+`EchoLinkClient.fetchStationList()`, and `hamvoip-cli echolink --list`.
+
+**Not done: the fetch has never run against a live server.** The parse is
+conformance-tested against a real download; the request is not. `--list` says so
+in its banner. `fetchStationList` is deliberately **not** called by `connect` —
+a 433 kB download has no business on the path M3 just signed off, and a test
+asserts `connect` never sends the request.
+
+**Done when:** ~~the list parses from a truncated-list fixture~~ — the list
+parses, with the format evidenced by measurement and a reproducible conformance
+test rather than by a fixture; a malformed or partial list is a typed error
+rather than a silent short read (`missingTerminator`, `truncatedRecord`,
+`countMismatch`); and no fixture, test or document contains a callsign,
+location or address belonging to anyone else. ✅
 
 ### Station info and the control channel — ⚠️ superseded 2026-08-13
 
@@ -1563,9 +1662,9 @@ Until then M17 is "believed working", and the CLI's banner says so.
 | ~~OQ-3b~~ | ~~Bundle identifier~~ **RESOLVED: `au.charlesmartin.currawong`.** Extensions extend it (`…currawong.liveactivity`); the Keychain access group is `$(TeamID).au.charlesmartin.currawong`. | — |
 | ~~OQ-4~~ | ~~App in a separate repo?~~ **RESOLVED: yes**, a separate `currawong` repo depending on `swift-hamvoip` via SPM. Keeps the Apache-2.0 protocol libraries reusable, keeps app-only dependencies out of the library repo, and lets the two release independently. | — |
 | **OQ-5** | ✅ **RESOLVED 2026-08-09 — hexadecimal. Keep sending lowercase; no code change.** Settled by `hamvoip-cli oq5 --method register --exhaustive` against an ASL3 node (Asterisk + app_rpt in a UTM VM), packet capture retained. Result: **`lowercase-hex` ACCEPTED** (REGACK), **`uppercase-hex` ACCEPTED** (REGACK), **`base64` REFUSED**, **`raw-bytes` REFUSED** — both refusals `CAUSE "Registration Refused"`, `CAUSE CODE 29`, and each of the four probes got its own fresh CHALLENGE on its own UDP association, so these are four independent verifications. Both hex cases being accepted is not a contradiction and does not make the run unreliable: the node is decoding the IE text back to sixteen bytes, or comparing it case-insensitively. The refusals are what carry the weight — a node that accepted anything would have taken base64 too, so the digest is genuinely being checked. Corroborated on the wire: the node answered REGACK immediately but held both REGREJs for ~1.0 s, the pacing of a real credential check that failed rather than a parse error. **Scope of the claim:** this is an observation about one implementation, not a fact about the protocol. Case-insensitivity is that node's business; another peer may well compare byte-for-byte, so `IAX2Auth.TextDigestEncoding.oq5Default` stays lowercase hex. **Original question:** §8.6.15 says the IE carries the UTF-8-encoded MD5 of `challenge ‖ password`, but the RFC never states the text encoding — hex or not, upper or lower case, padded or not. Unresolvable from the specification, and LP-2 forbids reading an implementation to find out. | Confirms IAX-4's shipped assumption. Unblocks the `connect` path and FR-1.3 registered node mode; downgrades the `IAX2Registrar` encoding seam from defect to hygiene |
-| **OQ-6** | **LGPL-2.1 relinking vs App Store code signing.** Shipping Codec2 as a dynamic framework satisfies LP-4's letter, but a signed iOS app cannot have its framework substituted by the user, which is what LGPL §6 relinking is for. A licensing judgement, not a technical blocker, and unchanged by the M17-1 spike — but it wants a conscious decision before App Store submission, not after. | App Store submission of M17 |
+| **OQ-6** | ⏸ **DEFERRED 2026-08-13 — revisit before submission, not before.** The maintainer's call: App Store submission is gated behind substantial UI/UX and testing work in Currawong that has not started, so deciding this now would be deciding it twice. Nothing in the library changes either way, and shipping Codec2 as a dynamic framework (which is what the tree does) keeps both options open. **The question:** **LGPL-2.1 relinking vs App Store code signing.** Shipping Codec2 as a dynamic framework satisfies LP-4's letter, but a signed iOS app cannot have its framework substituted by the user, which is what LGPL §6 relinking is for. A licensing judgement, not a technical blocker, and unchanged by the M17-1 spike — but it wants a conscious decision before App Store submission, not after. | App Store submission of M17 — and nothing before it |
 | **OQ-7** | ✅ **RESOLVED 2026-08-11 — 54 bytes. The LSF CRC is not on the wire; `M17StreamPacket` changed to match.** Settled by `hamvoip-cli oq7` against a live reflector on UDP 17000, packet capture retained (`m17-oq7.pcap`, workspace, unversioned). One over of 52 consecutive stream datagrams, one SID, one transmitting station. Three independent readings of those bytes agree and only on this layout: **length** — 54 bytes, 52 of 52, no exceptions; **sequencing** — the two bytes at offset 34 ran 0, 1, 2 … 51, while at offset 36, where the 56-byte reading puts FN, the same bytes do not count at all and set bit 15 in 35 of 52 frames, which a mid-over last-frame flag must never be; **CRC** — the trailing two bytes are the M17 CRC16 (Part I: polynomial `0x5935`, init `0xFFFF`) over the preceding 52 bytes, valid 52 of 52. That third test is what rules out a truncated 56-byte frame — two bytes lost in transit would not leave a CRC closing over what remains — and it fails 0 of 52 for the LSF-CRC-present reading. Field offsets corroborated too: SID constant, DST/SRC decoding as base-40 callsigns at 6-11 and 12-17, TYPE `0x0005` at 18-19, META all zeros, and 16 bytes of Codec 2 differing in every frame at 36-51. **Scope of the claim:** one reflector, one over, one transmitting client — an observation about what M17-over-IP actually carries, not a correction to the specification, which says 240 bits and is what we implemented first. A second reflector disagreeing would be new information rather than a bug; the tally's guidance says so. **Original question:** the spec's Table 27 gives LICH as 240 bits, the full 30-byte LSF *including* its own CRC → 56 bytes; 54 is widely quoted elsewhere, and the difference is exactly whether that CRC is present. Unresolvable from the document, and LP-2 forbids reading an implementation to find out. | Unblocks **M17-4** stream TX/RX |
-| **OQ-8** | **The M17 reflector specification is offline.** The chapter we implement against was published as HTML at a readthedocs host that now 404s; M17-3 worked from an Internet Archive capture. Should the repository keep a local copy of that archived chapter, licence permitting? Right now the only record of what we implemented against is a third-party archive that may itself disappear. | Nothing today; a maintenance risk |
+| **OQ-8** | ✅ **RESOLVED 2026-08-13 — keep a local copy, outside both repos.** The maintainer's call: M17's documentation situation is not going to improve, the project describes the specification as open, and the archived chapter is the best record there is, so use it rather than waiting for a better one. A copy of the Internet Archive capture now sits at `m17-spec-archive/` in the workspace with its retrieval URL, timestamp and SHA-256 (`d3ffacd2…`) recorded beside it. **Not committed**, and that half is a licence judgement rather than a preference: the page carries no licence statement, so redistributing it in an Apache-2.0 repository would assert a right nobody has checked. Holding a reference copy is a different act from republishing one. The citation chain in the repo is unchanged — `M17ReflectorProtocol.swift` and `docs/reference/PROVENANCE.md` still cite the archive URL; the local copy is the belt to that braces. **Original question:** the chapter we implement against was published as HTML at a readthedocs host that now 404s, so the only record of what we implemented against was a third-party archive that may itself disappear. | Nothing today; the maintenance risk is now hedged |
 | ~~OQ-9~~ | ✅ **RESOLVED 2026-08-12 — permitted sources named; Phase 6 unblocks. Maintainer's judgement.** The permitted sources for EchoLink protocol knowledge are: **(a)** RFC 3550 for RTP framing and **(b)** the ETSI/ITU GSM 06.10 specification for the codec, as spec anchors *for the parts they actually cover* — with the standing caveat that RFC 3550 does **not** describe this protocol as implemented (observed RTP version bits are 3, not 2; the proxy framing and the directory protocol on TCP 5200 fall outside it entirely), so where wire and RFC disagree the wire wins and the divergence is recorded; **(c) packet captures of the maintainer's own EchoLink sessions** are the **primary** source, under the same LP-1 fixture rule that governs IAX-9. Candidate **(d)**, prose write-ups, is admitted **only** under a provenance bar materially higher than the captures': because no published specification exists, most such prose derives from the very implementations LP-2 forbids (a summary of thebridge's source is the source at one remove, not "behavioural observation"), so a (d) source may be used only when its own provenance is independently established as *not* derived from forbidden implementations, and its use logged per `docs/reference/PROVENANCE.md` before any code depends on it. When (d) cannot clear that bar, the answer is another capture, not the write-up. **Standing procedural rules that come with this resolution:** (1) protocol ambiguities are settled by designing another on-air experiment and cutting another capture — never by reading an implementation; the pressure to peek is highest exactly where captures are thinnest, which is where the clean-room boundary matters most. (2) Capture work spans **multiple peers**: a single-peer capture already produced two confident wrong conclusions (SSRC always zero; sequence numbers start at zero) that a four-peer capture corrected — see the PROVENANCE.md OQ-9 entry. (3) Directory-server captures (TCP 5200) carry other operators' callsigns, locations and IPs; they get the same third-party-traffic hygiene the M17 OQ-7 capture did (`docs/CLI.md` §8), and no such capture's path is named in a versioned file. **Terms rechecked online 2026-08-12** against echolink.org directly (Access Policies, Validation, Download, Support): no anti-reverse-engineering clause, no client-software restriction, and no software EULA is even linked — the access policies govern *who* may connect (licensed amateurs) and what a Sysop node may interconnect *to*, never what client software reaches the service. echolink.org's own Download page lists compatible third-party implementations (EchoHam, EchoIRLP, svxLink/QTel, an Asterisk channel driver) with "we do not support these programs" — the service operator publicly acknowledges independent clients. This closes the narrow terms caveat left open under OQ-1 and does not disturb OQ-1's reasoning. **This resolves the sourcing question only** — OQ-1b (trademark, nominative use only) still governs all EchoLink naming, and LP-1/LP-2 are unchanged: no implementation source, at any level, is ever read. | ~~Phase 6~~ **unblocked** |
 | — | Packet capture of own AllStar session | IAX-9 |
 | ~~—~~ | ~~Packet capture of own EchoLink session (directory + proxy especially)~~ **Done 2026-08-12** — three captures (multi-peer), held in `experiment-data/`, SHA-256s in `echolink-oq9-result.txt`. Settled OQ-9's evidence question and the proxy framing / login digest; boundary calls logged in `docs/reference/PROVENANCE.md`. Paths deliberately unnamed in versioned files (one holds a live credential, one the full directory). Further Phase 6 captures still the maintainer's to run | OQ-9 ✅ / Phase 6 |

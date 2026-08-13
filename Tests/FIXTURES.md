@@ -89,6 +89,16 @@ rather than loud:
   other operators' callsigns and addresses — the other. `--allow-tcp-data`
   overrides it for a frame that has been checked to hold neither.
 
+  **This survived EL-11 rather than being relaxed by it.** The station-list
+  parser was written and shipped in August 2026 without a station-list fixture,
+  because the rule above leaves no honest way to cut one: the only full-list
+  capture is 6444 other operators' entries, and a hand-picked subset of it is
+  the same data with the provenance filed off. What stands in for a fixture is
+  a measurement recorded in the EL-11 plan entry plus an opt-in conformance
+  test (`HAMVOIP_ECHOLINK_STATION_LIST`) that anyone holding the capture can
+  run. If a truncated-list capture is ever taken, a fixture becomes possible
+  and would be welcome — but nothing is waiting on it.
+
 ### The source captures are cited by digest, not by path
 
 For `live-*.hex` above, the fixture names its capture. The EchoLink captures
