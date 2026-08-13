@@ -904,14 +904,23 @@ all now fixed. If it comes back, they are the places to look:
 - **Holes in the output stream.** Yielding nothing on a concealed or starved
   tick leaves a gap the device underruns on. Every tick now yields exactly one
   frame — a faded repeat of the last real one for a short run, then zeros.
-- **A jitter buffer smaller than one packet.** `JitterBuffer()`'s 60 ms default
-  target is less than EchoLink's 80 ms packet, so it drains to empty between
-  packets. `EchoLinkClient.defaultJitterBuffer` targets 120 ms with a 100 ms
-  floor.
+- **A jitter buffer far smaller than the arrival pattern needs.** This one took
+  a capture to size honestly. On a live 65-second session the proxied path
+  delivered **zero lost packets in either direction** — and arrivals with a
+  median gap of 0 ms, a p90 of 184 ms and a worst-case shortfall of **265 ms**
+  against a steady 20 ms grid. That signature is bursts: several packets land
+  together, then nothing for a sixth of a second. Nothing is missing; it is all
+  late, together, because the proxy tunnels UDP inside TCP and TCP bunches it.
 
-The last one is a tuning value, not a protocol fact: raise
-`Configuration.jitterBuffer`'s depths if a path is jittery enough to still
-starve, at the cost of latency.
+  A buffer that holds one 80 ms packet cannot absorb a 265 ms burst, so
+  `EchoLinkClient.defaultJitterBuffer` targets 280 ms with a 160 ms floor and a
+  500 ms ceiling, and adapts within that range.
+
+Depths are tuning values, not protocol facts, and they buy latency to pay for
+continuity. `--jitter-ms` sets the target for one run: raise it if the audio
+still drops out, lower it if the delay is annoying. A direct (non-proxied) path
+would not need anything like this much — an argument for direct mode, not
+against the default.
 
 ### The M3 sign-off checklist
 

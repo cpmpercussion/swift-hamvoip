@@ -107,6 +107,15 @@ struct EchoLinkCommand: AsyncParsableCommand {
         """))
     var nodeAnswerTimeout: Int = 15
 
+    @Option(name: .long, help: ArgumentHelp(
+        """
+        Jitter buffer target depth in milliseconds. Trades latency for \
+        continuity. The default is measured from a live proxied session, where \
+        packets arrive in bursts with droughts up to 265 ms. Raise it if the \
+        audio drops out; lower it if the delay is annoying.
+        """))
+    var jitterMs: Int = 280
+
     @Option(name: .long, help: "End the session after this many seconds.")
     var duration: Int?
 
@@ -165,6 +174,7 @@ struct EchoLinkCommand: AsyncParsableCommand {
             directoryServer: directory,
             transmitTimeout: .seconds(transmitTimeout),
             nodeAnswerTimeout: .seconds(nodeAnswerTimeout),
+            jitterTarget: .milliseconds(jitterMs),
             useAudioDevices: audio,
             duration: duration.map { .seconds($0) }
         )
@@ -227,6 +237,7 @@ private final class EchoLinkSession: @unchecked Sendable {
         directoryServer: EchoLinkPeerAddress?,
         transmitTimeout: Duration,
         nodeAnswerTimeout: Duration,
+        jitterTarget: Duration,
         useAudioDevices: Bool,
         duration: Duration?
     ) throws {
@@ -244,7 +255,12 @@ private final class EchoLinkSession: @unchecked Sendable {
                 accountPassword: accountPassword,
                 directoryServer: directoryServer,
                 transmitTimeout: transmitTimeout,
-                nodeAnswerTimeout: nodeAnswerTimeout
+                nodeAnswerTimeout: nodeAnswerTimeout,
+                jitterBuffer: JitterBuffer(
+                    frameDuration: .milliseconds(20),
+                    targetDepth: jitterTarget,
+                    minDepth: min(jitterTarget, .milliseconds(160)),
+                    maxDepth: max(jitterTarget * 2, .milliseconds(500)))
             ),
             clock: ContinuousClock()
         )

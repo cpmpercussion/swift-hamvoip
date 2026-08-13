@@ -620,14 +620,28 @@ final class EchoLinkClientTests: XCTestCase {
                       "the captured audio must reach the stream")
     }
 
-    func testTheJitterBufferDefaultHoldsAWholeEchoLinkPacket() {
-        // 60 ms — JitterBuffer's own default — is less than one 80 ms EchoLink
-        // packet, so the buffer drains to empty between packets and starves
-        // about once per packet.
+    func testTheJitterBufferDefaultAbsorbsTheMeasuredBurstiness() {
+        // Sizing for one 80 ms packet is not enough, and the reason is the
+        // transport rather than the protocol: the proxy tunnels UDP inside TCP,
+        // and TCP bunches it. Measured on a live 65-second session with ZERO
+        // packet loss in either direction:
+        //
+        //     inter-arrival p50 0 ms, p90 184 ms, max 375 ms
+        //     worst shortfall against a steady 20 ms grid: 265 ms
+        //
+        // Nothing was lost; it was all late, together. The buffer has to hold
+        // the burst, so the target sits above that worst shortfall.
         let buffer = EchoLinkClient.defaultJitterBuffer
+
         XCTAssertGreaterThanOrEqual(
-            buffer.minDepth, .milliseconds(80),
-            "the floor must hold at least one whole packet")
+            buffer.currentTargetDepth, .milliseconds(265),
+            "the initial target must cover the worst measured shortfall")
+        XCTAssertGreaterThanOrEqual(
+            buffer.minDepth, .milliseconds(160),
+            "the floor holds two whole packets")
+        XCTAssertGreaterThanOrEqual(
+            buffer.maxDepth, .milliseconds(375),
+            "the ceiling must reach the largest observed gap")
         XCTAssertEqual(buffer.frameDuration, .milliseconds(20))
     }
 

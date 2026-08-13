@@ -244,22 +244,39 @@ public actor EchoLinkClient: NetworkClient {
         }
     }
 
-    /// A jitter buffer sized for EchoLink rather than for a 20 ms-per-packet
-    /// protocol.
+    /// A jitter buffer sized for **proxied** EchoLink, from measurement.
     ///
-    /// `JitterBuffer()`'s own defaults target 60 ms of depth, which is **less
-    /// than one EchoLink packet**: audio arrives in 80 ms bursts of four
-    /// frames, so a 60 ms target drains to empty between packets and the buffer
-    /// starves roughly every packet. That is audible, and it was half of why
-    /// the first live audio was grindy.
+    /// `JitterBuffer()`'s own 60 ms default target is less than one 80 ms
+    /// EchoLink packet, so it drains to empty between packets. But sizing for
+    /// one packet is not enough either, and the reason is worth stating because
+    /// it is a property of the transport rather than of the protocol:
     ///
-    /// 120 ms target with a 100 ms floor holds one whole packet plus margin,
-    /// which is the least that can absorb this arrival pattern at all.
+    /// **The proxy tunnels UDP inside TCP, and TCP bunches it.** Measured on a
+    /// live 65-second `*ECHOTEST*` session (`m3-working.pcap`, 339 audio
+    /// packets, **zero loss in either direction**):
+    ///
+    ///     inter-arrival gap    p50 0 ms   p90 184 ms   p99 248 ms   max 375 ms
+    ///     worst shortfall against a steady 20 ms grid    265 ms
+    ///
+    /// A median gap of zero with a p90 of 184 ms is the signature of arrivals
+    /// in bursts: several packets land together, then nothing for a sixth of a
+    /// second. Nothing is lost — it is all late, together. So the buffer has to
+    /// absorb the burst, and 265 ms is the depth that session actually
+    /// demanded.
+    ///
+    /// Hence 280 ms initial target: above the worst observed shortfall, with
+    /// the floor at two whole packets and the ceiling high enough for the
+    /// 375 ms outlier. The buffer adapts within that range, so a kinder path
+    /// settles lower on its own.
+    ///
+    /// These are tuning values, not protocol facts, and they buy latency to
+    /// pay for continuity. A direct (non-proxied) path would not need them —
+    /// which is an argument for direct mode, not against this default.
     public static let defaultJitterBuffer = JitterBuffer(
         frameDuration: .milliseconds(20),
-        targetDepth: .milliseconds(120),
-        minDepth: .milliseconds(100),
-        maxDepth: .milliseconds(300))
+        targetDepth: .milliseconds(280),
+        minDepth: .milliseconds(160),
+        maxDepth: .milliseconds(500))
 
     /// How a stream transport is made. Tests inject `MockStreamTransport`;
     /// nothing here opens a socket itself (AU-5).
