@@ -264,7 +264,7 @@ private final class M17Session: @unchecked Sendable {
     private func runTransmitLoop() async {
         for await frame in bridge.frames {
             do {
-                if try await client.send(pcm: frame) != nil {
+                if try await client.transmit(pcm: frame) != nil {
                     transmittedDatagrams += 1
                     txMeter.push(frame)
                 } else if case .transmitting = client.state {

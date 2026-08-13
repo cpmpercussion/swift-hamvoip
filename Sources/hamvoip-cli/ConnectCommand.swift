@@ -309,7 +309,7 @@ actor ConnectSession {
     private func runTransmitLoop() async {
         for await frame in bridge.frames {
             do {
-                if try await client.send(pcm: frame) != nil {
+                if try await client.transmit(pcm: frame) != nil {
                     transmittedFrames += 1
                     txMeter.push(frame)
                 } else {

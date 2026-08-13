@@ -15,6 +15,11 @@ transport, directory login, RTP, GSM 06.10 and a station list — and unlike the
 M17 path at 0.2.0, **it has been used for a live QSO**. Phase 6 is complete and
 nothing in it is unproven on air.
 
+Also **`NetworkClient` becomes a seam an application can actually be written
+against** (RC-10). It gains an event stream, received audio and a transmit seam,
+which is what Phase 4 needs before it can show an operator why a link dropped.
+That carries **one breaking rename** — see "Changed".
+
 ### Milestone
 
 - **M3 passed on 2026-08-13 — a human held a two-way EchoLink QSO through this
@@ -66,7 +71,30 @@ nothing in it is unproven on air.
   containing `[0/20]` are ordinary. The list is not UTF-8 (a location carries
   `0xA0`), so it decodes as ISO-8859-1, which cannot fail.
 
-**`RadioCore`**
+**`RadioCore`** — the mode-agnostic client seam (RC-10).
+
+- `RadioEvent`, `RadioDisconnectReason`, `RadioAudioIssue` — one coarse
+  vocabulary every mode translates onto: connection lifecycle, transmit
+  transitions, watchdog expiry (SF-1), DTMF, remote station activity, station
+  info, and audio that arrived but cannot be played. Cases carry `String?`
+  details rather than mode-specific types, so adding a mode does not change the
+  enum's shape.
+- `NetworkClient` gains `radioEvents`, `receivedAudio` and `send(pcm:)`, and a
+  documented single-session lifecycle contract: `disconnect()` is terminal and
+  idempotent, it finishes both streams, and reconnecting means building a new
+  client. A session that ends *remotely* reports `disconnected` and leaves the
+  streams open, so the app can hear about it.
+- Each client keeps its own detailed `events` stream and yields the translated
+  event from inside its single `emit`, so the two streams cannot disagree about
+  what happened or in what order. `IAX2ClientEvent` translates totally;
+  `EchoLinkClientEvent` deliberately drops `directoryLoggedIn` and
+  `nodeAnswered`, which happen inside a `connect(to:)` that has not returned yet.
+- `EchoLinkDisconnectReason` replaces a `String` reason on
+  `EchoLinkClientEvent.disconnected`, so the mapping can tell a local hang-up
+  from a node saying goodbye without matching on prose. The rendered text is
+  unchanged.
+
+**`RadioCore`** — EchoLink's transport needs.
 
 - `StreamTransport`, the TCP seam (EL-3), with `NWStreamTransport` over
   `Network.framework` (PD-1) and `MockStreamTransport` in `TestSupport`. EchoLink
@@ -92,6 +120,15 @@ nothing in it is unproven on air.
 
 ### Changed
 
+- ⚠️ **Breaking: the frame-returning `send(pcm:)` is now `transmit(pcm:)`** on
+  `IAX2Client`, `M17Client` and `EchoLinkClient`. `send(pcm:)` still exists and
+  still transmits, but returns `Void` and is the `NetworkClient` requirement.
+  A Swift witness may not return a value its requirement does not — and the
+  requirement must not, since an `IAX2VoiceFrame` or `M17StreamPacket` is exactly
+  the protocol detail the seam exists to keep out of an application. Anything
+  that needs to know what reached the wire (`hamvoip-cli` counts frames that did)
+  calls `transmit(pcm:)`; anything that just wants the audio sent keeps calling
+  `send(pcm:)` and can now do it through the protocol.
 - **The playout path, three faults deep.** All three were things `IAX2Kit` and
   `M17Kit` already did correctly, and all three were invisible to a
   fixture-driven test that only asks whether the right bytes came out.
@@ -189,6 +226,13 @@ Everything under 0.2.0 still applies except the EchoLink entry. Added:
   as text.
 - **On-air validation is one proxy, one directory server, one node.** M3 went
   through `*ECHOTEST*`, which returns only what you send it.
+- **`RadioEvent` reports remote station activity unevenly, because the modes
+  do.** M17 carries a callsign per stream, so `remoteTransmitStarted` names who
+  is talking; EchoLink signals a talkspurt with no per-over identity, so the
+  station is `nil`; IAX2 emits neither event, because an AllStar node sends a
+  continuous stream and marks no talkspurt boundaries in it. An app showing "who
+  is talking" gets it on one mode of three, and that is a property of the
+  protocols rather than of this translation.
 - **A node may answer from an address other than the one dialled** (IAX-11).
   `NWDatagramTransport` opens a connected `NWConnection`, and a multi-homed node
   answering from its other interface produces `ENOTCONN` on the second send with

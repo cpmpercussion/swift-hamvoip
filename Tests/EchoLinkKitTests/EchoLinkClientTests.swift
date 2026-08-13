@@ -661,10 +661,10 @@ final class EchoLinkClientTests: XCTestCase {
 
         let pcm = [Int16](repeating: 1000, count: 160)
         for index in 0 ..< 3 {
-            let early = try await harness.client.send(pcm: pcm)
+            let early = try await harness.client.transmit(pcm: pcm)
             XCTAssertNil(early, "frame \(index) must not complete a packet on its own")
         }
-        let packet = try await harness.client.send(pcm: pcm)
+        let packet = try await harness.client.transmit(pcm: pcm)
 
         XCTAssertEqual(packet?.codecFrames.count, 4)
         XCTAssertEqual(harness.transport.sentCount, 1, "four 20 ms frames, one 80 ms packet")
@@ -684,7 +684,7 @@ final class EchoLinkClientTests: XCTestCase {
         harness.transport.clearSent()
 
         for _ in 0 ..< 8 {
-            let sent = try await harness.client.send(pcm: [Int16](repeating: 5, count: 160))
+            let sent = try await harness.client.transmit(pcm: [Int16](repeating: 5, count: 160))
             XCTAssertNil(sent)
         }
         XCTAssertEqual(harness.transport.sentCount, 0, "nothing may go out unkeyed")
@@ -698,8 +698,8 @@ final class EchoLinkClientTests: XCTestCase {
 
         // Two frames — not a full packet.
         let pcm = [Int16](repeating: 700, count: 160)
-        _ = try await harness.client.send(pcm: pcm)
-        _ = try await harness.client.send(pcm: pcm)
+        _ = try await harness.client.transmit(pcm: pcm)
+        _ = try await harness.client.transmit(pcm: pcm)
         XCTAssertEqual(harness.transport.sentCount, 0)
 
         await harness.client.stopTransmit()
@@ -776,7 +776,7 @@ final class EchoLinkClientTests: XCTestCase {
         harness.transport.clearSent()
 
         for _ in 0 ..< 8 {
-            _ = try await harness.client.send(pcm: [Int16](repeating: 9, count: 160))
+            _ = try await harness.client.transmit(pcm: [Int16](repeating: 9, count: 160))
         }
         XCTAssertEqual(harness.transport.sentCount, 0,
                        "a cut transmission must stay cut")
@@ -841,7 +841,7 @@ final class EchoLinkClientTests: XCTestCase {
         harness.transport.clearSent()
         try await harness.client.startTransmit()
         for _ in 0 ..< 4 {
-            _ = try await harness.client.send(pcm: [Int16](repeating: 300, count: 160))
+            _ = try await harness.client.transmit(pcm: [Int16](repeating: 300, count: 160))
         }
         await harness.client.stopTransmit()
         XCTAssertGreaterThanOrEqual(harness.transport.sentCount, 1)
