@@ -803,6 +803,76 @@ work already demonstrated the path can do.
 Keys are the same as the other two commands: SPACE toggles PTT, `q` quits, `?`
 lists them.
 
+### `--auto-proxy` — let it find a proxy (EL-12)
+
+`--proxy` and `--auto-proxy` are alternatives, and one of the two is required.
+
+```sh
+swift run hamvoip-cli echolink --auto-proxy \
+    --directory-server <directory server IPv4> \
+    --peer 13.57.14.183 --node '*ECHOTEST*'
+```
+
+It fetches `https://www.echolink.org/proxyFind.jsp`, probes the nearest few
+candidates, and uses the quickest that answers:
+
+```
+Fetching the public proxy list from echolink.org…
+266 public proxies listed as ready.
+Probing 5: VK2BSD PROXY #4, CE5RPY 097, CE5RPY 091, CE5RPY 076, CE5RPY 075
+Using CE5RPY 076 — proxy77.redchile.org:8100 (10915 km, 1363 ms to greeting)
+```
+
+All of that goes to **stderr**, so `--list`'s output stays pipeable.
+
+#### Why it probes instead of believing the list
+
+`proxyFind.jsp` returns only the proxies that are public *and* `Ready` — 282
+entries on 2026-08-13, exactly matching the `Ready` rows of the human-readable
+`proxylist.jsp` when both were fetched in the same second, which is why nothing
+here parses HTML. But `Ready` is a **poll snapshot**, and a public proxy carries
+one client at a time. A proxy that was free when the directory last asked is
+often taken by the time anyone acts on it, and a taken one accepts the TCP
+connection and then hangs up without sending its nonce — which is exactly the
+confusing `proxy: the proxy stream closed` this section used to tell you to
+expect.
+
+So each candidate is probed by connecting and reading its 8-byte greeting.
+Nothing is sent: no login, not a byte. A proxy that greets us is there and free;
+one that does not is skipped, whatever the list said.
+
+The run above is the case in miniature. **VK2BSD #4 in Sydney, 465 km away and
+listed `Ready`, did not answer** — and the session went to Chile instead. Trust
+the list and that run is a failed connect with a misleading error.
+
+#### Distance is a prior, not a measurement
+
+The endpoint sorts by great-circle distance, and the official iOS client's
+"Public Proxy" mode picks the geographically closest. That is a weak signal from
+VK1: on 2026-08-13 there was **nothing under 5000 km** — nearest was Chile at
+~10 900 km — so candidates are ordered by distance and then chosen by measured
+round trip. `--proxy-candidates` (default 5) sets how many are probed at once;
+raise it when everything listed is busy, remembering that each probe lands on
+somebody else's machine.
+
+The probe timeout is 3 s, and that number is measured rather than picked: the
+live run above took **1363 ms** to get a nonce out of a Chilean proxy, DNS and
+TCP handshake included. A shorter timeout silently discards working proxies.
+
+#### Etiquette, and what is deliberately not sent
+
+`robots.txt` disallows only `/links.jsp`, and the endpoint answers with
+`Access-Control-Allow-Origin: *` and `Pragma: no-cache` — it is meant to be
+called by clients. It also accepts `lat` and `lon` (those exact spellings), and
+**we send neither**: IP geolocation put a Canberra request within ~11 km of the
+truth, which is noise against these distances, so supplying real coordinates
+would mean handing a third party the operator's position for nothing measurable.
+
+Public proxies are a shared resource and echolink.org asks that they be used
+briefly, which the command says on every auto-selected run. For sustained use —
+which is what an app on cellular is — run a **private proxy**: echolink.org
+distributes `EchoLinkProxy.jar`, and `--proxy` is how you point at it.
+
 ### Two passwords, and only one of them is secret
 
 A proxied EchoLink session carries two different secrets a few bytes apart on

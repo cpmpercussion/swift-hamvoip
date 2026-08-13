@@ -19,3 +19,10 @@ Package.resolved
 # Python bytecode from running scripts/ in place.
 __pycache__/
 *.pyc
+
+# Test fixtures are source, whatever their extension. This negation exists
+# because a global ignore file (`core.excludesFile`) excluding `*.xml` silently
+# kept `Fixtures/proxyfind-sample.xml` out of a commit — the tests then fail in
+# CI and pass locally, which is an expensive way to find out. A repository
+# .gitignore takes precedence over the global one, so this is the fix.
+!Tests/**/Fixtures/*.xml

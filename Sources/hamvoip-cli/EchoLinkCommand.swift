@@ -64,10 +64,30 @@ struct EchoLinkCommand: AsyncParsableCommand {
             experiment, not a supported mode.
             """)
 
-    @Option(name: .long, help: "EchoLink proxy host name or address.")
-    var proxy: String
+    @Option(name: .long, help: ArgumentHelp(
+        """
+        EchoLink proxy host name or address. Either this or --auto-proxy is \
+        required.
+        """))
+    var proxy: String?
 
-    @Option(name: .long, help: "EchoLink proxy TCP port.")
+    @Flag(name: .long, help: ArgumentHelp(
+        """
+        Pick a public proxy automatically: fetch echolink.org's list of ready \
+        public proxies, probe the nearest few, and use the quickest that \
+        answers. Takes a second or two and replaces --proxy.
+        """))
+    var autoProxy: Bool = false
+
+    @Option(name: .long, help: ArgumentHelp(
+        """
+        With --auto-proxy, how many proxies to probe at once. Each probe is one \
+        round trip and nothing more, but they land on strangers' machines, so \
+        raise this only when everything listed is busy.
+        """))
+    var proxyCandidates: Int = EchoLinkProxySelector.defaultBatchSize
+
+    @Option(name: .long, help: "EchoLink proxy TCP port. Ignored with --auto-proxy.")
     var proxyPort: UInt16 = EchoLinkProxyClient.defaultPort
 
     @Option(name: .long, help: "Proxy password. 'PUBLIC' on a public proxy, and not a secret.")
@@ -157,6 +177,23 @@ struct EchoLinkCommand: AsyncParsableCommand {
         guard transmitTimeout > 0 else {
             throw ValidationError("--transmit-timeout must be positive")
         }
+        switch (proxy, autoProxy) {
+        case (nil, false):
+            throw ValidationError(
+                "A proxy is required: pass --proxy <host>, or --auto-proxy to pick a "
+                    + "public one automatically. Direct mode is not implemented (FR-3.3 "
+                    + "makes the proxy the default, and CGNAT makes it the only option "
+                    + "on mobile data).")
+        case (.some, true):
+            throw ValidationError(
+                "--proxy and --auto-proxy are alternatives: one names a proxy, the other "
+                    + "finds one.")
+        default:
+            break
+        }
+        guard proxyCandidates > 0 else {
+            throw ValidationError("--proxy-candidates must be positive")
+        }
         guard !list || directoryLogin else {
             throw ValidationError(
                 "--list needs the directory login: the station list comes from the "
@@ -191,13 +228,20 @@ struct EchoLinkCommand: AsyncParsableCommand {
             FileHandle.standardError.write(Data((warning + "\n").utf8))
         }
 
+        // Chosen last, immediately before connecting. A public proxy is
+        // single-user and contended, so the gap between picking one and using
+        // it is the window in which somebody else takes it — and the account
+        // password prompt above can hold that window open for as long as it
+        // takes a human to type.
+        let (proxyHost, resolvedProxyPort) = try await resolveProxy()
+
         let session = try EchoLinkSession(
             destination: EchoLinkDestination(
                 peer: peerAddress,
                 node: list ? "(directory)" : node,
                 route: .proxy(
-                    host: proxy,
-                    port: proxyPort,
+                    host: proxyHost,
+                    port: resolvedProxyPort,
                     password: EchoLinkProxyPassword(proxyPassword)
                 )
             ),
@@ -216,6 +260,55 @@ struct EchoLinkCommand: AsyncParsableCommand {
             listStationsOnly: list
         )
         try await session.run()
+    }
+
+    /// The proxy to use: the one named on the command line, or the quickest
+    /// public one that answers a probe.
+    ///
+    /// Progress goes to **stderr**, not stdout: `--list` writes a station list
+    /// that people pipe into `grep`, and narration in the middle of it would be
+    /// a nuisance.
+    private func resolveProxy() async throws -> (host: String, port: UInt16) {
+        if let proxy { return (proxy, proxyPort) }
+
+        let selector = EchoLinkProxySelector(batchSize: proxyCandidates)
+        Self.note("Fetching the public proxy list from echolink.org…")
+
+        let candidates = try await selector.candidates()
+        Self.note("\(candidates.count) public proxies listed as ready.")
+
+        let chosen = try await selector.selectFastest(among: candidates) { batch in
+            Self.note(
+                "Probing \(batch.count): " + batch.map(\.name).joined(separator: ", "))
+        }
+
+        let distance = chosen.proxy.distanceKilometres
+            .map { String(format: "%.0f km, ", $0) } ?? ""
+        Self.note(
+            "Using \(chosen.proxy.name) — \(chosen.proxy.address):\(chosen.proxy.port) "
+                + "(\(distance)\(Self.milliseconds(chosen.latency)) to greeting)")
+        // Said plainly rather than left to be discovered. These are strangers'
+        // machines, one client at a time, and echolink.org asks that they be
+        // used briefly.
+        Self.note(
+            "Public proxies are single-user and shared — echolink.org asks that they be "
+                + "used only for brief periods. A private proxy is the answer for "
+                + "sustained use.")
+        return (chosen.proxy.address, chosen.proxy.port)
+    }
+
+    /// A `Duration` as whole milliseconds, for a human reading a status line.
+    private static func milliseconds(_ duration: Duration) -> String {
+        let components = duration.components
+        let value =
+            Double(components.seconds) * 1000
+            + Double(components.attoseconds) / 1_000_000_000_000_000
+        return String(format: "%.0f ms", value)
+    }
+
+    /// One line of narration on stderr.
+    private static func note(_ message: String) {
+        FileHandle.standardError.write(Data((message + "\n").utf8))
     }
 
     /// The environment variable, and the config file name, for the account
