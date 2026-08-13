@@ -101,6 +101,16 @@ remembered; if it disagrees with the repository, the repository is right.
   it the default on cellular, so nothing on mobile data is blocked, and no task
   is open for this. Building it needs an on-air direct session captured first;
   whether that is worth doing is a maintainer call, not an oversight.
+
+  **Two tasks opened 2026-08-13, after the phase was signed off, and together
+  they are a live misrepresentation rather than a gap.** The client only ever
+  places calls and never answers one, and it advertises itself as available once
+  at login and never revises that — so while we are mid-QSO the directory shows
+  us free, and an operator who acts on that gets nothing back. Neither half was
+  noticed while EchoLink was something we called *out* on; the maintainer being
+  called unsolicited from the Netherlands, on a different client, is what
+  surfaced both. EL-13 captures an inbound connection; EL-14 makes the
+  advertised status follow the session.
 - **Released as `v0.3.0`, 2026-08-13** — the release that carries Phase 6.
   `v0.2.0` predates `EchoLinkKit` entirely, so Currawong's `from: 0.2.0` pin
   resolves forward to it without a manifest change.
@@ -151,7 +161,8 @@ Phase 2  IAX2Kit          IAX-1 … IAX-9      (needs RC-1..RC-4)
 Phase 3  CLI harness      CLI-1              (needs IAX-8)
 Phase 4  SwiftUI app      APP-1 … APP-4      (unblocked: OQ-3/3b/4 resolved)
 Phase 5  BLE PTT          BLE-1 … BLE-3      (needs APP-2)
-Phase 6  EchoLink         EL-1 … EL-11       ✅ complete; M3 passed 2026-08-13
+Phase 6  EchoLink         EL-1 … EL-12       ✅ complete; M3 passed 2026-08-13
+                          EL-13, EL-14       ⚠️ new: inbound calls, free/busy
 Phase 7  M17Kit           M17-1 … M17-5      (M17-1 ✅ done, OQ-2 resolved)
 ```
 
@@ -1664,6 +1675,106 @@ in Currawong that makes it composition-root work.
 its awkward cases, selection and probing are tested without a socket or an HTTP
 request, and `--auto-proxy` picks a proxy on a live run. ✅ All three;
 34 tests, and the live run above.
+
+### EL-13 — Capture an inbound connection ⚠️ NEW
+**Depends on:** EL-10. **Blocks:** EL-14. **Found by:** the maintainer being
+called, unsolicited, by a station in the Netherlands on EchoHam, 2026-08-13 —
+which is how we learned that a third-party client receives connections at all.
+
+**`EchoLinkClient` is outbound-only, and nothing in the requirements ever asked
+otherwise.** `connect(to:)` is the only entry point, it guards on `phase ==
+.idle`, and it builds the TCP transport to the proxy itself — so between
+sessions there is no socket, no proxy login, and nothing listening. There is no
+accept path and no inbound event on `EchoLinkClientEvent`.
+
+Two things follow, and only the second is a task:
+
+- **A proxied client may not be reachable at all.** A public proxy is
+  single-user and we hold it only for the length of a session; whether it will
+  relay a peer we never named is unknown. This may be the whole reason the iOS
+  app appears uncallable, or it may not be — nobody has looked.
+- **The peer field is not checked.** `EchoLinkClient.handle(_:)` switches on the
+  frame type and ignores the address in the 9-byte header, so a `0x05`/`0x06`
+  frame arriving mid-session from *any* peer is fed to the jitter buffer as if
+  it came from the node in session, and can satisfy `noteNodeAnswer`. That is a
+  missing validation rather than an inbound-call feature, and it is worth fixing
+  whatever this experiment finds.
+
+**The experiment.** Log in with the `ONLINE` line as usual, hold the session
+idle, and have a second operator — or a second station of our own on a different
+callsign — connect to us. Capture the whole of TCP 8100 for the attempt,
+including the directory login, and repeat it direct as well as proxied if a
+direct listener can be stood up at all. One peer is not enough to conclude from:
+OQ-9's second procedural rule exists because a single-peer EchoLink capture
+already produced two confident wrong answers.
+
+The capture carries our own account credential and another operator's traffic,
+so it goes in `experiment-data/` and is cited by SHA-256, never by path — the
+`echolink-oq9*` precedent, and `docs/CLI.md` §8.
+
+**What the capture has to answer:**
+
+1. Does the proxy relay an inbound peer at all without a prior `OPEN`, and what
+   does the peer field of those frames carry?
+2. What does the caller send first — `RTCP SDES`, `oNDATA` station info, or
+   audio — and what must we send back for the connection to be established?
+3. Is there a refusal, or is not answering the only way to decline?
+4. Does the directory status decide whether the caller is offered the connect in
+   the first place? This is the question EL-14 turns on.
+
+**Done when:** a capture of at least one inbound attempt exists, cited by digest;
+the four answers are written into this task with the peers and the date; and
+anything still unsettled is raised as an open question rather than assumed.
+No code needs to change for this task to be done — it is an observation.
+
+---
+
+### EL-14 — Advertise free/busy, and keep the registration fresh ⚠️ NEW
+**Depends on:** EL-13 *for the busy token only* — what we ought to advertise is
+decided already, and if EL-13 stalls for want of a second operator this task
+should still land its lesser half (a refresh timer, and not leaving a stale
+"available" entry behind on disconnect).
+**Files:** `Sources/EchoLinkKit/EchoLinkDirectory.swift`,
+`Sources/EchoLinkKit/EchoLinkClient.swift`, tests.
+
+**Today the client says it is available exactly once and never revises it.**
+`EchoLinkDirectory.loginMessage` sends `ONLINE<version>Y(HH:MM)` at connect;
+there is no `BUSY` keyword anywhere in the tree, no status update after login,
+and no re-registration timer. The proxy `CLOSE`s the tunnelled directory channel
+immediately after the `OK` (step 4 of the connect sequence), so mid-session
+there is not even a channel open to send an update on, and `disconnect()` does
+not log out. The entry stays "available" from the moment login succeeds until
+the directory ages it out.
+
+**This is already wrong on air, and it is wrong in the direction that wastes
+somebody else's time.** While we are connected to a node the directory still
+shows us free; an operator who picks us out of that list and calls gets nothing
+back, because there is no inbound path either. Whichever of the two is fixed
+first, the pairing is what makes it a misrepresentation rather than a missing
+feature: we are the only party who knows the listing is stale. If EL-13 finds
+that a proxied client cannot be reached at all, the answer is not to leave the
+status alone — it is to stop advertising as available, which is the same task.
+
+**Do not guess the busy token.** The wire format is unknown, which is the whole
+reason this depends on EL-13. The `Y` in the `ONLINE` line is already an
+observed byte whose meaning nobody knows, emitted verbatim rather than guessed
+at; a second invented token is precisely how a directory entry gets silently
+rejected — the one-line login answered `OK` while never listing us, and the `0xAC 0xAC`
+separator survived because the server accepts `0x0A 0x0A` too.
+
+**Shape, once the capture has settled it:** the advertised status becomes a
+function of session phase and `TransmitState` rather than a constant; sending an
+update means reopening a directory channel (a second `OPEN`, exactly as
+`fetchStationList` already does) or re-logging in; a refresh timer keeps the
+entry alive at whatever interval the capture shows a real client using; and
+`disconnect()` marks us gone instead of leaving a stale listing.
+
+**Done when:** our own entry, as it appears in a `--list` fetch, tracks the
+actual session state across connect, a QSO and disconnect on a live run; the
+refresh interval is measured rather than assumed; and no test opens a socket
+(AU-5).
+
+---
 
 ## Phase 7 — M17Kit
 
