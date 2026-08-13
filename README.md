@@ -16,7 +16,7 @@ which is patented.
 
 ## Status
 
-**v0.3.0.** 911 tests, green on `main` — a few more with the Codec2 framework
+**v0.4.0.** 945 tests, green on `main` — a few more with the Codec2 framework
 present, and one that skips unless it is given a station-list download. This is
 a 0.x release — the API will change.
 
@@ -24,7 +24,7 @@ a 0.x release — the API will change.
 |---|---|
 | `RadioCore` | Complete. UDP and TCP transport abstractions, `NetworkClient` (the mode-agnostic seam: state, events, received audio, transmit), G.711 µ-law, adaptive jitter buffer, transmit watchdog, received-audio leveller, `AVAudioEngine` pipeline with 48 kHz ↔ 8 kHz conversion and a real-time-safe capture path. |
 | `IAX2Kit` | Complete. AllStarLink over IAX2 (RFC 5456): frames and mini-frames, information elements, sequencing and retransmission, MD5 authentication, call state machine, voice, DTMF, registration, and `IAX2Client` composing them. |
-| `EchoLinkKit` | Complete. Proxy transport, directory login, RTP/RTCP audio, GSM 06.10 over a vendored C target, the station directory, and `EchoLinkClient`. Proxied routes only — see below. |
+| `EchoLinkKit` | Complete. Proxy transport, directory login, RTP/RTCP audio, GSM 06.10 over a vendored C target, the station directory, public proxy discovery, and `EchoLinkClient`. Proxied routes only — see below. |
 | `M17Kit` | **Code complete, never transmitted on air.** Reflector control, base-40 callsigns, stream parse/serialise with CRC, Codec2 3200 wiring, and `M17Client`. Receive was confirmed against a live reflector; transmit has not been. |
 | `hamvoip-cli` | macOS harness: `connect` (IAX2), `echolink`, `m17`, and the `oq5` / `oq7` experiment subcommands. |
 
@@ -86,7 +86,7 @@ Swift 5.9 or later; iOS 16 or later; macOS 13 or later.
 ## Installation
 
 ```swift
-.package(url: "https://github.com/cpmpercussion/swift-hamvoip.git", from: "0.3.0")
+.package(url: "https://github.com/cpmpercussion/swift-hamvoip.git", from: "0.4.0")
 ```
 
 Then depend on the products you need:
@@ -170,8 +170,9 @@ let client = IAX2Client(clock: manualClock, transportFactory: { _ in mock })
 
 `hamvoip-cli` is a macOS harness for exercising the stack against a real node
 without a GUI — connect, monitor levels, key up, send DTMF. `connect` is the
-IAX2 path, `echolink` the EchoLink one (and `echolink --list` dumps the station
-directory without needing a node), `m17` links a reflector, and `oq5` / `oq7`
+IAX2 path, `echolink` the EchoLink one (`--auto-proxy` finds and probes a public
+proxy rather than making you read echolink.org's list, and `--list` dumps the
+station directory without needing a node), `m17` links a reflector, and `oq5` / `oq7`
 are the two on-air experiments that settled the digest encoding and the M17
 frame size. See [`docs/CLI.md`](docs/CLI.md).
 
