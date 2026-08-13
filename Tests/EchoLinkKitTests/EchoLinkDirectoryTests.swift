@@ -116,28 +116,66 @@ final class EchoLinkDirectoryTests: XCTestCase {
 
     // MARK: - The request line
 
-    func testLoginLineMatchesTheCapturedShape() {
-        // From the capture: 'l' + callsign + two separator bytes + password
-        // + CR, all ASCII. 46 bytes for the recorded exchange.
-        let line = EchoLinkDirectory.loginLine(
+    /// The login message for the tests' fixed inputs.
+    private func message() -> Data {
+        EchoLinkDirectory.loginMessage(
             callsign: Self.callsign,
-            password: Self.password
+            password: Self.password,
+            version: "0.1",
+            localTime: "10:47",
+            location: "XYZ"
         )
-        let bytes = Array(line)
+    }
 
-        XCTAssertEqual(bytes.first, 0x6C, "the line begins with 'l'")
-        XCTAssertEqual(bytes.last, 0x0D, "and ends with CR, not LF")
-        XCTAssertEqual(
-            line.count,
-            1 + Self.callsign.count + 2 + Self.password.value.count + 1,
-            "'l' + callsign + 2 separators + password + CR"
-        )
+    func testLoginMessageIsThreeCarriageReturnTerminatedLines() {
+        // Measured off a live comparison with a working client. An earlier
+        // version sent only the first line; the server still answered OK,
+        // because it had authenticated us — but without the ONLINE line the
+        // station is never listed as available and no node will accept it.
+        let bytes = Array(message())
 
-        let callsignRange = 1 ..< (1 + Self.callsign.count)
+        XCTAssertEqual(bytes.filter { $0 == 0x0D }.count, 3, "three CR-terminated lines")
+        XCTAssertEqual(bytes.last, 0x0D)
+
+        let lines = message().split(separator: 0x0D, omittingEmptySubsequences: false)
+        XCTAssertEqual(lines.count, 4, "three lines and the empty tail after the last CR")
+
+        // Line 1: 'l' + callsign + separator + password.
+        let first = Array(lines[0])
+        XCTAssertEqual(first.first, 0x6C, "the message begins with 'l'")
         XCTAssertEqual(
-            String(decoding: bytes[callsignRange], as: UTF8.self), Self.callsign
-        )
-        XCTAssertTrue(bytes.allSatisfy { $0 < 0x80 }, "all ASCII")
+            String(decoding: first[1 ..< (1 + Self.callsign.count)], as: UTF8.self),
+            Self.callsign)
+        XCTAssertEqual(
+            first.count,
+            1 + Self.callsign.count + 2 + Self.password.value.count,
+            "'l' + callsign + 2 separators + password")
+
+        // Line 2: the ONLINE declaration.
+        XCTAssertEqual(String(decoding: lines[1], as: UTF8.self), "ONLINE0.1Y(10:47)")
+
+        // Line 3: the location.
+        XCTAssertEqual(String(decoding: lines[2], as: UTF8.self), "XYZ")
+    }
+
+    func testTheSeparatorIsACACNotLineFeed() {
+        // The bug this pins: "two separator bytes" in prose reads as LF LF, and
+        // the server answers OK either way, so the wrong guess survives until
+        // something downstream quietly fails.
+        let bytes = Array(message())
+        let separatorAt = 1 + Self.callsign.count
+        XCTAssertEqual(Array(bytes[separatorAt ..< separatorAt + 2]), [0xAC, 0xAC])
+    }
+
+    func testTheOnlineLineCarriesVersionFlagAndTime() {
+        let text = String(
+            decoding: EchoLinkDirectory.loginMessage(
+                callsign: "N0CALL", password: Self.password,
+                version: "2.31", localTime: "18:44", location: "XYZ"
+            ).split(separator: 0x0D)[1],
+            as: UTF8.self)
+        XCTAssertEqual(text, "ONLINE2.31Y(18:44)",
+                       "ONLINE + version + Y + (HH:MM), as observed")
     }
 
     func testLoginWritesExactlyOneLine() async throws {
@@ -148,10 +186,9 @@ final class EchoLinkDirectoryTests: XCTestCase {
         try await task.value
 
         let written = await writes.data
-        XCTAssertEqual(
-            written,
-            EchoLinkDirectory.loginLine(callsign: Self.callsign, password: Self.password)
-        )
+        XCTAssertEqual(written.filter { $0 == 0x0D }.count, 3,
+                       "the whole three-line message goes out, not just the login")
+        XCTAssertEqual(written.first, 0x6C)
     }
 
     // MARK: - Proxied and direct are the same login
@@ -181,10 +218,8 @@ final class EchoLinkDirectoryTests: XCTestCase {
 
         let frame = try EchoLinkProxyFrame.parse(transport.sentBytes).frame
         XCTAssertEqual(frame.type, .data)
-        XCTAssertEqual(
-            frame.payload,
-            EchoLinkDirectory.loginLine(callsign: Self.callsign, password: Self.password)
-        )
+        XCTAssertEqual(frame.payload.filter { $0 == 0x0D }.count, 3,
+                       "the tunnelled payload is the same three-line message")
 
         let loggedIn = await session.loggedIn
         XCTAssertTrue(loggedIn)

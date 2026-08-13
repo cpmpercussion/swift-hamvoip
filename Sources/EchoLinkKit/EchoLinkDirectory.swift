@@ -76,31 +76,69 @@ public enum EchoLinkDirectory {
     /// What the server says when the login worked.
     public static let successReply = "OK"
 
-    /// The bytes between the callsign and the password in the login line.
+    /// The two bytes between the callsign and the password.
     ///
-    /// Two separator bytes, from the capture. They are recorded as a named
-    /// constant rather than inlined because "two separator bytes" is the sort
-    /// of detail that gets silently changed to one, or to a colon, by someone
-    /// reading the shape rather than the octets.
-    static let separator: [UInt8] = [0x0A, 0x0A]
+    /// **`0xAC 0xAC`**, measured off the wire — not `0x0A 0x0A`. An earlier
+    /// version assumed LF LF, because the OQ-9 write-up said "two separator
+    /// bytes" without saying which, and LF is what "separator" suggests to
+    /// someone reading prose rather than octets. The directory server answers
+    /// `OK` either way, so the mistake survived until a live comparison against
+    /// a working client found it. Recorded as a named constant precisely
+    /// because it is the kind of detail that gets "tidied" back to a newline.
+    static let separator: [UInt8] = [0xAC, 0xAC]
 
-    /// The login line: `'l'` + callsign + two separator bytes + password + CR,
-    /// all ASCII.
+    /// The status keyword that declares a station available.
+    static let onlineKeyword = "ONLINE"
+
+    /// The login **message**: three CR-terminated lines.
+    ///
+    ///     l<callsign><AC AC><password>CR
+    ///     ONLINE<version>Y(<HH:MM>)CR
+    ///     <location>CR
+    ///
+    /// ⚠️ **All three lines are required**, and the second is the one that
+    /// matters most. An earlier version sent only the first. The server still
+    /// answered `OK` — it had authenticated us — but without the `ONLINE` line
+    /// the station is never listed as available, so no node will accept a
+    /// connection from it. That is why a live `*ECHOTEST*` session went
+    /// unanswered while every step reported success: authentication is not
+    /// registration.
+    ///
+    /// The `Y` after the version is observed and its meaning is unknown; it is
+    /// emitted verbatim rather than guessed at.
     ///
     /// ⚠️ The returned `Data` contains the account password in cleartext. Write
     /// it to the stream and let it go; never log it, never keep it, and never
     /// put it in an error.
-    public static func loginLine(
+    ///
+    /// - Parameters:
+    ///   - version: this client's version, as it should appear in the
+    ///     directory listing.
+    ///   - localTime: `HH:MM`, passed in rather than read from a clock so this
+    ///     stays a pure function.
+    ///   - location: the short location string shown beside the callsign.
+    public static func loginMessage(
         callsign: String,
-        password: EchoLinkAccountPassword
+        password: EchoLinkAccountPassword,
+        version: String,
+        localTime: String,
+        location: String
     ) -> Data {
-        var line = Data()
-        line.append(0x6C)  // 'l'
-        line.append(contentsOf: callsign.utf8)
-        line.append(contentsOf: separator)
-        line.append(contentsOf: password.value.utf8)
-        line.append(0x0D)  // CR
-        return line
+        var message = Data()
+
+        message.append(0x6C)  // 'l'
+        message.append(contentsOf: callsign.utf8)
+        message.append(contentsOf: separator)
+        message.append(contentsOf: password.value.utf8)
+        message.append(0x0D)  // CR
+
+        message.append(contentsOf: "\(onlineKeyword)\(version)Y(\(localTime))".utf8)
+        message.append(0x0D)
+
+        message.append(contentsOf: location.utf8)
+        message.append(0x0D)
+
+        return message
     }
 
     /// Whether `reply` is the server's acceptance.
@@ -137,6 +175,8 @@ public actor EchoLinkDirectorySession {
     public typealias Send = @Sendable (Data) async throws -> Void
 
     private let callsign: String
+    private let version: String
+    private let location: String
     private let send: Send
     private let clock: any Clock<Duration>
     private let replyTimeout: Duration
@@ -156,11 +196,15 @@ public actor EchoLinkDirectorySession {
 
     public init<C: Clock>(
         callsign: String,
+        version: String = "0.1",
+        location: String = "",
         clock: C,
         replyTimeout: Duration = EchoLinkDirectorySession.defaultReplyTimeout,
         send: @escaping Send
     ) where C.Duration == Duration {
         self.callsign = callsign
+        self.version = version
+        self.location = location
         self.clock = clock
         self.replyTimeout = replyTimeout
         self.send = send
@@ -168,6 +212,14 @@ public actor EchoLinkDirectorySession {
 
     /// Whether the server has said `OK`.
     public var loggedIn: Bool { isLoggedIn }
+
+    /// `HH:MM` local time, which is what the observed client puts in the
+    /// `ONLINE` line.
+    static func localTimeHHMM() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: Date())
+    }
 
     /// Send the login line and wait for the server's reply.
     ///
@@ -183,7 +235,12 @@ public actor EchoLinkDirectorySession {
         loginInFlight = true
         armDeadline()
 
-        let line = EchoLinkDirectory.loginLine(callsign: callsign, password: password)
+        let line = EchoLinkDirectory.loginMessage(
+            callsign: callsign,
+            password: password,
+            version: version,
+            localTime: Self.localTimeHHMM(),
+            location: location)
         do {
             try await send(line)
         } catch {

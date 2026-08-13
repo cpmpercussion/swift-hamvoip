@@ -166,6 +166,13 @@ public actor EchoLinkClient: NetworkClient {
         /// than impersonating a client we are not.
         public var tool: String
 
+        /// The short location string shown beside the callsign in the
+        /// directory listing — the observed client sent a three-letter code.
+        public var location: String
+
+        /// The version this client reports in the directory's `ONLINE` line.
+        public var directoryVersion: String
+
         /// The operator's own EchoLink account password (FR-3.4).
         ///
         /// `nil` skips the directory login. See the note on `connect(to:)` for
@@ -200,6 +207,8 @@ public actor EchoLinkClient: NetworkClient {
             callsign: String,
             operatorName: String = "",
             tool: String = "swift-hamvoip",
+            location: String = "",
+            directoryVersion: String = "0.1",
             accountPassword: EchoLinkAccountPassword? = nil,
             directoryServer: EchoLinkPeerAddress? = nil,
             transmitTimeout: Duration = .seconds(180),
@@ -212,6 +221,8 @@ public actor EchoLinkClient: NetworkClient {
             self.callsign = callsign
             self.operatorName = operatorName
             self.tool = tool
+            self.location = location
+            self.directoryVersion = directoryVersion
             self.accountPassword = accountPassword
             self.directoryServer = directoryServer
             self.transmitTimeout = transmitTimeout
@@ -251,7 +262,8 @@ public actor EchoLinkClient: NetworkClient {
     private let elapsedSinceOrigin: @Sendable () -> Duration
     private let sleepFor: @Sendable (Duration) async throws -> Void
     private let makeDirectorySession:
-        @Sendable (String, @escaping EchoLinkDirectorySession.Send) -> EchoLinkDirectorySession
+        @Sendable (String, String, String, @escaping EchoLinkDirectorySession.Send)
+            -> EchoLinkDirectorySession
     private let makeProxyClient:
         @Sendable (String, EchoLinkProxyPassword, any StreamTransport) -> EchoLinkProxyClient
 
@@ -321,8 +333,10 @@ public actor EchoLinkClient: NetworkClient {
         let origin = clock.now
         self.elapsedSinceOrigin = { sendableClock.now.duration(to: origin) * -1 }
         self.sleepFor = { duration in try await sendableClock.sleep(for: duration) }
-        self.makeDirectorySession = { callsign, send in
-            EchoLinkDirectorySession(callsign: callsign, clock: sendableClock, send: send)
+        self.makeDirectorySession = { callsign, version, location, send in
+            EchoLinkDirectorySession(
+                callsign: callsign, version: version, location: location,
+                clock: sendableClock, send: send)
         }
         self.makeProxyClient =
             proxyClientFactory
@@ -456,11 +470,22 @@ public actor EchoLinkClient: NetworkClient {
             throw EchoLinkClientError.proxy(error)
         }
 
-        let session = makeDirectorySession(configuration.callsign) { [weak proxy] bytes in
-            // Tunnelled: the same login line, inside a 0x02 frame. EL-6's seam
-            // exists exactly so this is the only difference from direct mode.
+        let session = makeDirectorySession(
+            configuration.callsign,
+            configuration.directoryVersion,
+            configuration.location
+        ) { [weak proxy] bytes in
+            // Tunnelled: the same login message, inside a 0x02 frame. EL-6's
+            // seam exists exactly so this is the only difference from direct
+            // mode.
+            //
+            // The peer field names the directory server. An earlier version
+            // left it 0.0.0.0, reading the fixture's *inbound* frames — which
+            // are always 0.0.0.0 — as if they told us what to send. Outbound
+            // 0x02 frames carry the address, as the working client does.
             guard let proxy else { throw EchoLinkProxyError.streamClosed }
-            try await proxy.send(EchoLinkProxyFrame(type: .data, payload: bytes))
+            try await proxy.send(
+                EchoLinkProxyFrame(type: .data, peer: server, payload: bytes))
         }
         directory = session
 

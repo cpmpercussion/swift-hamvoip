@@ -276,13 +276,11 @@ final class EchoLinkClientTests: XCTestCase {
 
         let login = try EchoLinkProxyFrame.parse(writes[2]).frame
         XCTAssertEqual(login.type, .data, "the account login is tunnelled as 0x02")
-        XCTAssertEqual(
-            login.payload,
-            EchoLinkDirectory.loginLine(
-                callsign: Self.callsign,
-                password: EchoLinkAccountPassword("not-a-real-password")
-            )
-        )
+        XCTAssertEqual(login.peer, Self.directoryServer,
+                       "an outbound 0x02 names the directory server, not 0.0.0.0")
+        XCTAssertEqual(login.payload.filter { $0 == 0x0D }.count, 3,
+                       "login line, ONLINE declaration, location")
+        XCTAssertEqual(login.payload.first, 0x6C)
 
         let sdes = try EchoLinkProxyFrame.parse(writes[3]).frame
         XCTAssertEqual(sdes.type, .udpControl)

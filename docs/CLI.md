@@ -869,12 +869,17 @@ agrees with us by construction. A live run tests:
   a stutter, across a real talkspurt boundary;
 - that the SF-1 watchdog cuts transmission at its limit, as it did for M2.
 
-### First live attempt, 2026-08-13
+### Live status, 2026-08-13
 
-Proxy login and directory login both **worked on air**, against public proxies
-and the real directory server. The node handshake did not: `*ECHOTEST*` never
-answered the opening SDES. Full write-up, including what has been ruled out
-and what to try next, is in the EL-10 entry of `DEVELOPMENT-PLAN.md`.
+**The session connects.** Proxy login, directory login and the node handshake
+all work on air: `*ECHOTEST*` answers by name and its station info arrives.
+What remains for M3 is audio — run with `--audio`, press space, talk, listen.
+
+Getting there turned up a three-part bug in the directory login, the important
+part being that the `ONLINE` line is what registers a station as *available*.
+Authentication is not registration: without it the server answers `OK` and
+never lists you, so every step reports success and no node will ever answer.
+The EL-10 entry in `DEVELOPMENT-PLAN.md` has the full comparison.
 
 Two practical notes from that attempt:
 
@@ -892,8 +897,8 @@ Two practical notes from that attempt:
 Same shape as the M2 checklist in §5. Record the result on the PR.
 
 - [ ] Proxy login accepted.
-- [ ] Directory login accepted (`Directory login accepted.` in the log).
-- [ ] `*ECHOTEST*` answered the opening SDES (`Node answered: …`).
+- [x] Directory login accepted — confirmed 2026-08-13.
+- [x] `*ECHOTEST*` answered the opening SDES — confirmed 2026-08-13.
 - [ ] Audio transmitted, and heard back intelligibly in the echo.
 - [ ] Inbound talkspurts reported, with no stutter across a boundary.
 - [ ] SF-1 watchdog cut transmission at its limit.

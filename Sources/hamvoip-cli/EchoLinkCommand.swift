@@ -82,6 +82,12 @@ struct EchoLinkCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Your name, shown to the far end alongside the callsign.")
     var operatorName: String = ""
 
+    @Option(name: .long, help: ArgumentHelp(
+        """
+        Short location string shown beside your callsign in the directory         listing, e.g. a three-letter town or airport code.
+        """))
+    var location: String = ""
+
     @Option(name: .long, help: "Directory server IPv4 address, for the account login.")
     var directoryServer: String?
 
@@ -154,6 +160,7 @@ struct EchoLinkCommand: AsyncParsableCommand {
                 .uppercased(),
             passwordSource: passwordSource,
             operatorName: operatorName,
+            location: location,
             accountPassword: accountPassword,
             directoryServer: directory,
             transmitTimeout: .seconds(transmitTimeout),
@@ -215,6 +222,7 @@ private final class EchoLinkSession: @unchecked Sendable {
         callsign: String,
         passwordSource: SecretPrompt.Source,
         operatorName: String,
+        location: String,
         accountPassword: EchoLinkAccountPassword?,
         directoryServer: EchoLinkPeerAddress?,
         transmitTimeout: Duration,
@@ -232,6 +240,7 @@ private final class EchoLinkSession: @unchecked Sendable {
             configuration: EchoLinkClient.Configuration(
                 callsign: callsign,
                 operatorName: operatorName,
+                location: location,
                 accountPassword: accountPassword,
                 directoryServer: directoryServer,
                 transmitTimeout: transmitTimeout,
@@ -272,7 +281,7 @@ private final class EchoLinkSession: @unchecked Sendable {
             eventPump.cancel()
             throw ExitCode.failure
         }
-        await console.log("Connected to \(destination.node).")
+        // The .connected event already logged this through the event pump.
 
         if useAudioDevices {
             await startAudioDevices()

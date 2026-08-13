@@ -1246,7 +1246,7 @@ logged in to the directory. `--no-directory-login` exists to find out; no
 capture shows the attempt, so the flag is an experiment rather than a supported
 mode.
 
-#### First live attempt, 2026-08-13 — two steps confirmed, one outstanding
+#### Live attempts, 2026-08-13 — the session now connects
 
 Run against real public proxies and the real directory server, receive-only
 (no microphone, PTT never pressed, so nothing was transmitted).
@@ -1256,8 +1256,8 @@ Run against real public proxies and the real directory server, receive-only
 | Proxy login (EL-5) | ✅ **confirmed on air** |
 | Directory login (EL-6) | ✅ **confirmed on air** |
 | No `OPEN` for the node | ✅ the proxy accepted the session without one |
-| Node answers the SDES | ❌ `*ECHOTEST*` never replied |
-| Audio both ways | ⏸ blocked on the above |
+| Node answers the SDES | ✅ **confirmed on air** (after the fix below) |
+| Audio both ways | ⏸ needs a human with a microphone |
 
 The two confirmations are the ones that mattered. A proxy in Chile that this
 code had never met opened with `653e0d35` — an 8-byte ASCII hex nonce, exactly
@@ -1285,26 +1285,49 @@ rule is "parse permissively, emit what was observed", and the earlier version
 broke it by preferring a specification to the wire in a place the specification
 does not govern.
 
-**It did not fix the silence**, so the remaining cause is something else. What
-has been ruled out:
+It did not fix the silence. What did was found by exactly the method this
+project keeps reaching for: **capture ours and a working client's side by side,
+and diff.** The maintainer captured several of our attempts followed by one
+EchoHam session, all in one file.
 
-- *A stale peer address.* `echotest.echolink.org` resolves to `13.57.14.183`,
-  the address in the capture. It is current.
-- *A malformed opening packet.* Byte-identical to a working client's, as above.
-- *The proxy dropping our frame.* The `0x06` send returned without error.
+#### The directory login is three lines, and we were sending one
 
-Still open, in rough order of likelihood: EchoLink registration may take time to
-propagate before a node will accept a caller (the captured session had been
-registered for a while; ours calls seconds after logging in); `*ECHOTEST*` may
-have been full; or something later in the handshake is missing that no capture
-shows because the captured client had already done it.
+Our `0x02` login frame against EchoHam's:
 
-**The next step is this project's standing method: capture and compare.** A
-`tcpdump` of one of our own attempts, diffed against `echolink-oq9-2.pcap`,
-would settle it in one pass — and it needs `sudo`, so it is the maintainer's
-action, not an agent's. `experiment-data/README.md` has the recipe; add
-`--node-answer-timeout 90` to keep the attempt alive long enough to be worth
-capturing.
+|  | EchoHam | ours |
+|---|---|---|
+| line 1 | `l` + callsign + `AC AC` + password + CR | `l` + callsign + **`0A 0A`** + password + CR |
+| line 2 | `ONLINE<version>Y(<HH:MM>)` + CR | **absent** |
+| line 3 | `<location>` + CR | **absent** |
+| `0x02` peer field | the directory server | **`0.0.0.0`** |
+
+Three separate mistakes, and the middle one is why nothing worked:
+
+- **The separator is `0xAC 0xAC`, not `0x0A 0x0A`.** The OQ-9 write-up said
+  "two separator bytes" without saying which, and LF is what "separator"
+  suggests to anyone reading prose rather than octets. The server answers `OK`
+  either way, which is why the guess survived.
+- **The `ONLINE` line is what registers the station as available.**
+  *Authentication is not registration.* Without it the server accepts the
+  password, answers `OK`, and never lists the station — so no node will accept
+  a connection from it, and every step reports success while nothing works.
+  That is the whole reason `*ECHOTEST*` sat silent, and it is a good argument
+  for distrusting a success that cannot be independently observed.
+- **An outbound `0x02` names the directory server in its peer field.** The
+  fixture holds only *inbound* frames, which are always `0.0.0.0`, and an
+  earlier version read that as telling us what to send.
+
+With all three corrected the session connects, and `*ECHOTEST*` answers by
+name:
+
+    Directory login accepted.
+    Node answered: *ECHOTEST*
+    INFO oNDATACONF Audio test server [9]  <our callsign and name>  This test
+         server simply records and plays back transmissions for testing purposes.
+
+**What is left for M3 is the part no agent can do:** run it with `--audio`,
+press space, talk, and listen to the echo. `--location` and `--operator-name`
+set what the far end displays.
 
 ---
 
