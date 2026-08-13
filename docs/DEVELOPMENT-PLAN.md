@@ -80,8 +80,9 @@ remembered; if it disagrees with the repository, the repository is right.
   `CGSM` target, a test-only `TestSupport` target and five test targets. One
   Swift dependency, `swift-argument-parser`, authorised by CLI-1; `CGSM` is
   vendored C, not a dependency (EL-8, LP-4).
-- `swift build` and `swift test` are green: **870 tests, no failures**
-  (checked 2026-08-13, after EL-11). One of those is skipped unless
+- `swift build` and `swift test` are green: **872 tests, no failures**
+  (checked 2026-08-13, after the PR #18 review follow-up). One of those is
+  skipped unless
   `HAMVOIP_ECHOLINK_STATION_LIST` names a directory-list download — the EL-11
   conformance test, which cannot ship its data. CI runs the SPDX check on
   Ubuntu and build + test on macOS 14.
@@ -92,6 +93,18 @@ remembered; if it disagrees with the repository, the repository is right.
   echolink`, audio intelligible both ways. `--list` was confirmed against a
   live directory server the same day — 6389 entries, count matching — so
   nothing in Phase 6 is now unproven on air.
+
+  **One declared-but-unbuilt piece, deliberately:** `Route.direct` throws
+  `.directModeUnavailable`, because no capture of a direct (non-proxied) session
+  exists and the port assignment and socket setup are therefore unobserved. The
+  framing is known — strip a proxy frame's 9-byte header and what remains is
+  what direct mode would put on the wire. FR-3.3 requires the *proxy* and makes
+  it the default on cellular, so nothing on mobile data is blocked, and no task
+  is open for this. Building it needs an on-air direct session captured first;
+  whether that is worth doing is a maintainer call, not an oversight.
+- **Released as `v0.3.0`, 2026-08-13** — the release that carries Phase 6.
+  `v0.2.0` predates `EchoLinkKit` entirely, so Currawong's `from: 0.2.0` pin
+  resolves forward to it without a manifest change.
 - `RadioCore` and `IAX2Kit` are complete. `M17Kit` has reflector control,
   base-40 callsigns and stream-packet parse/serialise, but **no codec wiring
   and no `M17Client`** — M17-4 and M17-5 are the remaining work there.
@@ -694,17 +707,27 @@ not misconfigured. And the failure is unreadable: `hamvoip-cli` reports
 points at the socket rather than at the node's routing, and gives nobody a
 reason to try the other address.
 
-**Done when:** such a node is either handled or diagnosed clearly. That is a
-design choice for the maintainer, not something a task should presume:
+**DECIDED 2026-08-13 — diagnose it, do not handle it. The maintainer's call.**
+The connected socket stays; what changes is the error. The observed harm is an
+unreadable message rather than a lost capability — the same client completed
+registration, MD5 authentication, call setup and a clean teardown against the
+same node's other address — so the fix is to say so, not to weaken the
+transport's binding to its peer for one node on one LAN. If a second such node
+turns up, handling it can be reconsidered with better evidence about which
+Network.framework primitive fits.
 
-- *Handle it* — receive from any source rather than from one peer. PD-1 keeps
-  this inside Network.framework, so confirm which primitive actually fits
-  before writing code; it weakens the transport's binding to its peer, which
-  wants thinking about before it is traded away.
-- *Diagnose it* — keep the connected socket and turn the failure into a
-  message that names the likely cause and suggests the node's other address.
+**Done when:** a datagram arriving from an address other than the dialled peer,
+or a send failing the way this one did, produces an error that names the likely
+cause — the peer answered from a different address — and suggests trying the
+node's other address. A test drives that at the `DatagramTransport` seam.
 
-Either way AU-5 stands: no sockets in unit tests, so the mismatch must be
+The rejected alternative, recorded so it is not re-litigated from scratch:
+*handle it* — receive from any source rather than from one peer. PD-1 keeps this
+inside Network.framework, so it would need confirming which primitive actually
+fits before writing code, and it trades away the transport's binding to its
+peer.
+
+AU-5 stands: no sockets in unit tests, so the mismatch must be
 modelled at the `DatagramTransport` seam rather than reproduced against a real
 multi-homed host.
 

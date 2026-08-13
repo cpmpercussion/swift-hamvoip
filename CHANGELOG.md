@@ -8,6 +8,195 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-13
+
+EchoLink. `EchoLinkKit` goes from nothing to a complete client — proxy
+transport, directory login, RTP, GSM 06.10 and a station list — and unlike the
+M17 path at 0.2.0, **it has been used for a live QSO**. Phase 6 is complete and
+nothing in it is unproven on air.
+
+### Milestone
+
+- **M3 passed on 2026-08-13 — a human held a two-way EchoLink QSO through this
+  stack.** Through `*ECHOTEST*` via a public proxy, from `hamvoip-cli echolink`,
+  audio intelligible in both directions and teardown clean. Two checklist rows
+  are left unticked rather than assumed: the talkspurt boundary (chased and
+  fixed under EL-7, but "the QSO sounded good" is not that measurement) and the
+  SF-1 watchdog, because no over ran to three minutes. Sign-off table in
+  `docs/CLI.md`.
+- **The station list ran against a live directory server** the same day, in
+  `.directoryOnly` mode with no node session: 6386 stations plus 3 notices
+  against a declared 6389, and a count mismatch is a hard error here, so a list
+  that prints at all is one that arrived whole. This was the last thing in
+  Phase 6 resting on a single capture.
+
+### Added
+
+**`EchoLinkKit`** — EchoLink (EL-1 … EL-11, FR-3.1 … FR-3.4).
+
+- `ProxyFrame` — the 9-byte proxy header and its codec, including the
+  fragmentation the tunnel imposes: a TCP read may carry part of a frame, or
+  several, so the decoder accumulates rather than assuming datagram boundaries.
+- `EchoLinkProxyClient`, `EchoLinkAuth` — proxy login on TCP 8100. The 8-byte
+  ASCII hex nonce and `MD5("PUBLIC" || nonce)` were recovered offline from two
+  captures and then confirmed against a third, unrelated proxy in Chile that
+  this code had never met.
+- `EchoLinkDirectory` — directory login on TCP 5200 (FR-3.1). Three lines, and
+  the middle one matters: **the `ONLINE` line is what registers the station as
+  available.** Authentication is not registration — without it the server takes
+  the password, answers `OK`, and never lists the station, so no node will
+  accept a connection and every step reports success while nothing works. The
+  field separator is `0xAC 0xAC`, not `0x0A 0x0A`; the server accepts either,
+  which is why the wrong guess survived four failed sessions.
+- `EchoLinkRTP`, `EchoLinkRTCP`, `EchoLinkStreamAudio` — audio on UDP 5198 and
+  signalling on 5199 (FR-3.2), with SDES for the opening handshake and a
+  synthesised playout clock (see "Changed" and "Known limitations").
+- `GSMVoiceCodec` — GSM 06.10 as a `RadioCore.VoiceCodec` (EL-8), over a
+  vendored `CGSM` C target rather than a dependency (LP-4). 80 ms per packet,
+  four 20 ms slots.
+- `EchoLinkClient` — an actor conforming to `NetworkClient`, composing the
+  proxy link, codec, jitter buffer, watchdog (SF-1) and leveller (AU-4). Like
+  `M17Client` it is written against `VoiceCodec` and never names GSM.
+  `connect(to:mode:)` adds `.directoryOnly` — proxy login, directory login,
+  stop — so a directory query cannot fail because a node was unreachable.
+- `EchoLinkStationList`, `EchoLinkStationListReader` — the directory listing.
+  **The record's second line has fixed geometry, bracket at column 27**;
+  splitting on the first `[` is the obvious implementation and it is wrong for
+  3496 of 6441 entries, because locations beginning `[Svx] 145.6625` or
+  containing `[0/20]` are ordinary. The list is not UTF-8 (a location carries
+  `0xA0`), so it decodes as ISO-8859-1, which cannot fail.
+
+**`RadioCore`**
+
+- `StreamTransport`, the TCP seam (EL-3), with `NWStreamTransport` over
+  `Network.framework` (PD-1) and `MockStreamTransport` in `TestSupport`. EchoLink
+  needs TCP for the proxy and the directory; `DatagramTransport` remains the UDP
+  seam and neither test target opens a socket (AU-5).
+
+**`hamvoip-cli`**
+
+- `echolink` subcommand — the live harness M3 was signed off with. `--list`
+  dumps the station list and needs neither `--peer` nor `--node`;
+  `--jitter-ms` sets the playout target for one run.
+- Per-operator defaults in `~/.config/swift-hamvoip/`, so a callsign, location
+  and proxy need not be retyped.
+
+**Tests and tooling**
+
+- EchoLink proxy fixtures cut from captures of the maintainer's own sessions —
+  framing, login, audio and RTCP — replayed through `MockStreamTransport`.
+  `scripts/pcap-to-fixture.py` learned to read TCP streams (EL-1).
+- Captures holding a live account password are cited by SHA-256 rather than by
+  path, and live outside both repos. `Tests/FIXTURES.md` records the rule; it
+  is what the three `echolink-oq9*` captures established.
+
+### Changed
+
+- **The playout path, three faults deep.** All three were things `IAX2Kit` and
+  `M17Kit` already did correctly, and all three were invisible to a
+  fixture-driven test that only asks whether the right bytes came out.
+  1. The loop was `tick(); sleep(interval)`, so 20 ms frames left every 22–25 ms
+     into a device consuming them every 20 ms. It now sleeps to an absolute
+     deadline and re-anchors when it falls too far behind.
+  2. A concealed or starved tick yielded nothing, leaving a hole the device
+     underran on. Every tick now yields exactly one frame — a faded repeat for
+     up to three frames, then zeros.
+  3. `JitterBuffer`'s 60 ms default target is smaller than EchoLink's 80 ms
+     packet, so it drained to empty between packets.
+- **The stream clock takes arrival time, not sequence alone.** EchoLink's RTP
+  time-stamp is always zero, so sequence is the only ordering signal — but the
+  sender does not skip sequence numbers when it stops talking: one capture shows
+  339 packets across eleven silences over 500 ms with a single discontinuity. A
+  sequence-only clock therefore advances 80 ms across a four-second silence
+  while the playout grid advances in real time, and after one pause the buffer
+  is a pass-through with no jitter protection. `expand()` now takes `arrivedAt`
+  and treats a wall-clock gap past the threshold as a talkspurt boundary.
+  **Fixtures have no arrival times**, which is exactly why the suite hid this.
+- **The jitter buffer is sized from the arrival pattern, not the packet size**:
+  280 ms target, 240 ms floor, 500 ms ceiling. A proxied path tunnels UDP inside
+  TCP, so packets arrive in clumps — median gap 0 ms, p90 184 ms, max 375 ms,
+  worst shortfall against a 20 ms grid 265 ms, with zero loss. The talkspurt
+  threshold is 480 ms, chosen to sit in the empty valley between the two
+  populations: 105 ms above the largest bunching gap observed and 102 ms below
+  the smallest real silence. At 240 ms it sat inside the bunching population and
+  cost three spurious re-latches a minute. Both numbers are pinned by tests
+  naming the measured values.
+- **`noDelay` is now actually set.** `NWStreamTransport` reached for
+  `NWProtocolTCP.Options` through `parameters.defaultProtocolStack.internetProtocol`
+  and cast — that is the IP layer, the cast always failed, the `if let` swallowed
+  it, and every signalling connection ran with Nagle on while the comment above
+  said the opposite. The options are now built directly and the test asserts the
+  IP layer is *not* where they live, because a test that only checked "some layer
+  has noDelay" would have passed the broken version too.
+- `SecretPrompt.Source.commandLine` carries the flag it came from, now that more
+  than one secret flows through it.
+
+### Resolved
+
+- **OQ-9 — the permitted sources for EchoLink are named, and Phase 6
+  unblocks.** RFC 3550 for RTP framing and GSM 06.10 for the codec as anchors
+  *for the parts they cover*; **captures of the maintainer's own sessions are
+  the primary source**; prose write-ups only under a provenance bar high enough
+  to establish they are not derived from the implementations LP-2 forbids, which
+  in practice almost nothing clears. Ambiguities are settled by cutting another
+  capture, never by reading an implementation. Capture work spans multiple peers:
+  a single-peer capture had already produced two confident wrong conclusions
+  (SSRC always zero, sequence numbers start at zero) that a four-peer capture
+  corrected.
+- **OQ-8 — keep a local copy of the archived M17 chapter, outside both repos.**
+  The page carries no licence statement, so redistributing it in an
+  Apache-2.0 repository would assert a right nobody has checked; holding a
+  reference copy is a different act from republishing one.
+- **OQ-1's terms question is closed.** echolink.org was rechecked directly:
+  no anti-reverse-engineering clause, no client-software restriction, no linked
+  EULA, and the Download page lists third-party clients. OQ-1b still governs the
+  name — nominative use only.
+- **OQ-6 is deferred, not resolved**, until App Store submission is actually in
+  view. It sits behind UI/UX work that has not started, nothing in the library
+  changes either way, and deciding now would mean deciding twice.
+
+### Known limitations
+
+Everything under 0.2.0 still applies except the EchoLink entry. Added:
+
+- **Direct (non-proxied) EchoLink is declared but not implemented.**
+  `Route.direct` exists in the type so that adding it later is not a breaking
+  change, and it throws `.directModeUnavailable`. This is deliberate: no capture
+  of a direct session exists. The *framing* is known — proxy frames carry UDP
+  payloads verbatim, so strip the 9-byte header and what remains is what direct
+  mode would put on the wire — but the port assignment and socket setup are
+  unobserved, and building those from the plausible reading is what this
+  module's clean-room position forbids. FR-3.3 requires the proxy and makes it
+  the default on cellular, so this blocks nothing on mobile data.
+- **RFC 3550 does not describe this protocol as implemented.** The observed RTP
+  version bits are 3, not 2; the proxy framing and the directory protocol fall
+  outside it entirely. Where wire and RFC disagree the wire wins, and each
+  divergence is recorded in `docs/reference/PROVENANCE.md`. Code written
+  faithfully from the RFC would not interoperate.
+- **The jitter and talkspurt values are tuning, not protocol facts.** They are
+  measured from proxied sessions on one path, and they buy latency to pay for
+  continuity. `--jitter-ms` overrides the target; a direct path would need far
+  less.
+- **The station list format is evidenced by measurement, not by a fixture, and
+  deliberately so.** The rules are a tally over a real 6444-entry, 433 414-byte
+  download; `testTheRealListParses` re-runs that tally but **skips unless
+  `HAMVOIP_ECHOLINK_STATION_LIST` names a copy**, which is not committed and
+  cannot be, because it is other operators' data. CI never runs it. The tests CI
+  does run use invented callsigns and RFC 5737 addresses and say plainly that
+  they are not evidence.
+- **`ON` and `BUSY` are a sample, not a closed set.** Every one of 6441 stations
+  said one or the other, but that is one server on one day, so status is carried
+  as text.
+- **On-air validation is one proxy, one directory server, one node.** M3 went
+  through `*ECHOTEST*`, which returns only what you send it.
+- **A node may answer from an address other than the one dialled** (IAX-11).
+  `NWDatagramTransport` opens a connected `NWConnection`, and a multi-homed node
+  answering from its other interface produces `ENOTCONN` on the second send with
+  nothing delivered upward. Confirmed on the wire only as far as the unexpected
+  source address; the maintainer's decision is to **diagnose** this rather than
+  receive from any source, so the connected socket stays and the error message
+  is what changes. Affects IAX2, not EchoLink.
+
 ## [0.2.0] — 2026-08-11
 
 M17 stream mode. `M17Kit` goes from parsing reflector control traffic to
@@ -263,6 +452,7 @@ DMR, System Fusion (YSF), D-STAR, P25 and NXDN. All require AMBE or AMBE+2,
 which is patent-encumbered (NG-1). No MMDVM or USB modem support (NG-2), no MFi
 (NG-3), and no RF layer (NG-4).
 
-[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/cpmpercussion/swift-hamvoip/releases/tag/v0.1.0
