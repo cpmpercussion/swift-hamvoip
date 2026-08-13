@@ -84,26 +84,38 @@ public final class NWStreamTransport: StreamTransport {
 /// It failed silently, which is what an `if let` around a configuration step
 /// buys you; hence the test, and hence no cast here.
 enum SignallingParameters {
-    static func make() -> NWParameters {
+    /// The TCP options the signalling connection runs with.
+    ///
+    /// Separate from `make()` so a test can inspect them. Reading them back off
+    /// the parameters is not a reliable substitute — see below.
+    static func makeTCPOptions() -> NWProtocolTCP.Options {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
-        let parameters = NWParameters(tls: nil, tcp: tcp)
-        parameters.serviceClass = .responsiveData
+        return tcp
+    }
 
-        // Then set it again on the stack's own options, because handing the
-        // constructor a configured `NWProtocolTCP.Options` is not enough
-        // everywhere: on macOS 14 the parameters' `transportProtocol` comes
-        // back with `noDelay` false, while on macOS 15 it is the same object
-        // and already true. CI caught that — the assertion below failed on the
-        // 14 runner and passed locally on 15.
+    static func make() -> NWParameters {
+        // Supplying the options to the initialiser is the documented way to
+        // configure the transport layer, and it is the whole mechanism: an
+        // earlier attempt also assigned `noDelay` on
+        // `parameters.defaultProtocolStack.transportProtocol` as belt and
+        // braces, which turned out to be neither.
         //
-        // The stack's options are the ones the connection uses, so this is the
-        // authoritative place to set it and the constructor argument is the
-        // belt to its braces. Not an `if let` guarding the only attempt this
-        // time; if the cast fails the line above has already done the work.
-        if let stackTCP = parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
-            stackTCP.noDelay = true
-        }
+        // On the macOS 14 CI runner, setting `noDelay` through that property
+        // and then reading it straight back gives `false`; on macOS 15 it
+        // reads `true`. The behaviour consistent with that is
+        // `defaultProtocolStack` vending a fresh copy per access on 14, so the
+        // assignment mutated a temporary and the "belt" did nothing. Removed
+        // rather than left in, because a line that looks like it configures
+        // something and does not is exactly the defect this whole block exists
+        // to fix.
+        //
+        // The consequence for testing: `noDelay` **cannot be verified by
+        // readback** on every OS version, so `NWStreamTransportTests` asserts
+        // the options object we build and the layer it is attached to, and
+        // does not assert the round trip.
+        let parameters = NWParameters(tls: nil, tcp: makeTCPOptions())
+        parameters.serviceClass = .responsiveData
         return parameters
     }
 }

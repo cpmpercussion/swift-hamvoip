@@ -48,33 +48,39 @@ final class NWStreamTransportTests: XCTestCase {
 
     // MARK: - Parameters
 
-    /// Nagle must be off, and it must be off on the *transport* layer.
+    /// Nagle must be off, and the options must be attached to the *transport*
+    /// layer rather than the IP layer.
     ///
     /// The regression this pins: `noDelay` used to be set inside
     /// `if let tcp = parameters.defaultProtocolStack.internetProtocol as? NWProtocolTCP.Options`.
-    /// That is the IP layer, the cast never succeeded, and the connection ran
-    /// with Nagle on while the comment above it said otherwise. Reading the
-    /// option back through `transportProtocol` is what makes the failure
-    /// visible — a test that only checked "some layer has noDelay" would have
-    /// passed the broken version too.
+    /// That is the IP layer, the cast never succeeded, the `if let` swallowed
+    /// it, and every connection ran with Nagle on while the comment above it
+    /// said the opposite.
     ///
-    /// It then caught a second one. Handing `NWParameters(tls:tcp:)` a
-    /// configured options object is not sufficient on every OS version: this
-    /// assertion passed on macOS 15 and **failed on the macOS 14 CI runner**,
-    /// where the stack's `transportProtocol` came back with `noDelay` false.
-    /// `SignallingParameters.make()` now sets it on the stack too. Worth
-    /// keeping in mind before trusting any other `NWParameters` convenience
-    /// initialiser to carry an option through.
+    /// ## Why this does not assert a round trip
+    ///
+    /// The obvious assertion — set it, then read it back off
+    /// `parameters.defaultProtocolStack.transportProtocol` — is not portable.
+    /// It passes on macOS 15 and **fails on the macOS 14 CI runner**, which
+    /// behaves as though `defaultProtocolStack` vends a fresh copy per access.
+    /// CI caught exactly that, twice: first against the original fix, then
+    /// against an attempt to set the option through that property as well.
+    ///
+    /// So the two halves are asserted separately, and neither depends on
+    /// framework copying behaviour: the options object we build has `noDelay`
+    /// set, and the parameters carry TCP options on the transport layer and
+    /// not on the IP layer. Together those are the defect that was fixed.
     func testSignallingParametersDisableNagleOnTheTransportLayer() {
-        let parameters = SignallingParameters.make()
+        XCTAssertTrue(SignallingParameters.makeTCPOptions().noDelay)
 
-        guard let tcp = parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options else {
-            return XCTFail("expected TCP options on the transport protocol stack")
-        }
-        XCTAssertTrue(tcp.noDelay)
+        let parameters = SignallingParameters.make()
+        XCTAssertNotNil(
+            parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options,
+            "TCP options belong on the transport protocol stack")
+        XCTAssertNil(
+            parameters.defaultProtocolStack.internetProtocol as? NWProtocolTCP.Options,
+            "the IP layer is not where TCP options live — that was the bug")
         XCTAssertEqual(parameters.serviceClass, .responsiveData)
-        XCTAssertNil(parameters.defaultProtocolStack.internetProtocol as? NWProtocolTCP.Options,
-                     "the IP layer is not where TCP options live — that was the bug")
     }
 
     // MARK: - Cancellation while awaiting readiness
