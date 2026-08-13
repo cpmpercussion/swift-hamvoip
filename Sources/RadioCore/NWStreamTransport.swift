@@ -89,6 +89,21 @@ enum SignallingParameters {
         tcp.noDelay = true
         let parameters = NWParameters(tls: nil, tcp: tcp)
         parameters.serviceClass = .responsiveData
+
+        // Then set it again on the stack's own options, because handing the
+        // constructor a configured `NWProtocolTCP.Options` is not enough
+        // everywhere: on macOS 14 the parameters' `transportProtocol` comes
+        // back with `noDelay` false, while on macOS 15 it is the same object
+        // and already true. CI caught that — the assertion below failed on the
+        // 14 runner and passed locally on 15.
+        //
+        // The stack's options are the ones the connection uses, so this is the
+        // authoritative place to set it and the constructor argument is the
+        // belt to its braces. Not an `if let` guarding the only attempt this
+        // time; if the cast fails the line above has already done the work.
+        if let stackTCP = parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
+            stackTCP.noDelay = true
+        }
         return parameters
     }
 }

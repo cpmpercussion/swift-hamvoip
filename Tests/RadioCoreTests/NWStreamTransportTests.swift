@@ -57,6 +57,14 @@ final class NWStreamTransportTests: XCTestCase {
     /// option back through `transportProtocol` is what makes the failure
     /// visible — a test that only checked "some layer has noDelay" would have
     /// passed the broken version too.
+    ///
+    /// It then caught a second one. Handing `NWParameters(tls:tcp:)` a
+    /// configured options object is not sufficient on every OS version: this
+    /// assertion passed on macOS 15 and **failed on the macOS 14 CI runner**,
+    /// where the stack's `transportProtocol` came back with `noDelay` false.
+    /// `SignallingParameters.make()` now sets it on the stack too. Worth
+    /// keeping in mind before trusting any other `NWParameters` convenience
+    /// initialiser to carry an option through.
     func testSignallingParametersDisableNagleOnTheTransportLayer() {
         let parameters = SignallingParameters.make()
 
