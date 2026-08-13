@@ -880,6 +880,64 @@ final class EchoLinkClientTests: XCTestCase {
             """.utf8)
     }
 
+    /// Connects for the directory alone: no node, no SDES, no answer to inject.
+    private func connectForDirectory(_ harness: Harness) async throws {
+        let task = Task {
+            try await harness.client.connect(to: destination(), mode: .directoryOnly)
+        }
+        harness.transport.inject(Data(Self.nonce.utf8))
+        // [0] proxy login, [1] OPEN to the directory server.
+        await waitForWrites(harness, 2)
+        harness.transport.inject(try statusSuccess())
+        // [2] the tunnelled account login.
+        await waitForWrites(harness, 3)
+        harness.transport.inject(
+            EchoLinkProxyFrame(type: .data, payload: Data("OK".utf8)).encoded)
+        try await task.value
+    }
+
+    /// `.directoryOnly` must stop after the directory login. If it opened a
+    /// node session, `--list` could fail because a node was unreachable — a
+    /// failure that has nothing to do with the station list.
+    func testDirectoryOnlyModeNeverOpensANodeSession() async throws {
+        let harness = makeHarness(
+            accountPassword: EchoLinkAccountPassword("secret"),
+            directoryServer: Self.peer,
+            // Short on purpose: if this mode did wait for a node, the test
+            // fails in a second instead of hanging for twenty.
+            nodeAnswerTimeout: .seconds(1))
+        try await connectForDirectory(harness)
+
+        let connected = await harness.client.isConnected
+        XCTAssertTrue(connected)
+
+        // The opening SDES is a 0x06 frame. None may have gone out.
+        let control = harness.transport.sent
+            .compactMap { try? EchoLinkProxyFrame.parse($0) }
+            .filter { $0.frame.type == .udpControl }
+        XCTAssertTrue(control.isEmpty, "directoryOnly sent an SDES to a node")
+    }
+
+    /// And the list can then be fetched over that session.
+    func testStationListCanBeFetchedWithoutEverReachingANode() async throws {
+        let harness = makeHarness(
+            accountPassword: EchoLinkAccountPassword("secret"),
+            directoryServer: Self.peer,
+            nodeAnswerTimeout: .seconds(1))
+        try await connectForDirectory(harness)
+
+        let before = harness.transport.sentCount
+        let task = Task { try await harness.client.fetchStationList(timeout: .seconds(10)) }
+        await waitForWrites(harness, before + 1)
+        harness.transport.inject(try statusSuccess())
+        await waitForWrites(harness, before + 2)
+        harness.transport.inject(
+            EchoLinkProxyFrame(type: .data, payload: inventedList()).encoded)
+
+        let list = try await task.value
+        XCTAssertEqual(list.stations.count, 2)
+    }
+
     /// The whole point of the reader: the list arrives split across frames at
     /// boundaries that fall inside records. Splitting mid-field here is what
     /// the real 129-frame download did.

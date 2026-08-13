@@ -994,9 +994,13 @@ QSO. Needs the account login, so it cannot be combined with
 swift run hamvoip-cli echolink \
     --proxy <proxy host> \
     --directory-server <directory server IPv4> \
-    --peer 13.57.14.183 --node '*ECHOTEST*' \
     --list | less
 ```
+
+**No `--peer` and no `--node`.** `--list` stops after the directory login and
+never opens a node session, so it does not need a node to reach — which matters
+for the first live run: if it had to reach one, a station-list query could fail
+for a reason that is not about the station list.
 
 One station a line, tab-separated: callsign, node number, status, address,
 location. Around 6500 lines, so pipe it. Lines beginning `#` are the server's

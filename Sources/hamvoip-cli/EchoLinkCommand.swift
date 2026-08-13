@@ -72,8 +72,12 @@ struct EchoLinkCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Proxy password. 'PUBLIC' on a public proxy, and not a secret.")
     var proxyPassword: String = EchoLinkProxyPassword.publicProxy.value
 
-    @Option(name: .long, help: "The node's IPv4 address, dotted quad.")
-    var peer: String
+    @Option(name: .long, help: ArgumentHelp(
+        """
+        The node's IPv4 address, dotted quad. Required for a QSO; not needed \
+        with --list, which talks only to the directory server.
+        """))
+    var peer: String?
 
     @Option(name: .long, help: "The node's callsign, for display. E.g. *ECHOTEST*")
     var node: String = "(unnamed node)"
@@ -134,8 +138,20 @@ struct EchoLinkCommand: AsyncParsableCommand {
     var list: Bool = false
 
     func run() async throws {
-        guard let peerAddress = EchoLinkPeerAddress(peer) else {
-            throw ValidationError("--peer must be a dotted-quad IPv4 address, got '\(peer)'")
+        // --list never opens a node session, so it needs no node. Standing in
+        // 0.0.0.0 rather than making the destination's field optional keeps
+        // that type honest: every QSO has a peer, and this is not one.
+        let peerAddress: EchoLinkPeerAddress
+        if list {
+            peerAddress = EchoLinkPeerAddress(0, 0, 0, 0)
+        } else {
+            guard let peer else {
+                throw ValidationError("--peer is required (the node's IPv4 address).")
+            }
+            guard let parsed = EchoLinkPeerAddress(peer) else {
+                throw ValidationError("--peer must be a dotted-quad IPv4 address, got '\(peer)'")
+            }
+            peerAddress = parsed
         }
         guard transmitTimeout > 0 else {
             throw ValidationError("--transmit-timeout must be positive")
@@ -177,7 +193,7 @@ struct EchoLinkCommand: AsyncParsableCommand {
         let session = try EchoLinkSession(
             destination: EchoLinkDestination(
                 peer: peerAddress,
-                node: node,
+                node: list ? "(directory)" : node,
                 route: .proxy(
                     host: proxy,
                     port: proxyPort,
@@ -306,11 +322,19 @@ private final class EchoLinkSession: @unchecked Sendable {
         // live attempt.
         let eventPump = Task { await self.runEventLoop() }
 
-        await console.log(
-            "Connecting to \(destination.node) at \(destination.peer) "
-                + "via proxy as \(callsign)…")
+        if listStationsOnly {
+            await console.log("Connecting to the directory server via proxy as \(callsign)…")
+        } else {
+            await console.log(
+                "Connecting to \(destination.node) at \(destination.peer) "
+                    + "via proxy as \(callsign)…")
+        }
         do {
-            try await client.connect(to: destination)
+            // --list stops after the directory login: the list comes from the
+            // directory server, so making it reach a node first would let a
+            // station-list query fail for reasons that are not about the list.
+            try await client.connect(
+                to: destination, mode: listStationsOnly ? .directoryOnly : .qso)
         } catch {
             // The event pump has been running since before connect, so the
             // steps that DID succeed are already on screen above this line.

@@ -329,6 +329,15 @@ public actor EchoLinkClient: NetworkClient {
         case idle, connecting, connected
     }
 
+    /// How far `connect` should go.
+    public enum SessionMode: Sendable, Equatable {
+        /// The full sequence, ending in a node session that can carry audio.
+        case qso
+        /// Proxy login and directory login only — no node, no audio. For
+        /// `fetchStationList`.
+        case directoryOnly
+    }
+
     private var phase: Phase = .idle
     private var destination: EchoLinkDestination?
     private var transport: (any StreamTransport)?
@@ -479,7 +488,28 @@ public actor EchoLinkClient: NetworkClient {
     /// established** — no capture shows the attempt — so this is offered as a
     /// deliberate experiment, not as a supported mode. If the node does not
     /// answer, `.nodeDidNotAnswer` is the likely result.
+    ///
+    /// ## Connecting for the directory alone
+    ///
+    /// `mode: .directoryOnly` stops after step 4: proxy login, directory
+    /// login, and no node session. It exists so `fetchStationList` can be run
+    /// without first having to reach a node — the list comes from the
+    /// directory server and has nothing to do with any node, so requiring one
+    /// would mean a station-list query could fail for reasons that are not
+    /// about the station list. No audio flows in this mode and `state` stays
+    /// `.receiving` only in the nominal sense; do not transmit on it.
+    /// `NetworkClient`'s connect: the full sequence, ending in a node session.
+    ///
+    /// A separate method rather than a defaulted parameter on `connect(to:mode:)`
+    /// — a defaulted extra argument does not satisfy the protocol requirement.
     public func connect(to destination: EchoLinkDestination) async throws {
+        try await connect(to: destination, mode: .qso)
+    }
+
+    public func connect(
+        to destination: EchoLinkDestination,
+        mode: SessionMode
+    ) async throws {
         guard phase == .idle else { throw EchoLinkClientError.alreadyConnected }
         guard case .proxy(_, _, let password) = destination.route else {
             throw EchoLinkClientError.directModeUnavailable
@@ -519,16 +549,20 @@ public actor EchoLinkClient: NetworkClient {
 
         do {
             try await logInToDirectoryIfConfigured(proxy: proxy)
-            try await openNodeSession(proxy: proxy, destination: destination)
+            if mode == .qso {
+                try await openNodeSession(proxy: proxy, destination: destination)
+            }
         } catch {
             await releaseSession()
             throw error
         }
 
         phase = .connected
-        setState(.receiving)
-        startPlayoutLoop()
-        emit(.connected(node: destination.node))
+        if mode == .qso {
+            setState(.receiving)
+            startPlayoutLoop()
+            emit(.connected(node: destination.node))
+        }
     }
 
     /// Steps 2–4: tunnel the account login to the directory server.

@@ -1449,6 +1449,13 @@ Done: the parser, an incremental reader (the download splits records *and*
 fields across frames — one 16-byte frame carried `"N 12:42]\n730991\n"`),
 `EchoLinkClient.fetchStationList()`, and `hamvoip-cli echolink --list`.
 
+`--list` connects in `.directoryOnly` mode: proxy login, directory login, and
+**no node session**. That is not a convenience. The list comes from the
+directory server and has nothing to do with any node, so a `--list` that had to
+reach one first could fail for a reason that is not about the list — which is
+exactly the confound to avoid on the run that first tests it. It therefore
+needs no `--peer` and no `--node`.
+
 **Not done: the fetch has never run against a live server.** The parse is
 conformance-tested against a real download; the request is not. `--list` says so
 in its banner. `fetchStationList` is deliberately **not** called by `connect` —
