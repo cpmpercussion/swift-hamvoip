@@ -178,6 +178,99 @@ public enum IAX2ClientEvent: Sendable, Equatable {
     case disconnected(IAX2CallTermination?)
 }
 
+// MARK: - Translation onto RadioCore's mode-agnostic events
+
+extension IAX2ClientEvent {
+    /// This event as `NetworkClient` sees it (RC-10).
+    ///
+    /// Total by construction — every case maps — so an application that reads
+    /// only ``IAX2Client/radioEvents`` misses nothing that happened, only some
+    /// of the RFC 5456 vocabulary in which it happened. `IAX2Client.events`
+    /// remains the place to go for that.
+    public var radioEvent: RadioEvent {
+        switch self {
+        // The negotiated codec is deliberately dropped: there is exactly one
+        // (§8.7, FR-1.1), and a mode-agnostic event has nowhere honest to put a
+        // `MediaFormat`. `IAX2Client.negotiatedFormat` still answers the
+        // question for anyone who has a reason to ask it.
+        case .connected:
+            return .connected
+        case .transmitting:
+            return .transmitting
+        case .receiving:
+            return .receiving
+        case .transmitWatchdogExpired(let timeout):
+            return .transmitWatchdogExpired(timeout)
+        case .dtmf(let digit):
+            return .dtmfReceived(digit.character)
+        case .mediaRejected(let rejection):
+            return .incomingAudioDropped(rejection.radioAudioIssue)
+        case .disconnected(let termination):
+            // No termination means the transport went away underneath the call
+            // — the call itself never reported an ending.
+            return .disconnected(termination?.radioDisconnectReason ?? .transportFailure())
+        }
+    }
+}
+
+extension IAX2CallTermination {
+    /// This termination as `NetworkClient` sees it (RC-10).
+    public var radioDisconnectReason: RadioDisconnectReason {
+        switch self {
+        case .localHangup:
+            // The cause on a local HANGUP is ours; telling the operator what we
+            // told the node is not news.
+            return .localRequest
+        case .remoteHangup(let cause, let code):
+            return .remoteRequest(detail: Self.radioDetail(cause, code))
+        case .rejected(let cause, let code):
+            return .rejected(detail: Self.radioDetail(cause, code))
+        case .invalidated:
+            return .protocolFailure(detail: "the node sent INVAL (RFC 5456 §6.9.2)")
+        case .connectTimedOut(let timeout):
+            return .connectTimedOut(timeout)
+        case .channelFailed(.retriesExhausted):
+            // The node stopped acknowledging. To an operator that is not a
+            // "channel failure", it is the far end having gone quiet.
+            return .linkTimedOut(nil)
+        case .channelFailed(let error):
+            return .transportFailure(detail: "\(error)")
+        case .protocolError(let error):
+            return .protocolFailure(detail: "\(error)")
+        case .closed:
+            return .localRequest
+        }
+    }
+
+    /// The CAUSE (`0x16`) and CAUSECODE (`0x2a`) IEs as one line of prose, or
+    /// `nil` when the node gave neither. `nil` rather than "no cause given",
+    /// because a `RadioDisconnectReason` already renders that case itself.
+    private static func radioDetail(_ cause: String?, _ code: UInt8?) -> String? {
+        switch (cause, code) {
+        case (let cause?, let code?): return "\(cause) (cause code \(code))"
+        case (let cause?, nil): return cause
+        case (nil, let code?): return "cause code \(code)"
+        case (nil, nil): return nil
+        }
+    }
+}
+
+extension IAX2VoiceReceiver.Rejection {
+    /// This rejection as `NetworkClient` sees it (RC-10).
+    public var radioAudioIssue: RadioAudioIssue {
+        switch self {
+        case .unsupportedFormat:
+            return .unsupportedFormat(detail: description)
+        // Not-audio, an unpinned codec, a wrong payload length and a
+        // pre-origin time-stamp are all "arrived, could not be turned into
+        // samples". The distinction between them is an RFC 5456 distinction and
+        // stays on `IAX2Client.events`.
+        case .notAudio, .codecNotPinned, .wrongPayloadLength, .timestampPrecedesCallOrigin:
+            return .undecodable(detail: description)
+        }
+    }
+}
+
 // MARK: - IAX2Client
 
 /// An AllStarLink / IAX2 connection, whole (FR-1.2).
@@ -318,9 +411,27 @@ public actor IAX2Client: NetworkClient {
     /// Single-consumer, like `DatagramTransport.incoming`.
     public nonisolated let receivedAudio: AsyncStream<[Int16]>
 
-    /// Connection lifecycle, watchdog expiry and inbound DTMF, in order.
-    /// Buffered without limit; finished by ``disconnect()``.
+    /// Connection lifecycle, watchdog expiry and inbound DTMF, in order, in
+    /// RFC 5456's vocabulary. Buffered without limit; finished by
+    /// ``disconnect()``.
+    ///
+    /// This is the *detailed* stream, for a caller that wants to know which
+    /// message ended the call or exactly why a frame would not decode. An
+    /// application that only wants to run a radio should read ``radioEvents``
+    /// instead — the two carry the same events, in the same order.
+    ///
+    /// Single-consumer, so a caller that wants both must genuinely want both:
+    /// an `AsyncStream` splits its elements between iterators.
     public nonisolated let events: AsyncStream<IAX2ClientEvent>
+
+    /// `NetworkClient`'s mode-agnostic event stream: every ``events`` element,
+    /// in the same order, translated by ``IAX2ClientEvent/radioEvent``.
+    ///
+    /// A separate stream rather than a mapped view of ``events``, because
+    /// `AsyncStream` is single-consumer: mapping would mean the app and the
+    /// diagnostic logger stealing elements from each other. Both are fed from
+    /// the same synchronous `emit`, so ordering between them cannot skew.
+    public nonisolated let radioEvents: AsyncStream<RadioEvent>
 
     /// `NetworkClient`'s transmit state.
     ///
@@ -400,6 +511,7 @@ public actor IAX2Client: NetworkClient {
     private nonisolated let stateBox = TransmitStateBox()
     private nonisolated let audioContinuation: AsyncStream<[Int16]>.Continuation
     private nonisolated let eventContinuation: AsyncStream<IAX2ClientEvent>.Continuation
+    private nonisolated let radioEventContinuation: AsyncStream<RadioEvent>.Continuation
 
     // MARK: Init
 
@@ -457,6 +569,13 @@ public actor IAX2Client: NetworkClient {
         }
         self.events = events
         self.eventContinuation = escapedEvents
+
+        var escapedRadioEvents: AsyncStream<RadioEvent>.Continuation!
+        let radioEvents = AsyncStream<RadioEvent>(bufferingPolicy: .unbounded) { continuation in
+            escapedRadioEvents = continuation
+        }
+        self.radioEvents = radioEvents
+        self.radioEventContinuation = escapedRadioEvents
     }
 
     /// The production transport: UDP to the destination's host and port.
@@ -591,8 +710,8 @@ public actor IAX2Client: NetworkClient {
         emit(.connected(format: await call.negotiatedFormat))
     }
 
-    /// Hangs up, tears everything down and **finishes ``receivedAudio`` and
-    /// ``events``**.
+    /// Hangs up, tears everything down and **finishes ``receivedAudio``,
+    /// ``events`` and ``radioEvents``**.
     ///
     /// Terminal, and idempotent. A finished `AsyncStream` cannot be reopened,
     /// so a client is done once this returns; build a new one to reconnect.
@@ -612,6 +731,7 @@ public actor IAX2Client: NetworkClient {
         setState(.idle)
         audioContinuation.finish()
         eventContinuation.finish()
+        radioEventContinuation.finish()
     }
 
     // MARK: - NetworkClient: transmitting
@@ -689,6 +809,25 @@ public actor IAX2Client: NetworkClient {
         let timestamp = transmitTimestampBase &+ transmitFrameIndex &* step
         transmitFrameIndex &+= 1
         return try await voice.send(pcm: pcm, timestamp: timestamp)
+    }
+
+    /// `NetworkClient`'s ``send(pcm:)``: the same operation, discarding the
+    /// frame.
+    ///
+    /// It exists as a second overload because a Swift witness must match its
+    /// requirement's return type exactly — a `-> IAX2VoiceFrame?` method cannot
+    /// satisfy a `-> Void` requirement — and the frame-returning form is worth
+    /// keeping: it is how a caller sees whether a Mini Frame or a full Voice
+    /// frame went out, which is exactly what the CLI harness's level meter and
+    /// the §6.10 resync tests read.
+    ///
+    /// ⚠️ The two overloads differ only in return type, so a call on the
+    /// **concrete** type that discards the result is ambiguous. Say which you
+    /// mean — `let _: IAX2VoiceFrame? = try await client.send(pcm: frame)`, or
+    /// call it through the protocol, where only this one is visible. Nothing
+    /// is ambiguous at a call site that uses the result.
+    public func send(pcm: [Int16]) async throws {
+        let _: IAX2VoiceFrame? = try await send(pcm: pcm)
     }
 
     /// Sends one DTMF digit (§8.2.1, FR-1.5) — how an AllStar node is commanded
@@ -902,8 +1041,14 @@ public actor IAX2Client: NetworkClient {
         stateBox.value = next
     }
 
+    /// Publishes one event on **both** streams, detailed first.
+    ///
+    /// Synchronous and `nonisolated`-safe by construction: `yield` on an
+    /// `AsyncStream.Continuation` never suspends, so there is no await between
+    /// the two and no interleaving can reorder them relative to each other.
     private func emit(_ event: IAX2ClientEvent) {
         eventContinuation.yield(event)
+        radioEventContinuation.yield(event.radioEvent)
     }
 
     /// Turns a call-setup failure into something an application can show.

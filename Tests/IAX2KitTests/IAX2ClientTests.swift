@@ -332,7 +332,10 @@ final class IAX2ClientTests: XCTestCase {
 
         let pcm = tone()
         for frame in pcm {
-            _ = try await harness.client.send(pcm: frame)
+            // The `NetworkClient` overload — the one an application calls. See
+            // `IAX2Client.send(pcm:)`: the two differ only in return type, so a
+            // discarded result on the concrete type needs the annotation.
+            let _: Void = try await harness.client.send(pcm: frame)
         }
         await harness.client.stopTransmit()
         XCTAssertEqual(harness.client.state, .receiving)
@@ -480,7 +483,7 @@ final class IAX2ClientTests: XCTestCase {
         // And it genuinely stopped transmitting: audio offered now is dropped
         // rather than keyed onto the air.
         let before = harness.transport.sentCount
-        let frame = try await harness.client.send(pcm: tone(frames: 1)[0])
+        let frame: IAX2VoiceFrame? = try await harness.client.send(pcm: tone(frames: 1)[0])
         XCTAssertNil(frame, "audio after expiry is not sent")
         await settle()
         XCTAssertEqual(
@@ -800,7 +803,7 @@ final class IAX2ClientTests: XCTestCase {
         try await connect(harness)
         harness.transport.clearSent()
 
-        let frame = try await harness.client.send(pcm: tone(frames: 1)[0])
+        let frame: IAX2VoiceFrame? = try await harness.client.send(pcm: tone(frames: 1)[0])
         XCTAssertNil(frame)
         await settle()
         XCTAssertEqual(harness.transport.sentCount, 0)
