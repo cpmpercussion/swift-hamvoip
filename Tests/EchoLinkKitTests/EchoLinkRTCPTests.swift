@@ -135,6 +135,61 @@ final class EchoLinkRTCPTests: XCTestCase {
         XCTAssertTrue(name.hasPrefix("AVERYLONGCALLSIGNINDEED"))
     }
 
+    func testSDESPaddingFollowsBothObservedSendersNotTheRFCMinimum() {
+        // The rule is: pad the chunk (SSRC + items) to a 32-bit boundary, then
+        // append four more null octets.
+        //
+        // This is NOT RFC 3550 §6.5's minimum, and the difference is four bytes
+        // that a live session turned on. Worked through on the two senders in
+        // the captures, by chunk size:
+        //
+        //     EchoHam     chunk 75 -> align 76 -> +4 = 80   (observed 80)
+        //     thebridge   chunk 84 -> align 84 -> +4 = 88   (observed 88)
+        //
+        // The RFC minimum (">=1 null, then align") gives 76 for the first,
+        // which no observed sender produced. One rule fits both; the minimum
+        // fits only one — which is why an earlier version's "they disagree, so
+        // the region is slack" reading was wrong.
+        //
+        // Item bytes are 2 + text for each item, so these two cases are
+        // reconstructed by choosing texts of the right lengths.
+        func bodyLength(items: [EchoLinkSDESItem]) -> Int {
+            let encoded = EchoLinkRTCPCompound([.sourceDescription(ssrc: 0, items: items)]).encoded
+            let words = Int(encoded[2]) << 8 | Int(encoded[3])
+            return (words + 1) * 4 - 4  // total minus the 4-byte header
+        }
+
+        // 71 bytes of items -> chunk 75 -> body must be 80.
+        let seventyOne = [
+            EchoLinkSDESItem(.cname, String(repeating: "a", count: 33)),   // 35
+            EchoLinkSDESItem(.name, String(repeating: "b", count: 34)),    // 36
+        ]
+        XCTAssertEqual(bodyLength(items: seventyOne), 80, "EchoHam's case")
+
+        // 80 bytes of items -> chunk 84 -> body must be 88.
+        let eighty = [
+            EchoLinkSDESItem(.cname, String(repeating: "a", count: 38)),   // 40
+            EchoLinkSDESItem(.name, String(repeating: "b", count: 38)),    // 40
+        ]
+        XCTAssertEqual(bodyLength(items: eighty), 88, "thebridge's case")
+    }
+
+    func testEveryEncodedSDESLeavesAtLeastFourTrailingNulls() {
+        // The property the rule above guarantees, stated directly so it holds
+        // for inputs the two worked examples do not cover.
+        for textLength in 0 ... 12 {
+            let compound = EchoLinkRTCPCompound([
+                .sourceDescription(
+                    ssrc: 0,
+                    items: [EchoLinkSDESItem(.name, String(repeating: "x", count: textLength))])
+            ])
+            let encoded = compound.encoded
+            XCTAssertEqual(encoded.count % 4, 0, "whole words")
+            XCTAssertEqual(Array(encoded.suffix(4)), [0, 0, 0, 0],
+                           "text length \(textLength): four trailing nulls")
+        }
+    }
+
     func testSessionClosingIsAReceiverReportAndABye() {
         let compound = EchoLinkRTCPCompound.sessionClosing()
         XCTAssertTrue(compound.isGoodbye)

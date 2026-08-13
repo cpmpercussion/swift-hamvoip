@@ -1246,6 +1246,66 @@ logged in to the directory. `--no-directory-login` exists to find out; no
 capture shows the attempt, so the flag is an experiment rather than a supported
 mode.
 
+#### First live attempt, 2026-08-13 — two steps confirmed, one outstanding
+
+Run against real public proxies and the real directory server, receive-only
+(no microphone, PTT never pressed, so nothing was transmitted).
+
+| Step | Result |
+|---|---|
+| Proxy login (EL-5) | ✅ **confirmed on air** |
+| Directory login (EL-6) | ✅ **confirmed on air** |
+| No `OPEN` for the node | ✅ the proxy accepted the session without one |
+| Node answers the SDES | ❌ `*ECHOTEST*` never replied |
+| Audio both ways | ⏸ blocked on the above |
+
+The two confirmations are the ones that mattered. A proxy in Chile that this
+code had never met opened with `653e0d35` — an 8-byte ASCII hex nonce, exactly
+as EL-5 predicted — and accepted `MD5("PUBLIC" ‖ nonce)`. So the digest
+construction recovered by offline search against two captures also works
+against a third, unrelated proxy. The directory server then accepted the
+operator's real account password. Those were the two largest unknowns in
+Phase 6.
+
+**A real bug found and fixed by the attempt: SDES padding.** The encoder
+followed RFC 3550 §6.5's minimum, on the reasoning that the two observed
+senders disagreed about the padding and the region was therefore slack. That
+reasoning was wrong — they follow the same rule, and it is not the RFC's:
+
+    pad the chunk to a 32-bit boundary, then append four more null octets
+
+    EchoHam     chunk 75 -> align 76 -> +4 = 80   (observed 80)
+    thebridge   chunk 84 -> align 84 -> +4 = 88   (observed 88)
+
+The RFC minimum gives 76 for the first, which no observed sender produced. With
+the rule corrected, what we emit is **byte-for-byte identical** to a captured
+working client for the same inputs — verified by diff, and pinned by
+`testSDESPaddingFollowsBothObservedSendersNotTheRFCMinimum`. The module's own
+rule is "parse permissively, emit what was observed", and the earlier version
+broke it by preferring a specification to the wire in a place the specification
+does not govern.
+
+**It did not fix the silence**, so the remaining cause is something else. What
+has been ruled out:
+
+- *A stale peer address.* `echotest.echolink.org` resolves to `13.57.14.183`,
+  the address in the capture. It is current.
+- *A malformed opening packet.* Byte-identical to a working client's, as above.
+- *The proxy dropping our frame.* The `0x06` send returned without error.
+
+Still open, in rough order of likelihood: EchoLink registration may take time to
+propagate before a node will accept a caller (the captured session had been
+registered for a while; ours calls seconds after logging in); `*ECHOTEST*` may
+have been full; or something later in the handshake is missing that no capture
+shows because the captured client had already done it.
+
+**The next step is this project's standing method: capture and compare.** A
+`tcpdump` of one of our own attempts, diffed against `echolink-oq9-2.pcap`,
+would settle it in one pass — and it needs `sudo`, so it is the maintainer's
+action, not an agent's. `experiment-data/README.md` has the recipe; add
+`--node-answer-timeout 90` to keep the attempt alive long enough to be worth
+capturing.
+
 ---
 
 ### EL-11 — Station list ⛔ gate: needs a capture the maintainer must cut

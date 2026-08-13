@@ -95,6 +95,12 @@ struct EchoLinkCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Transmit watchdog timeout in seconds (SF-1).")
     var transmitTimeout: Int = 180
 
+    @Option(name: .long, help: ArgumentHelp(
+        """
+        How long to keep resending the opening SDES while waiting for the node         to answer, in seconds.
+        """))
+    var nodeAnswerTimeout: Int = 15
+
     @Option(name: .long, help: "End the session after this many seconds.")
     var duration: Int?
 
@@ -151,6 +157,7 @@ struct EchoLinkCommand: AsyncParsableCommand {
             accountPassword: accountPassword,
             directoryServer: directory,
             transmitTimeout: .seconds(transmitTimeout),
+            nodeAnswerTimeout: .seconds(nodeAnswerTimeout),
             useAudioDevices: audio,
             duration: duration.map { .seconds($0) }
         )
@@ -211,6 +218,7 @@ private final class EchoLinkSession: @unchecked Sendable {
         accountPassword: EchoLinkAccountPassword?,
         directoryServer: EchoLinkPeerAddress?,
         transmitTimeout: Duration,
+        nodeAnswerTimeout: Duration,
         useAudioDevices: Bool,
         duration: Duration?
     ) throws {
@@ -226,7 +234,8 @@ private final class EchoLinkSession: @unchecked Sendable {
                 operatorName: operatorName,
                 accountPassword: accountPassword,
                 directoryServer: directoryServer,
-                transmitTimeout: transmitTimeout
+                transmitTimeout: transmitTimeout,
+                nodeAnswerTimeout: nodeAnswerTimeout
             ),
             clock: ContinuousClock()
         )

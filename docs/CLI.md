@@ -869,6 +869,24 @@ agrees with us by construction. A live run tests:
   a stutter, across a real talkspurt boundary;
 - that the SF-1 watchdog cuts transmission at its limit, as it did for M2.
 
+### First live attempt, 2026-08-13
+
+Proxy login and directory login both **worked on air**, against public proxies
+and the real directory server. The node handshake did not: `*ECHOTEST*` never
+answered the opening SDES. Full write-up, including what has been ruled out
+and what to try next, is in the EL-10 entry of `DEVELOPMENT-PLAN.md`.
+
+Two practical notes from that attempt:
+
+- **Public proxies are single-user and heavily contended.** A proxy listed
+  `Ready` is often busy by the time you connect, and a busy one accepts the TCP
+  connection and then hangs up before sending its nonce — which the client
+  reports as `proxy: the proxy stream closed`. That is not a fault. The list is
+  at `http://www.echolink.org/proxylist.jsp`; probing a candidate by reading
+  its 8-byte greeting takes a second and saves a confusing failure.
+- **`--node-answer-timeout`** controls how long the opening SDES is resent
+  while waiting. Raise it when capturing an attempt for analysis.
+
 ### The M3 sign-off checklist
 
 Same shape as the M2 checklist in §5. Record the result on the PR.

@@ -217,18 +217,34 @@ public struct EchoLinkRTCPCompound: Equatable, Sendable {
                 body.append(UInt8(text.count))
                 body.append(contentsOf: text)
             }
-            // RFC 3550 §6.5: the item list is terminated by at least one null
-            // octet, then padded to the next 32-bit boundary.
+            // Pad the chunk to a 32-bit boundary, then append four more null
+            // octets — a terminating empty chunk.
             //
-            // The observed senders both pad four bytes further than that
-            // minimum, and thebridge leaves a stray 0x02 in the padding — which
-            // is itself the evidence that this region is slack, since two
-            // implementations that interoperate disagree about it. So the rule
-            // below is the RFC's rather than either sender's: it is the only
-            // one that can be stated, and the padding sits inside the declared
-            // length where a length-driven parser never looks.
-            body.append(0)
-            while (body.count + 4) % 4 != 0 { body.append(0) }
+            // ⚠️ This is NOT the minimal reading of RFC 3550 §6.5 ("terminated
+            // by one or more null octets… padded to the next 32-bit boundary"),
+            // and the difference is four bytes that matter.
+            //
+            // An earlier version of this file did follow the RFC minimum,
+            // reasoning that the two observed senders disagreed about the
+            // padding and that the region was therefore slack. **That reasoning
+            // was wrong**: they do not disagree, they both do this. Worked
+            // through on the chunk sizes:
+            //
+            //     EchoHam     chunk 75 -> align 76 -> +4 = 80   (observed 80)
+            //     thebridge   chunk 84 -> align 84 -> +4 = 88   (observed 88)
+            //
+            // The RFC-minimal rule gives 76 for the first, which no observed
+            // sender produced. One rule fits both; the minimum fits one.
+            //
+            // It was the *only* byte-level difference between what we emitted
+            // and what a known-working client emits for the same inputs, and it
+            // is what a live *ECHOTEST* session turned on — see the M3 notes.
+            // This module's own rule is "parse permissively, emit what was
+            // observed", and the earlier version broke it by preferring a spec
+            // to the wire in a place the spec does not actually govern.
+            let chunk = body.count
+            body.append(contentsOf: [UInt8](repeating: 0, count: (4 - chunk % 4) % 4))
+            body.append(contentsOf: [UInt8](repeating: 0, count: 4))
 
         case .goodbye(let ssrc, let reason):
             payloadType = EchoLinkRTCPPacket.goodbyeType
