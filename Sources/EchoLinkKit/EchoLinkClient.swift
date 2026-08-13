@@ -705,7 +705,12 @@ public actor EchoLinkClient: NetworkClient {
             switch EchoLinkAudioChannelMessage.classify(frame.payload) {
             case .audio(let packet):
                 noteNodeAnswer(named: nil)
-                let reception = inbound.receive(packet)
+                // The arrival time matters: EchoLink's timestamp is always zero
+                // and its sender does not skip sequence numbers across a pause,
+                // so without a wall clock the stream clock drifts behind real
+                // time and the jitter buffer stops buffering. See
+                // `EchoLinkSequenceExpander.expand`.
+                let reception = inbound.receive(packet, arrivedAt: elapsedSinceOrigin())
                 if reception.isNewTalkspurt { emit(.talkspurtStarted) }
                 for timed in reception.frames { buffer.push(timed) }
             case .stationInfo(let text):

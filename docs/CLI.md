@@ -916,6 +916,21 @@ all now fixed. If it comes back, they are the places to look:
   `EchoLinkClient.defaultJitterBuffer` targets 280 ms with a 160 ms floor and a
   500 ms ceiling, and adapts within that range.
 
+- **A stream clock that ignored real time.** The subtlest of the four, and the
+  one that made the others look unfixable. EchoLink's RTP timestamp is always
+  zero, so the sequence number is the only ordering signal — but **the sender
+  does not skip sequence numbers across a pause.** It stops, then resumes with
+  `seq + 1`. The same live session shows 339 packets spanning eleven silences
+  of half a second or more with exactly *one* sequence discontinuity.
+
+  A sequence-only clock therefore advances 80 ms across a four-second silence,
+  while `JitterBuffer`'s playout grid advances in real time. After the first
+  pause the two have diverged for good, every arriving frame looks like it
+  belongs in the distant past, and the buffer degenerates into a pass-through
+  with no jitter protection at all — which is why making it deeper stopped
+  helping. `EchoLinkSequenceExpander.expand` now takes the arrival time and
+  treats a wall-clock pause as a talkspurt boundary.
+
 Depths are tuning values, not protocol facts, and they buy latency to pay for
 continuity. `--jitter-ms` sets the target for one run: raise it if the audio
 still drops out, lower it if the delay is annoying. A direct (non-proxied) path

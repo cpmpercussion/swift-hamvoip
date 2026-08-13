@@ -97,12 +97,59 @@ public struct EchoLinkSequenceExpander: Sendable, Equatable {
 
     public init() {}
 
-    /// The stream time for `sequence`.
+    /// How far arrival time may run ahead of what the sequence implies before
+    /// the gap is read as a pause rather than as jitter.
     ///
-    /// Late packets expand to where they *belong*, below the reference, rather
-    /// than being dragged forward — which is what lets `JitterBuffer` recognise
-    /// them as the reordered arrivals they are and place them correctly.
-    public mutating func expand(_ sequence: UInt16) -> Expansion {
+    /// Two packets' worth. Below that it is ordinary bunching — which on a
+    /// proxied path is constant — and re-latching on it would fight the jitter
+    /// buffer instead of helping it.
+    public static let arrivalPauseThreshold: Duration = .milliseconds(240)
+
+    /// Arrival time of the newest packet accepted, when the caller supplies it.
+    private var newestArrival: Duration?
+
+    /// The stream time for `sequence`, given when the packet arrived.
+    ///
+    /// ⚠️ **`arrivedAt` is not optional decoration — without it this clock
+    /// drifts away from real time and silently disables the jitter buffer.**
+    ///
+    /// EchoLink's RTP timestamp is always zero, so the sequence number is the
+    /// only ordering signal. But the sender does *not* skip sequence numbers
+    /// across a pause: it stops sending, and resumes with `seq + 1`. Measured
+    /// on a live session, 339 packets spanned eleven silences over half a
+    /// second each with exactly one sequence discontinuity between them.
+    ///
+    /// A purely sequence-based clock therefore advances 80 ms across a
+    /// four-second silence. `JitterBuffer`'s playout grid advances in real
+    /// time, so after the first pause the two have diverged permanently, every
+    /// arriving frame looks like it belongs in the distant past, and the buffer
+    /// degenerates into a pass-through with no jitter protection at all. That
+    /// is invisible in a fixture — fixtures have no arrival times — and it
+    /// presented on air as audio that stayed rough no matter how deep the
+    /// buffer was made.
+    ///
+    /// Late packets still expand to where they *belong*, below the reference,
+    /// which is what lets the buffer place reordered arrivals correctly.
+    public mutating func expand(
+        _ sequence: UInt16,
+        arrivedAt: Duration? = nil
+    ) -> Expansion {
+        // A pause is a wall-clock fact here, not a sequence fact.
+        if let arrivedAt, let previousArrival = newestArrival,
+           let highest = newestRawSequence.map({ _ in highestStreamTime }) {
+            let sinceLast = arrivedAt - previousArrival
+            if sinceLast > Self.arrivalPauseThreshold {
+                let advance = UInt32(clamping: Int64(sinceLast.milliseconds))
+                let streamTime = highest &+ max(advance, Self.packetMilliseconds)
+                newestRawSequence = sequence
+                newestStreamTime = streamTime
+                highestStreamTime = streamTime
+                newestArrival = arrivedAt
+                return Expansion(streamTime: streamTime, isNewTalkspurt: true)
+            }
+        }
+        if let arrivedAt { newestArrival = arrivedAt }
+
         guard let reference = newestRawSequence else {
             newestRawSequence = sequence
             newestStreamTime = Self.originHeadroom * Self.packetMilliseconds
@@ -146,6 +193,7 @@ public struct EchoLinkSequenceExpander: Sendable, Equatable {
         newestRawSequence = nil
         newestStreamTime = 0
         highestStreamTime = 0
+        newestArrival = nil
     }
 
     /// The nearest-interpretation signed distance between two 16-bit sequence
@@ -182,8 +230,15 @@ public struct EchoLinkStreamAudio: Sendable {
     }
 
     /// Expand one audio packet into timed codec frames.
-    public mutating func receive(_ packet: EchoLinkRTPPacket) -> Reception {
-        let expansion = expander.expand(packet.header.sequenceNumber)
+    ///
+    /// - Parameter arrivedAt: when the packet arrived, on any monotonic clock.
+    ///   Omitting it leaves the stream clock sequence-only, which drifts away
+    ///   from real time across a pause — see `EchoLinkSequenceExpander.expand`.
+    public mutating func receive(
+        _ packet: EchoLinkRTPPacket,
+        arrivedAt: Duration? = nil
+    ) -> Reception {
+        let expansion = expander.expand(packet.header.sequenceNumber, arrivedAt: arrivedAt)
         let step = UInt32(EchoLinkRTPPacket.frameDuration.milliseconds)
 
         var frames: [TimedFrame] = []
@@ -203,11 +258,14 @@ public struct EchoLinkStreamAudio: Sendable {
     ///
     /// Returns `nil` for anything that is not audio — station info most
     /// commonly — so a caller cannot accidentally play text as speech.
-    public mutating func receive(payload: Data) -> Reception? {
+    public mutating func receive(
+        payload: Data,
+        arrivedAt: Duration? = nil
+    ) -> Reception? {
         guard case .audio(let packet) = EchoLinkAudioChannelMessage.classify(payload) else {
             return nil
         }
-        return receive(packet)
+        return receive(packet, arrivedAt: arrivedAt)
     }
 
     /// Back to a just-constructed state.
