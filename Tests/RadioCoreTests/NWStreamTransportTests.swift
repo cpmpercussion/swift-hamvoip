@@ -2,6 +2,7 @@
 
 #if canImport(Network)
 
+import Network
 import XCTest
 @testable import RadioCore
 
@@ -43,6 +44,29 @@ final class NWStreamTransportTests: XCTestCase {
                 return XCTFail("expected .invalidEndpoint, got \(error)")
             }
         }
+    }
+
+    // MARK: - Parameters
+
+    /// Nagle must be off, and it must be off on the *transport* layer.
+    ///
+    /// The regression this pins: `noDelay` used to be set inside
+    /// `if let tcp = parameters.defaultProtocolStack.internetProtocol as? NWProtocolTCP.Options`.
+    /// That is the IP layer, the cast never succeeded, and the connection ran
+    /// with Nagle on while the comment above it said otherwise. Reading the
+    /// option back through `transportProtocol` is what makes the failure
+    /// visible — a test that only checked "some layer has noDelay" would have
+    /// passed the broken version too.
+    func testSignallingParametersDisableNagleOnTheTransportLayer() {
+        let parameters = SignallingParameters.make()
+
+        guard let tcp = parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options else {
+            return XCTFail("expected TCP options on the transport protocol stack")
+        }
+        XCTAssertTrue(tcp.noDelay)
+        XCTAssertEqual(parameters.serviceClass, .responsiveData)
+        XCTAssertNil(parameters.defaultProtocolStack.internetProtocol as? NWProtocolTCP.Options,
+                     "the IP layer is not where TCP options live — that was the bug")
     }
 
     // MARK: - Cancellation while awaiting readiness

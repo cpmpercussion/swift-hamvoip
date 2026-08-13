@@ -74,6 +74,25 @@ public final class NWStreamTransport: StreamTransport {
     }
 }
 
+/// Parameters for a signalling connection: interactive service class, and
+/// Nagle off so the small proxy frames go out rather than sitting in a buffer
+/// waiting for company.
+///
+/// Built by handing `NWParameters` the TCP options directly. An earlier version
+/// reached for them through `defaultProtocolStack.internetProtocol` and cast —
+/// that is the IP layer, so the cast always failed and `noDelay` was never set.
+/// It failed silently, which is what an `if let` around a configuration step
+/// buys you; hence the test, and hence no cast here.
+enum SignallingParameters {
+    static func make() -> NWParameters {
+        let tcp = NWProtocolTCP.Options()
+        tcp.noDelay = true
+        let parameters = NWParameters(tls: nil, tcp: tcp)
+        parameters.serviceClass = .responsiveData
+        return parameters
+    }
+}
+
 /// Owns the `NWConnection` and every piece of mutable state. Actor isolation
 /// serialises the three sources of concurrency here: caller `send`s, the
 /// connection's state-update callbacks, and the receive loop.
@@ -95,14 +114,7 @@ private actor Core {
     private var readyWaiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
 
     init(host: NWEndpoint.Host, port: NWEndpoint.Port, continuation: AsyncStream<Data>.Continuation) {
-        let parameters = NWParameters.tcp
-        // Voice signalling: interactive, and we want the small proxy frames
-        // out on the wire rather than sitting in a Nagle buffer waiting for
-        // company.
-        parameters.serviceClass = .responsiveData
-        if let tcp = parameters.defaultProtocolStack.internetProtocol as? NWProtocolTCP.Options {
-            tcp.noDelay = true
-        }
+        let parameters = SignallingParameters.make()
         self.connection = NWConnection(host: host, port: port, using: parameters)
         self.continuation = continuation
         self.queue = DispatchQueue(label: "org.hamvoip.radiocore.nwstream")

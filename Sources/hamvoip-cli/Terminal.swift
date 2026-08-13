@@ -209,7 +209,12 @@ enum SecretPrompt {
     /// can see that their password arrived from `argv` is a user who can go and
     /// fix their shell history.
     enum Source: CustomStringConvertible, Equatable {
-        case commandLine
+        /// Carries the flag it actually came from. `resolve` serves more than
+        /// one secret now — the EchoLink account password among them — so a
+        /// banner that says `--secret` regardless would name a flag the
+        /// operator never typed, and send them to the wrong place in their
+        /// shell history.
+        case commandLine(flag: String)
         case environment(String)
         /// Read from a file in the config directory (`ConfigFile`).
         case configFile(String)
@@ -218,7 +223,7 @@ enum SecretPrompt {
 
         var description: String {
             switch self {
-            case .commandLine: return "--secret (visible in argv and shell history)"
+            case .commandLine(let flag): return "\(flag) (visible in argv and shell history)"
             case .environment(let name): return "$\(name)"
             case .configFile(let path): return path
             case .prompt: return "interactive prompt"
@@ -235,6 +240,8 @@ enum SecretPrompt {
     ///
     /// - Parameters:
     ///   - commandLineValue: whatever the flag carried, if anything.
+    ///   - commandLineFlag: the flag's name, for the banner. Only ever read
+    ///     when `commandLineValue` is non-nil.
     ///   - name: the environment variable, which is also the config file's
     ///     name — that correspondence *is* the convention.
     ///   - promptText: shown when it comes to asking.
@@ -244,13 +251,14 @@ enum SecretPrompt {
     ///     without.
     static func resolve(
         commandLineValue: String?,
+        commandLineFlag: String = "--secret",
         name: String = SecretPrompt.environmentVariable,
         promptText: String = "Secret (leave empty for an unauthenticated node): ",
         environment: [String: String] = ProcessInfo.processInfo.environment,
         allowPrompt: Bool = RawTerminal.isTerminal()
     ) throws -> (secret: String, source: Source) {
         if let commandLineValue {
-            return (commandLineValue, .commandLine)
+            return (commandLineValue, .commandLine(flag: commandLineFlag))
         }
         if let fromEnvironment = environment[name], !fromEnvironment.isEmpty {
             return (fromEnvironment, .environment(name))
