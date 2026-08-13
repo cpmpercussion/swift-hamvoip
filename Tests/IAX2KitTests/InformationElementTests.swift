@@ -465,7 +465,7 @@ final class InformationElementTests: XCTestCase {
     // MARK: MediaFormat description
 
     /// A live session printed `CONNECTED  codec MediaFormat(rawValue: 4)`
-    /// where `docs/CLI.md` §5 promises the harness names a codec.
+    /// where `docs/CLI.md` §6 promises the harness names a codec.
     func testTheNegotiatedCodecIsNamedRatherThanPrintedAsABitmask() {
         XCTAssertEqual("\(MediaFormat.g711MuLaw)", "G.711 µ-law")
         XCTAssertFalse("\(MediaFormat.g711MuLaw)".contains("rawValue"))
