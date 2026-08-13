@@ -517,7 +517,7 @@ final class EchoLinkClientTests: XCTestCase {
         }
 
         harness.transport.inject(audio)
-        let frames = try await collected.value
+        let frames = await collected.value
 
         XCTAssertEqual(frames.count, 8)
         XCTAssertTrue(frames.allSatisfy { $0.count == 160 },
@@ -539,7 +539,7 @@ final class EchoLinkClientTests: XCTestCase {
 
         // The fixture spans a talkspurt boundary: 146..151 then 0..7.
         harness.transport.inject(try fixtureLines("live-proxy-audio-in.hex"))
-        let seen = try await events.value
+        let seen = await events.value
 
         XCTAssertEqual(seen.filter { $0 == .talkspurtStarted }.count, 2,
                        "the first packet, and the 151 -> 0 boundary")
@@ -564,7 +564,7 @@ final class EchoLinkClientTests: XCTestCase {
         )
         harness.transport.inject(info.encoded)
 
-        guard case .stationInfo(let text) = try await events.value else {
+        guard case .stationInfo(let text) = await events.value else {
             return XCTFail("station info must be surfaced as an event")
         }
         XCTAssertTrue(text.hasPrefix("oNDATA"))
@@ -589,7 +589,7 @@ final class EchoLinkClientTests: XCTestCase {
             }
             return frames
         }
-        let frames = try await collected.value
+        let frames = await collected.value
 
         XCTAssertEqual(frames.count, 5, "a starved buffer must still tick")
         XCTAssertTrue(frames.allSatisfy { $0.count == 160 },
@@ -612,7 +612,7 @@ final class EchoLinkClientTests: XCTestCase {
         }
 
         harness.transport.inject(try fixtureLines("live-proxy-audio-in.hex"))
-        let frames = try await collected.value
+        let frames = await collected.value
 
         XCTAssertEqual(frames.count, 12, "the tick never skips")
         XCTAssertTrue(frames.allSatisfy { $0.count == 160 })
@@ -753,7 +753,7 @@ final class EchoLinkClientTests: XCTestCase {
             return XCTFail("expected .transmitting")
         }
 
-        let after = try await timedOut.value
+        let after = await timedOut.value
         XCTAssertEqual(after, .milliseconds(120))
         XCTAssertEqual(harness.client.state, .receiving,
                        "the watchdog must return the client to receive, not leave it keyed")
@@ -770,7 +770,7 @@ final class EchoLinkClientTests: XCTestCase {
             return false
         }
         try await harness.client.startTransmit()
-        _ = try await timedOut.value
+        _ = await timedOut.value
         harness.transport.clearSent()
 
         for _ in 0 ..< 8 {
@@ -832,7 +832,7 @@ final class EchoLinkClientTests: XCTestCase {
             return count
         }
         harness.transport.inject(Array(try fixtureLines("live-proxy-audio-in.hex").prefix(2)))
-        let received = try await heard.value
+        let received = await heard.value
         XCTAssertEqual(received, 4)
 
         // Transmit.

@@ -81,11 +81,17 @@ final class ArrivalClockTests: XCTestCase {
         }
 
         // 12 spurts x 20 packets x 80 ms of audio, plus 11 x 3 s of silence.
-        let realElapsedMs = UInt32(12 * 20 * 80 + 11 * 3000)
+        // Each step is its own typed constant: folding the arithmetic into one
+        // `UInt32(...)` initialiser is enough to defeat the type-checker on
+        // some toolchains, which is a CI failure rather than a local one.
+        let audioMilliseconds: UInt32 = 12 * 20 * 80
+        let silenceMilliseconds: UInt32 = 11 * 3000
+        let realElapsed: UInt32 = audioMilliseconds + silenceMilliseconds
+
         XCTAssertGreaterThan(
-            lastStreamTime, realElapsedMs - 2000,
-            "the stream clock tracked real time; a sequence-only clock would "
-                + "have reached about \\(12 * 20 * 80) ms and left the buffer "
-                + "33 seconds behind")
+            lastStreamTime, realElapsed - 2000,
+            "the stream clock must track real time; a sequence-only clock "
+                + "reaches only the audio duration and leaves the buffer "
+                + "every silence behind")
     }
 }

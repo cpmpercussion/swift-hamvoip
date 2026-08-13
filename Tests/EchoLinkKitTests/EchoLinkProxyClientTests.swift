@@ -270,7 +270,7 @@ final class EchoLinkProxyClientTests: XCTestCase {
         let audio = try fixtureLines("live-proxy-audio-in.hex")
         let collected = Task { () -> [EchoLinkProxyFrame] in
             var frames: [EchoLinkProxyFrame] = []
-            for await frame in await harness.client.frames {
+            for await frame in harness.client.frames {
                 frames.append(frame)
                 if frames.count == 3 { break }
             }
@@ -278,7 +278,7 @@ final class EchoLinkProxyClientTests: XCTestCase {
         }
 
         harness.transport.inject(Array(audio.prefix(3)))
-        let frames = try await collected.value
+        let frames = await collected.value
 
         XCTAssertEqual(frames.count, 3)
         XCTAssertEqual(frames.map(\.encoded), Array(audio.prefix(3)))
@@ -293,7 +293,7 @@ final class EchoLinkProxyClientTests: XCTestCase {
 
         let audio = try fixtureLines("live-proxy-audio-in.hex")[0]
         let collected = Task { () -> EchoLinkProxyFrame? in
-            for await frame in await harness.client.frames { return frame }
+            for await frame in harness.client.frames { return frame }
             return nil
         }
 
@@ -302,7 +302,7 @@ final class EchoLinkProxyClientTests: XCTestCase {
         try await task.value
         harness.transport.inject(audio)
 
-        let first = try await collected.value
+        let first = await collected.value
         XCTAssertEqual(first?.type, .udpData, "the STATUS must have been consumed, not forwarded")
     }
 
