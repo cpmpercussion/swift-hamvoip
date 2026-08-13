@@ -75,19 +75,25 @@ do not improvise a different design.
 **Updated 2026-08-09, at v0.1.** Everything below is checked against the tree,
 not remembered; if it disagrees with the repository, the repository is right.
 
-- `Package.swift` defines three library products — `RadioCore`, `IAX2Kit`,
-  `M17Kit` — plus the `hamvoip-cli` executable, a test-only `TestSupport`
-  target and four test targets. One dependency, `swift-argument-parser`,
-  authorised by CLI-1.
-- `swift build` and `swift test` are green on `main`: **616 tests, no
-  failures** (checked 2026-08-12, after M17-4/M17-5 merged). CI runs the SPDX
-  check on Ubuntu and build + test on macOS 14.
+- `Package.swift` defines four library products — `RadioCore`, `IAX2Kit`,
+  `M17Kit`, `EchoLinkKit` — plus the `hamvoip-cli` executable, the vendored
+  `CGSM` target, a test-only `TestSupport` target and five test targets. One
+  Swift dependency, `swift-argument-parser`, authorised by CLI-1; `CGSM` is
+  vendored C, not a dependency (EL-8, LP-4).
+- `swift build` and `swift test` are green: **779 tests, no failures**
+  (checked 2026-08-13, on the Phase 6 branch; 616 on `main` before it). CI runs
+  the SPDX check on Ubuntu and build + test on macOS 14.
+- **`EchoLinkKit` is complete except for the station list** (EL-11, still gated
+  on a capture). Proxy framing, proxy login, directory login, RTP, the
+  synthesised playout clock, GSM 06.10 and `EchoLinkClient` are all in and
+  tested against capture fixtures. Nothing in it has ever spoken to a real
+  proxy — that is Milestone M3, and EL-10 has the gap to close first.
 - `RadioCore` and `IAX2Kit` are complete. `M17Kit` has reflector control,
   base-40 callsigns and stream-packet parse/serialise, but **no codec wiring
   and no `M17Client`** — M17-4 and M17-5 are the remaining work there.
 - **`IAX2Kit` has been validated against a real node** (ASL3 in a VM,
   2026-08-09): registration, authentication — which settled OQ-5 — and then a
-  full two-way audio session. **Milestone M2 has passed** (`docs/CLI.md` §5):
+  full two-way audio session. **Milestone M2 has passed** (`docs/CLI.md` §6):
   speech intelligible both ways, DTMF round-tripped, the SF-1 watchdog cut
   transmission at exactly its limit, teardown clean. Two items want a re-run
   before v1 (PTT edges, the signal teardown paths) and one wart is tracked as
@@ -918,7 +924,7 @@ identically from the recipes recorded inside them.
 
 ---
 
-### EL-2 — Proxy-framing and login fixtures ⚠️ hygiene-critical
+### EL-2 — Proxy-framing and login fixtures ✅ DONE
 **Depends on:** EL-1. **Blocks:** EL-4.
 **Files:** `Tests/EchoLinkKitTests/Fixtures/live-proxy-*.hex`,
 `Tests/FIXTURES.md`.
@@ -966,7 +972,7 @@ stating the path exception and the `0x02` prohibition.
 
 ---
 
-### EL-3 — `StreamTransport`: the TCP seam
+### EL-3 — `StreamTransport`: the TCP seam ✅ DONE
 **Depends on:** nothing. **Blocks:** EL-4.
 **Files:** `Sources/RadioCore/StreamTransport.swift`,
 `Sources/RadioCore/NWStreamTransport.swift`,
@@ -1004,7 +1010,7 @@ is idempotent and finishes `incoming`, and no unit test opens a socket.
 
 ---
 
-### EL-4 — `EchoLinkKit` target and proxy frame codec
+### EL-4 — `EchoLinkKit` target and proxy frame codec ✅ DONE
 **Depends on:** EL-2, EL-3. **Blocks:** EL-5.
 **Files:** `Package.swift` (**the only EL task that may touch it**),
 `Sources/EchoLinkKit/EchoLinkKit.swift`,
@@ -1029,7 +1035,7 @@ survives parsing.
 
 ---
 
-### EL-5 — Proxy login and session lifecycle
+### EL-5 — Proxy login and session lifecycle ✅ DONE
 **Depends on:** EL-4. **Blocks:** EL-6.
 **Files:** `Sources/EchoLinkKit/EchoLinkProxyClient.swift`,
 `Sources/EchoLinkKit/EchoLinkAuth.swift`, `Tests/EchoLinkKitTests/…`.
@@ -1038,6 +1044,17 @@ An actor over `StreamTransport` running the observed handshake: proxy sends an
 8-byte ASCII hex nonce; client replies with its callsign LF-terminated followed
 by 16 raw digest bytes with no length prefix; proxy answers `0x04` status
 (`00 00 00 00` = success) and a `0x02` payload from the directory server.
+
+⚠️ **That last clause is wrong, and the code does not follow it** (plan rule 6:
+the evidence wins, and the discrepancy is reported rather than obeyed). In the
+capture the `0x04 STATUS` answers the `0x01 OPEN` that follows the login, and
+the `0x02 "OK"` is the *directory server's* answer to the directory login —
+both belong to later steps. **The proxy login itself is never acknowledged.** A
+proxy that rejects it simply drops the connection.
+
+So `login()` completes when the digest is written, and a bad password surfaces
+as `.streamClosed` from `open(peer:)`. Waiting for an acknowledgement that does
+not exist would hang forever.
 
 `EchoLinkAuth` is a pure function and gets its own exhaustive tests:
 `MD5(password ‖ nonce-as-8-ASCII-characters)` → 16 raw bytes. Pin both
@@ -1059,7 +1076,7 @@ as a typed error, and the reentrancy test exists.
 
 ---
 
-### EL-6 — Directory login (FR-3.1, part 1)
+### EL-6 — Directory login (FR-3.1, part 1) ✅ DONE
 **Depends on:** EL-5.
 **Files:** `Sources/EchoLinkKit/EchoLinkDirectory.swift`, `Tests/EchoLinkKitTests/…`.
 
@@ -1084,7 +1101,7 @@ password is never logged, echoed in an error, or written to a fixture.
 
 ---
 
-### EL-7 — RTP framing and sequence-keyed playout
+### EL-7 — RTP framing and sequence-keyed playout ✅ DONE
 **Depends on:** EL-4.
 **Files:** `Sources/EchoLinkKit/EchoLinkRTP.swift`,
 `Sources/EchoLinkKit/EchoLinkStreamAudio.swift`, `Tests/EchoLinkKitTests/…`.
@@ -1117,7 +1134,7 @@ discontinuity; and a recorded packet sequence plays out in order through a real
 
 ---
 
-### EL-8 — GSM 06.10 codec (FR-3.2, LP-4)
+### EL-8 — GSM 06.10 codec (FR-3.2, LP-4) ✅ DONE
 **Depends on:** nothing — pure, can run from the start.
 **Files:** `Sources/CGSM/` (vendored `libgsm`), `Sources/EchoLinkKit/GSMVoiceCodec.swift`,
 `Tests/EchoLinkKitTests/…`. Manifest changes coordinate with EL-4.
@@ -1137,7 +1154,7 @@ Swift files (vendored C keeps its own headers).
 
 ---
 
-### EL-9 — `EchoLinkClient` (the `NetworkClient` facade)
+### EL-9 — `EchoLinkClient` (the `NetworkClient` facade) ✅ DONE
 **Depends on:** EL-6, EL-7, EL-8.
 **Files:** `Sources/EchoLinkKit/EchoLinkClient.swift`, `Tests/EchoLinkKitTests/…`.
 
@@ -1162,7 +1179,7 @@ limit, and no test opens a socket.
 
 ---
 
-### EL-10 — `hamvoip-cli echolink` and live sign-off (**Milestone M3**)
+### EL-10 — `hamvoip-cli echolink` and live sign-off (**Milestone M3**) ⚠️ CODE DONE, M3 OUTSTANDING
 **Depends on:** EL-9.
 **Files:** `Sources/hamvoip-cli/EchoLinkCommand.swift`, registered in
 `HamVoIPCLI.swift`'s `subcommands:` array.
@@ -1179,6 +1196,138 @@ capture work already demonstrated the path can do.
 intelligible audio both ways, clean teardown — and records the sign-off on the
 PR. That is **Milestone M3**, and like M2 nothing in this repository can settle
 it.
+
+**Code done, 2026-08-13. M3 is outstanding and needs a human on air.** The
+command exists, the stack under it is tested, and `--help` says plainly that
+nothing here has ever spoken to a real proxy.
+
+#### The connect sequence, and two corrections it forced
+
+Wiring the directory login in meant re-reading the captures rather than the
+plan, and the re-reading found the plan's model of a session was wrong twice.
+The sequence a real client performs, and that `EchoLinkClient.connect` now
+follows:
+
+    <== nonce (unframed)          proxy login (EL-5)
+    ==> callsign + LF + digest
+    ==> 0x01 OPEN   peer <directory server>
+    <== 0x04 STATUS 00 00 00 00
+    ==> 0x02 TCP_DATA  'l' + callsign + separators + password + CR   (EL-6)
+    <== 0x02 TCP_DATA  "OK"
+    <== 0x03 CLOSE                the directory channel, closed on purpose
+    ==> 0x06 RR + SDES   peer <the node>     ← this opens the session
+    <== 0x06 RR + SDES                       ← the node answers
+    ... audio on 0x05 ...
+    ==> 0x06 RR + BYE            teardown
+
+**Correction 1 — there is no `OPEN` for a node.** Checked across all three
+captures: `0x01 OPEN` was sent **only** for the directory server, and six
+distinct audio peers received `0x05`/`0x06` traffic with no `OPEN` at all. The
+`0x01`/`0x02`/`0x03`/`0x04` family is the tunnelled **TCP** connection, and
+`OPEN` means "connect a socket to this address". `0x05`/`0x06` are
+connectionless, carrying the peer's address in each frame header, so an audio
+channel has no setup and no teardown. The first version of EL-9 opened a channel
+to the node, which no real client does.
+
+**Correction 2 — the control channel is not optional.** The section below says
+`0x06` is "observed but neither is needed for a working QSO". That is wrong, and
+it follows directly from correction 1: with no `OPEN` for the node, the
+`RR + SDES` compound is the *only* thing that starts a session. Without it a node
+never answers. `EchoLinkRTCP.swift` therefore builds and parses `RR`, `SDES` and
+`BYE`, against the two `0x06` frames in `live-proxy-rtcp.hex`.
+
+`CLOSE` handling changed with it: a `0x03` closes a tunnelled channel, not the
+session, and in a normal session it arrives a few hundred milliseconds after
+connecting, when the directory channel shuts down on purpose. Treating it as the
+link dropping would have ended every session before any audio.
+
+**What is still not established:** whether a node answers a client that never
+logged in to the directory. `--no-directory-login` exists to find out; no
+capture shows the attempt, so the flag is an experiment rather than a supported
+mode.
+
+#### Live attempts, 2026-08-13 — the session now connects
+
+Run against real public proxies and the real directory server, receive-only
+(no microphone, PTT never pressed, so nothing was transmitted).
+
+| Step | Result |
+|---|---|
+| Proxy login (EL-5) | ✅ **confirmed on air** |
+| Directory login (EL-6) | ✅ **confirmed on air** |
+| No `OPEN` for the node | ✅ the proxy accepted the session without one |
+| Node answers the SDES | ✅ **confirmed on air** (after the fix below) |
+| Audio both ways | ⏸ needs a human with a microphone |
+
+The two confirmations are the ones that mattered. A proxy in Chile that this
+code had never met opened with `653e0d35` — an 8-byte ASCII hex nonce, exactly
+as EL-5 predicted — and accepted `MD5("PUBLIC" ‖ nonce)`. So the digest
+construction recovered by offline search against two captures also works
+against a third, unrelated proxy. The directory server then accepted the
+operator's real account password. Those were the two largest unknowns in
+Phase 6.
+
+**A real bug found and fixed by the attempt: SDES padding.** The encoder
+followed RFC 3550 §6.5's minimum, on the reasoning that the two observed
+senders disagreed about the padding and the region was therefore slack. That
+reasoning was wrong — they follow the same rule, and it is not the RFC's:
+
+    pad the chunk to a 32-bit boundary, then append four more null octets
+
+    EchoHam     chunk 75 -> align 76 -> +4 = 80   (observed 80)
+    thebridge   chunk 84 -> align 84 -> +4 = 88   (observed 88)
+
+The RFC minimum gives 76 for the first, which no observed sender produced. With
+the rule corrected, what we emit is **byte-for-byte identical** to a captured
+working client for the same inputs — verified by diff, and pinned by
+`testSDESPaddingFollowsBothObservedSendersNotTheRFCMinimum`. The module's own
+rule is "parse permissively, emit what was observed", and the earlier version
+broke it by preferring a specification to the wire in a place the specification
+does not govern.
+
+It did not fix the silence. What did was found by exactly the method this
+project keeps reaching for: **capture ours and a working client's side by side,
+and diff.** The maintainer captured several of our attempts followed by one
+EchoHam session, all in one file.
+
+#### The directory login is three lines, and we were sending one
+
+Our `0x02` login frame against EchoHam's:
+
+|  | EchoHam | ours |
+|---|---|---|
+| line 1 | `l` + callsign + `AC AC` + password + CR | `l` + callsign + **`0A 0A`** + password + CR |
+| line 2 | `ONLINE<version>Y(<HH:MM>)` + CR | **absent** |
+| line 3 | `<location>` + CR | **absent** |
+| `0x02` peer field | the directory server | **`0.0.0.0`** |
+
+Three separate mistakes, and the middle one is why nothing worked:
+
+- **The separator is `0xAC 0xAC`, not `0x0A 0x0A`.** The OQ-9 write-up said
+  "two separator bytes" without saying which, and LF is what "separator"
+  suggests to anyone reading prose rather than octets. The server answers `OK`
+  either way, which is why the guess survived.
+- **The `ONLINE` line is what registers the station as available.**
+  *Authentication is not registration.* Without it the server accepts the
+  password, answers `OK`, and never lists the station — so no node will accept
+  a connection from it, and every step reports success while nothing works.
+  That is the whole reason `*ECHOTEST*` sat silent, and it is a good argument
+  for distrusting a success that cannot be independently observed.
+- **An outbound `0x02` names the directory server in its peer field.** The
+  fixture holds only *inbound* frames, which are always `0.0.0.0`, and an
+  earlier version read that as telling us what to send.
+
+With all three corrected the session connects, and `*ECHOTEST*` answers by
+name:
+
+    Directory login accepted.
+    Node answered: *ECHOTEST*
+    INFO oNDATACONF Audio test server [9]  <our callsign and name>  This test
+         server simply records and plays back transmissions for testing purposes.
+
+**What is left for M3 is the part no agent can do:** run it with `--audio`,
+press space, talk, and listen to the echo. `--location` and `--operator-name`
+set what the far end displays.
 
 ---
 
@@ -1214,13 +1363,29 @@ address is already known.
 partial list is a typed error rather than a silent short read; and no fixture
 contains a callsign, location or address belonging to anyone else.
 
-### Station info and the control channel — deliberately not a task yet
+### Station info and the control channel — ⚠️ superseded 2026-08-13
 
-`0x06` frames carry RTCP-shaped packets (type 201 with an SDES), and station
-info arrives on the `0x05` channel as text beginning `oNDATA`. Both are
-observed but neither is needed for a working QSO, and neither has been decoded
-past its outer shape. They become tasks when something needs them — writing
-them up now would be designing against one capture's worth of evidence.
+This section used to read: "`0x06` frames carry RTCP-shaped packets (type 201
+with an SDES), and station info arrives on the `0x05` channel as text beginning
+`oNDATA`. Both are observed but **neither is needed for a working QSO**, and
+neither has been decoded past its outer shape."
+
+**The emphasised claim is false, and EL-10 found out the expensive way.** Since
+no `OPEN` is ever sent for an audio peer, the `RR + SDES` compound on `0x06` is
+the *only* thing that opens a node session — a client that does not send it is
+never answered. `0x06` is now decoded (`EchoLinkRTCP.swift`) and `BYE` is sent
+on teardown. See the EL-10 entry for the frame-by-frame sequence.
+
+The `0x05` text channel is decoded only far enough to keep it *out* of the
+audio path: `oNDATA` fed to an RTP parser reads as version 1, payload type 78,
+and plays as noise. `EchoLinkAudioChannelMessage` classifies before parsing and
+surfaces the text verbatim as an event. Its internal structure is still
+undecoded, and still deliberately so — nothing needs it.
+
+The general lesson is worth keeping even though the specific claim did not
+survive: "not needed for a QSO" was inferred from what the frames *looked* like,
+not from tracing what a session actually required. Checking which peers ever
+receive an `OPEN` took one pass over the captures and would have caught it.
 
 ## Phase 7 — M17Kit
 
@@ -1401,7 +1566,7 @@ Until then M17 is "believed working", and the CLI's banner says so.
 | **OQ-6** | **LGPL-2.1 relinking vs App Store code signing.** Shipping Codec2 as a dynamic framework satisfies LP-4's letter, but a signed iOS app cannot have its framework substituted by the user, which is what LGPL §6 relinking is for. A licensing judgement, not a technical blocker, and unchanged by the M17-1 spike — but it wants a conscious decision before App Store submission, not after. | App Store submission of M17 |
 | **OQ-7** | ✅ **RESOLVED 2026-08-11 — 54 bytes. The LSF CRC is not on the wire; `M17StreamPacket` changed to match.** Settled by `hamvoip-cli oq7` against a live reflector on UDP 17000, packet capture retained (`m17-oq7.pcap`, workspace, unversioned). One over of 52 consecutive stream datagrams, one SID, one transmitting station. Three independent readings of those bytes agree and only on this layout: **length** — 54 bytes, 52 of 52, no exceptions; **sequencing** — the two bytes at offset 34 ran 0, 1, 2 … 51, while at offset 36, where the 56-byte reading puts FN, the same bytes do not count at all and set bit 15 in 35 of 52 frames, which a mid-over last-frame flag must never be; **CRC** — the trailing two bytes are the M17 CRC16 (Part I: polynomial `0x5935`, init `0xFFFF`) over the preceding 52 bytes, valid 52 of 52. That third test is what rules out a truncated 56-byte frame — two bytes lost in transit would not leave a CRC closing over what remains — and it fails 0 of 52 for the LSF-CRC-present reading. Field offsets corroborated too: SID constant, DST/SRC decoding as base-40 callsigns at 6-11 and 12-17, TYPE `0x0005` at 18-19, META all zeros, and 16 bytes of Codec 2 differing in every frame at 36-51. **Scope of the claim:** one reflector, one over, one transmitting client — an observation about what M17-over-IP actually carries, not a correction to the specification, which says 240 bits and is what we implemented first. A second reflector disagreeing would be new information rather than a bug; the tally's guidance says so. **Original question:** the spec's Table 27 gives LICH as 240 bits, the full 30-byte LSF *including* its own CRC → 56 bytes; 54 is widely quoted elsewhere, and the difference is exactly whether that CRC is present. Unresolvable from the document, and LP-2 forbids reading an implementation to find out. | Unblocks **M17-4** stream TX/RX |
 | **OQ-8** | **The M17 reflector specification is offline.** The chapter we implement against was published as HTML at a readthedocs host that now 404s; M17-3 worked from an Internet Archive capture. Should the repository keep a local copy of that archived chapter, licence permitting? Right now the only record of what we implemented against is a third-party archive that may itself disappear. | Nothing today; a maintenance risk |
-| ~~OQ-9~~ | ✅ **RESOLVED 2026-08-12 — permitted sources named; Phase 6 unblocks. Maintainer's judgement.** The permitted sources for EchoLink protocol knowledge are: **(a)** RFC 3550 for RTP framing and **(b)** the ETSI/ITU GSM 06.10 specification for the codec, as spec anchors *for the parts they actually cover* — with the standing caveat that RFC 3550 does **not** describe this protocol as implemented (observed RTP version bits are 3, not 2; the proxy framing and the directory protocol on TCP 5200 fall outside it entirely), so where wire and RFC disagree the wire wins and the divergence is recorded; **(c) packet captures of the maintainer's own EchoLink sessions** are the **primary** source, under the same LP-1 fixture rule that governs IAX-9. Candidate **(d)**, prose write-ups, is admitted **only** under a provenance bar materially higher than the captures': because no published specification exists, most such prose derives from the very implementations LP-2 forbids (a summary of thebridge's source is the source at one remove, not "behavioural observation"), so a (d) source may be used only when its own provenance is independently established as *not* derived from forbidden implementations, and its use logged per `docs/reference/PROVENANCE.md` before any code depends on it. When (d) cannot clear that bar, the answer is another capture, not the write-up. **Standing procedural rules that come with this resolution:** (1) protocol ambiguities are settled by designing another on-air experiment and cutting another capture — never by reading an implementation; the pressure to peek is highest exactly where captures are thinnest, which is where the clean-room boundary matters most. (2) Capture work spans **multiple peers**: a single-peer capture already produced two confident wrong conclusions (SSRC always zero; sequence numbers start at zero) that a four-peer capture corrected — see the PROVENANCE.md OQ-9 entry. (3) Directory-server captures (TCP 5200) carry other operators' callsigns, locations and IPs; they get the same third-party-traffic hygiene the M17 OQ-7 capture did (`docs/CLI.md` §7), and no such capture's path is named in a versioned file. **Terms rechecked online 2026-08-12** against echolink.org directly (Access Policies, Validation, Download, Support): no anti-reverse-engineering clause, no client-software restriction, and no software EULA is even linked — the access policies govern *who* may connect (licensed amateurs) and what a Sysop node may interconnect *to*, never what client software reaches the service. echolink.org's own Download page lists compatible third-party implementations (EchoHam, EchoIRLP, svxLink/QTel, an Asterisk channel driver) with "we do not support these programs" — the service operator publicly acknowledges independent clients. This closes the narrow terms caveat left open under OQ-1 and does not disturb OQ-1's reasoning. **This resolves the sourcing question only** — OQ-1b (trademark, nominative use only) still governs all EchoLink naming, and LP-1/LP-2 are unchanged: no implementation source, at any level, is ever read. | ~~Phase 6~~ **unblocked** |
+| ~~OQ-9~~ | ✅ **RESOLVED 2026-08-12 — permitted sources named; Phase 6 unblocks. Maintainer's judgement.** The permitted sources for EchoLink protocol knowledge are: **(a)** RFC 3550 for RTP framing and **(b)** the ETSI/ITU GSM 06.10 specification for the codec, as spec anchors *for the parts they actually cover* — with the standing caveat that RFC 3550 does **not** describe this protocol as implemented (observed RTP version bits are 3, not 2; the proxy framing and the directory protocol on TCP 5200 fall outside it entirely), so where wire and RFC disagree the wire wins and the divergence is recorded; **(c) packet captures of the maintainer's own EchoLink sessions** are the **primary** source, under the same LP-1 fixture rule that governs IAX-9. Candidate **(d)**, prose write-ups, is admitted **only** under a provenance bar materially higher than the captures': because no published specification exists, most such prose derives from the very implementations LP-2 forbids (a summary of thebridge's source is the source at one remove, not "behavioural observation"), so a (d) source may be used only when its own provenance is independently established as *not* derived from forbidden implementations, and its use logged per `docs/reference/PROVENANCE.md` before any code depends on it. When (d) cannot clear that bar, the answer is another capture, not the write-up. **Standing procedural rules that come with this resolution:** (1) protocol ambiguities are settled by designing another on-air experiment and cutting another capture — never by reading an implementation; the pressure to peek is highest exactly where captures are thinnest, which is where the clean-room boundary matters most. (2) Capture work spans **multiple peers**: a single-peer capture already produced two confident wrong conclusions (SSRC always zero; sequence numbers start at zero) that a four-peer capture corrected — see the PROVENANCE.md OQ-9 entry. (3) Directory-server captures (TCP 5200) carry other operators' callsigns, locations and IPs; they get the same third-party-traffic hygiene the M17 OQ-7 capture did (`docs/CLI.md` §8), and no such capture's path is named in a versioned file. **Terms rechecked online 2026-08-12** against echolink.org directly (Access Policies, Validation, Download, Support): no anti-reverse-engineering clause, no client-software restriction, and no software EULA is even linked — the access policies govern *who* may connect (licensed amateurs) and what a Sysop node may interconnect *to*, never what client software reaches the service. echolink.org's own Download page lists compatible third-party implementations (EchoHam, EchoIRLP, svxLink/QTel, an Asterisk channel driver) with "we do not support these programs" — the service operator publicly acknowledges independent clients. This closes the narrow terms caveat left open under OQ-1 and does not disturb OQ-1's reasoning. **This resolves the sourcing question only** — OQ-1b (trademark, nominative use only) still governs all EchoLink naming, and LP-1/LP-2 are unchanged: no implementation source, at any level, is ever read. | ~~Phase 6~~ **unblocked** |
 | — | Packet capture of own AllStar session | IAX-9 |
 | ~~—~~ | ~~Packet capture of own EchoLink session (directory + proxy especially)~~ **Done 2026-08-12** — three captures (multi-peer), held in `experiment-data/`, SHA-256s in `echolink-oq9-result.txt`. Settled OQ-9's evidence question and the proxy framing / login digest; boundary calls logged in `docs/reference/PROVENANCE.md`. Paths deliberately unnamed in versioned files (one holds a live credential, one the full directory). Further Phase 6 captures still the maintainer's to run | OQ-9 ✅ / Phase 6 |
-| ~~—~~ | ~~Capture from a live M17 reflector~~ **Done 2026-08-11** — `hamvoip-cli oq7`, `m17-oq7.pcap`. Settled OQ-7. Passive traffic, so no `live-*.hex` fixture was cut from it; see `docs/CLI.md` §7 on that provenance question, which is still the maintainer's | OQ-7 ✅ |
+| ~~—~~ | ~~Capture from a live M17 reflector~~ **Done 2026-08-11** — `hamvoip-cli oq7`, `m17-oq7.pcap`. Settled OQ-7. Passive traffic, so no `live-*.hex` fixture was cut from it; see `docs/CLI.md` §8 on that provenance question, which is still the maintainer's | OQ-7 ✅ |

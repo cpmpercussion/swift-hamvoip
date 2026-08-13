@@ -122,7 +122,7 @@ control but no audio path and has never been run against a reflector. See
   before v1 — PTT edge timing needs a half-duplex target rather than `Echo()`,
   and the `Ctrl-C`/`kill` teardown paths were not re-confirmed — and the
   transmit-burst wart is tracked as IAX-10. Full result table in
-  `docs/CLI.md` §5.
+  `docs/CLI.md` §6.
 - **The IAX2 registration path has run against a real node**, in the session
   that settled OQ-5: four complete §6.1 exchanges — REGREQ → REGAUTH →
   REGREQ+MD5 → REGACK/REGREJ — with correct call numbers, sequence progression

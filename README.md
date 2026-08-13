@@ -29,7 +29,7 @@ change.
 `IAX2Kit` has been validated against a real node — an ASL3 node (Asterisk +
 app_rpt) in a VM, on 2026-08-09. Registration, authentication and a full
 two-way audio session all ran on the wire; that is milestone M2, and the
-result table is in [`docs/CLI.md`](docs/CLI.md) §5. Six fixtures cut from those
+result table is in [`docs/CLI.md`](docs/CLI.md) §6. Six fixtures cut from those
 captures are replayed by `IAX2ConformanceTests`, so registration, call setup,
 an inbound over and both 16-bit time-stamp boundaries are pinned against what
 a real node actually sent rather than only against our reading of the RFC.

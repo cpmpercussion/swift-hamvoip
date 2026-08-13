@@ -1,0 +1,30 @@
+# EL-2 — a second proxy nonce, from a different proxy on a different session.
+#
+# Provenance (LP-1, `Tests/FIXTURES.md`): a second capture of the maintainer's
+# own EchoLink session, 2026-08-12, against a *different* public proxy than the
+# one in `live-proxy-login-in.hex`. Cited by SHA-256, never by path: this
+# capture contains the entire EchoLink directory — thousands of other
+# operators' callsigns and addresses — so no type 0x02 frame may ever be cut
+# from it, and only this one unframed inbound line is taken.
+#
+# Why a second nonce is worth a fixture of its own: EL-5's digest construction
+# is `MD5(password ‖ nonce-as-8-ASCII-characters)`, and one (nonce, digest)
+# pair can be reproduced by coincidence in a large enough candidate search.
+# Two pairs, from two proxies, cannot. The digests themselves are pinned in the
+# EL-5 tests rather than here — they are derived entirely from public inputs
+# (the literal password "PUBLIC" and a nonce the proxy sent in clear), so they
+# are evidence, not a secret, but they belong beside the assertion that uses
+# them.
+# Machine-generated. The captures themselves are not in the repository —
+# they are the maintainer's own, and large. Regenerate with:
+#   scripts/pcap-to-fixture.py <capture> --transport tcp --stream 0 --dir in --range 0:0
+# Capture SHA-256: 845451742f16dac6a1d14380fc23fa890db864e1c7ef852f63676b7a02a02483
+#
+# Each line is one EchoLink proxy frame verbatim, reassembled from the
+# TCP stream: the 9-byte header — type(1), peer IPv4(4), length(4,
+# LITTLE-endian) — and its payload. `[n]` is the frame's index in
+# arrival order across both directions, so a gap in the indices is a
+# frame deliberately left out.
+
+# [0] 0.000s <== LOGIN        nonce 45801e6e      8B
+3435383031653665

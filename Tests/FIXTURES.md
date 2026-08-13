@@ -100,3 +100,45 @@ digests are recorded alongside the captures themselves, outside both repos.
 
 This is not an oversight to be tidied up later. It is the same call the OQ-9
 entry in `docs/reference/PROVENANCE.md` made, for the same reason.
+
+### The EchoLink fixture set (EL-2)
+
+Six fixtures in `Tests/EchoLinkKitTests/Fixtures/`, cut from three captures of
+the maintainer's own sessions on 2026-08-12. Between them they cover all six
+observed proxy message types; each file's own header carries its provenance and
+what it pins.
+
+| Fixture | Types | From |
+|---|---|---|
+| `live-proxy-login-in.hex` | nonce, `0x02`, `0x03`, `0x04` | the login capture, peer half only |
+| `live-proxy-open-out.hex` | `0x01` | the same, client half |
+| `live-proxy-nonce-2.hex` | nonce | the directory capture, one line |
+| `live-proxy-audio-in.hex` | `0x05` | the \*ECHOTEST\* QSO, peer half |
+| `live-proxy-audio-out.hex` | `0x05` | the same, client half |
+| `live-proxy-rtcp.hex` | `0x06` | the same, both halves |
+
+Two judgements went into that table which a later reader should not have to
+reconstruct, because both are places the rules above need a reading rather than
+an application:
+
+- **Our own half is checked in three times**, against the default. `0x01 OPEN`
+  is only ever sent client→proxy, so peer-half-only would leave a message type
+  with no evidence at all; the outbound audio is what the serialiser is tested
+  against. The standing reason for the rule is that our half of an IAX2
+  exchange contains a digest of a live credential — none of these three do. The
+  one frame that *does* carry a credential, the directory login line, is
+  omitted, and the gap in the `[n]` indices is where it was.
+- **The 0x05 and 0x06 fixtures come from the \*ECHOTEST\* capture**, which is
+  neither the richest nor the tidiest of the three — it has no TCP SYN and so
+  needs `--assume-aligned`. It was chosen because the proxy header embeds the
+  peer's IPv4 address in every frame of those two types, and there is no way to
+  leave it out that is not editing octets. The other captures' peers are four
+  individual operators; this one's is EchoLink's own public test conference. A
+  published service address is the least that can be disclosed while still
+  having audio evidence, so the awkward capture wins.
+
+The digest test vectors for the proxy login live in the EL-5 tests rather than
+in a fixture. They are `MD5("PUBLIC" ‖ nonce)`, derived entirely from public
+inputs — the literal password every public proxy uses, and a nonce sent in
+clear — so they are evidence rather than a secret, and they belong beside the
+assertion that consumes them.

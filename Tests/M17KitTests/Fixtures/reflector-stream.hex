@@ -37,5 +37,5 @@
 # a live reflector on 2026-08-11 says otherwise — 52 of 52 stream datagrams
 # were 54 bytes, FN counted at offset 34, and the trailing CRC16 closed over
 # the preceding 52 bytes. This fixture follows the wire. See
-# `M17StreamPacket`'s doc comment and `docs/CLI.md` §7.
+# `M17StreamPacket`'s doc comment and `docs/CLI.md` §8.
 4D313720 1234 FFFFFFFFFFFF 0000009FDD51 0005 0000000000000000000000000000 0001 000102030405060708090A0B0C0D0E0F BEEF

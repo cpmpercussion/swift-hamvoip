@@ -208,44 +208,59 @@ enum SecretPrompt {
     /// Where a secret came from, so the session banner can say so. A user who
     /// can see that their password arrived from `argv` is a user who can go and
     /// fix their shell history.
-    enum Source: CustomStringConvertible {
+    enum Source: CustomStringConvertible, Equatable {
         case commandLine
-        case environment
+        case environment(String)
+        /// Read from a file in the config directory (`ConfigFile`).
+        case configFile(String)
         case prompt
         case none
 
         var description: String {
             switch self {
             case .commandLine: return "--secret (visible in argv and shell history)"
-            case .environment: return "$\(SecretPrompt.environmentVariable)"
+            case .environment(let name): return "$\(name)"
+            case .configFile(let path): return path
             case .prompt: return "interactive prompt"
             case .none: return "none supplied"
             }
         }
     }
 
-    /// Resolves the secret from, in order: the command line, the environment,
-    /// an interactive prompt with echo disabled.
+    /// Resolves a secret from, in order: the command line, the environment, the
+    /// config file, an interactive prompt with echo disabled.
+    ///
+    /// The config file sits below the environment so a one-off override never
+    /// needs an edit, and above the prompt so the common case is silent.
     ///
     /// - Parameters:
-    ///   - commandLineValue: whatever `--secret` carried, if anything.
+    ///   - commandLineValue: whatever the flag carried, if anything.
+    ///   - name: the environment variable, which is also the config file's
+    ///     name — that correspondence *is* the convention.
+    ///   - promptText: shown when it comes to asking.
     ///   - environment: the process environment (injected so this is testable).
     ///   - allowPrompt: `false` when stdin is not a terminal — there is nobody
     ///     to prompt, and blocking on a pipe forever is worse than proceeding
-    ///     with no secret.
+    ///     without.
     static func resolve(
         commandLineValue: String?,
+        name: String = SecretPrompt.environmentVariable,
+        promptText: String = "Secret (leave empty for an unauthenticated node): ",
         environment: [String: String] = ProcessInfo.processInfo.environment,
         allowPrompt: Bool = RawTerminal.isTerminal()
     ) throws -> (secret: String, source: Source) {
         if let commandLineValue {
             return (commandLineValue, .commandLine)
         }
-        if let fromEnvironment = environment[environmentVariable], !fromEnvironment.isEmpty {
-            return (fromEnvironment, .environment)
+        if let fromEnvironment = environment[name], !fromEnvironment.isEmpty {
+            return (fromEnvironment, .environment(name))
+        }
+        if let fromFile = ConfigFile.read(name, environment: environment) {
+            let path = ConfigFile.url(for: name, environment: environment)?.path ?? name
+            return (fromFile, .configFile(path))
         }
         guard allowPrompt else { return ("", .none) }
-        let typed = try readWithoutEcho(prompt: "Secret (leave empty for an unauthenticated node): ")
+        let typed = try readWithoutEcho(prompt: promptText)
         return (typed, typed.isEmpty ? .none : .prompt)
     }
 

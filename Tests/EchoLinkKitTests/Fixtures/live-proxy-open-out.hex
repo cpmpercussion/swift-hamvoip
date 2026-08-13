@@ -1,0 +1,32 @@
+# EL-2 — the client's two 0x01 OPEN frames, for message-type coverage.
+#
+# Provenance: same capture and same session as `live-proxy-login-in.hex`; see
+# that file's header. Cited by SHA-256, never by path.
+#
+# This is our own half, checked in because the frame type is under test and
+# there is nothing else to see it in: OPEN is only ever sent client->proxy, so
+# a peer-half-only rule would leave type 0x01 with no fixture at all.
+#
+# It is safe to check in because an OPEN frame is a header and nothing else —
+# 9 bytes, zero-length payload. It carries no credential. Its peer IPv4 field
+# holds EchoLink's own directory server, which is public infrastructure every
+# client is configured with, not an address belonging to another operator.
+#
+# What it pins: a zero-length payload is legal, and the length field is
+# `00000000` rather than the frame being truncated to 5 bytes. A decoder that
+# treats "no payload" as "no frame" loses the session lifecycle.
+# Machine-generated. The captures themselves are not in the repository —
+# they are the maintainer's own, and large. Regenerate with:
+#   scripts/pcap-to-fixture.py <capture> --transport tcp --stream 1 --dir out --range 2:2,7:7
+# Capture SHA-256: c66d11f9bce26158c8723c13c2846e62a2a35e040b929a16545f3f8433359ddf
+#
+# Each line is one EchoLink proxy frame verbatim, reassembled from the
+# TCP stream: the 9-byte header — type(1), peer IPv4(4), length(4,
+# LITTLE-endian) — and its payload. `[n]` is the frame's index in
+# arrival order across both directions, so a gap in the indices is a
+# frame deliberately left out.
+
+# [2] 1.010s ==> OPEN        peer 152.67.98.197     0B
+01 984362c5 00000000
+# [7] 2.529s ==> OPEN        peer 152.67.98.197     0B
+01 984362c5 00000000

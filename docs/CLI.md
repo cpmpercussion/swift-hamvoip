@@ -162,7 +162,55 @@ key handling; the session runs until the node hangs up or `--duration` elapses.
 
 ---
 
-## 3. The secret
+## 3. Per-operator defaults: `~/.config/swift-hamvoip/`
+
+The values that never change between runs live in a config directory, so they
+do not have to be typed or exported every time:
+
+```
+~/.config/swift-hamvoip/CALLSIGN            your callsign
+~/.config/swift-hamvoip/ECHOLINK_PASSWORD   your EchoLink account password
+~/.config/swift-hamvoip/HAMVOIP_SECRET      the IAX2 node secret
+```
+
+`$XDG_CONFIG_HOME` is honoured if it is set.
+
+The layout is deliberately dull: **one file per value, named for the setting,
+containing nothing but the value.** No format, no parser, no escaping rules,
+nothing to get wrong — `cat` shows you a setting and `echo >` sets one. Each
+file's name is the environment variable it stands in for, which is the whole
+convention: if you know the variable, you know the file. A trailing newline is
+trimmed, so `echo VK1XYZ > CALLSIGN` does what it looks like.
+
+```sh
+mkdir -p ~/.config/swift-hamvoip
+echo 'VK1XYZ' > ~/.config/swift-hamvoip/CALLSIGN
+printf '%s' 'the-password' > ~/.config/swift-hamvoip/ECHOLINK_PASSWORD
+chmod 600 ~/.config/swift-hamvoip/ECHOLINK_PASSWORD
+```
+
+**Precedence: command line → environment → config file → interactive prompt.**
+The file sits below the environment so a one-off override never needs an edit,
+and above the prompt so the common case is silent. It is the order `git` and
+`ssh` use for their own per-user configuration.
+
+With a `CALLSIGN` file in place, `--callsign` becomes optional everywhere it
+was required. Omitting it *and* having no file is an error that names both
+places, because "callsign is required" is no help to somebody who thought they
+had set it.
+
+The commands say where a credential came from, so a stale file is findable:
+
+```
+Callsign VK1XYZ; account password from /Users/you/.config/swift-hamvoip/ECHOLINK_PASSWORD.
+```
+
+`chmod 600` the password files. If one is readable by other users on the
+machine the CLI says so once, on stderr, and carries on — a permission bit is
+the operator's call about their own machine, and refusing to run would be a
+worse failure than the risk it prevents.
+
+## 4. The secret
 
 **Never pass a password as a plain command-line argument if you can avoid it.**
 `argv` is readable by every process on the machine through `ps`, and your shell
@@ -217,7 +265,7 @@ is about.
 
 ---
 
-## 4. The OQ-5 experiment
+## 5. The OQ-5 experiment
 
 §7 does the same thing for OQ-7, against an M17 reflector instead of a node.
 
@@ -375,7 +423,7 @@ settled by §8.6.15.
 
 ---
 
-## 5. Milestone M2 sign-off checklist
+## 6. Milestone M2 sign-off checklist
 
 ### Result — 2026-08-09, ASL3 node in a UTM VM ✅ PASSED
 
@@ -513,7 +561,7 @@ hung up" and knowing why.
 
 ---
 
-## 6. What is tested, and what a node has to test
+## 7. What is tested, and what a node has to test
 
 Unit-tested (`Tests/HamVoIPCLITests/`, no hardware, no network):
 
@@ -550,7 +598,7 @@ authentication, and whether DTMF reaches its command processor. That is what
 
 ---
 
-## 7. The OQ-7 experiment
+## 8. The OQ-7 experiment
 
 > **Settled 2026-08-11: the frame is 54 bytes.** The evidence is in
 > "What the answer was", below, and in the OQ-7 row of `DEVELOPMENT-PLAN.md`.
@@ -719,3 +767,202 @@ question is still open rather than answered by default. The capture itself sits
 in the workspace with the AllStar ones, unversioned. Its provenance is recorded
 in the OQ-7 row of `DEVELOPMENT-PLAN.md`, which is what a fixture header would
 otherwise have carried.
+
+---
+
+## 9. `echolink` — EchoLink through a proxy (EL-10, Milestone M3)
+
+The live-validation harness for EchoLink, and the counterpart to `connect` for
+IAX2 and `m17` for M17. Everything below the CLI is `EchoLinkClient`.
+
+**Nothing in this repository has ever spoken to a real EchoLink proxy.** The
+protocol was recovered from captures of a *third-party* client's sessions
+(OQ-9), so this command is the first time our own reading of it meets a real
+one. That is Milestone M3, and it needs a human on air.
+
+```sh
+swift run hamvoip-cli echolink \
+    --proxy <proxy host> \
+    --directory-server <directory server IPv4> \
+    --peer 13.57.14.183 \
+    --node '*ECHOTEST*'
+```
+
+With `CALLSIGN` and `ECHOLINK_PASSWORD` in `~/.config/swift-hamvoip/` (§3),
+neither `--callsign` nor a password prompt is needed. Add `--callsign` to
+override for one run, or `--no-directory-login` to skip the account login
+entirely.
+
+`*ECHOTEST*` is the obvious first contact: it echoes audio back, so one operator
+alone can confirm the round trip end to end — which is exactly what the capture
+work already demonstrated the path can do.
+
+Keys are the same as the other two commands: SPACE toggles PTT, `q` quits, `?`
+lists them.
+
+### Two passwords, and only one of them is secret
+
+A proxied EchoLink session carries two different secrets a few bytes apart on
+the same TCP connection, and confusing them is the easiest mistake here:
+
+| | What it is | Secret? |
+|---|---|---|
+| **Proxy password** | `--proxy-password`. `PUBLIC` on a public proxy — the literal string, and the only value ever observed. Hashed into the login digest, never sent in clear. | No |
+| **Account password** | Your own EchoLink account password. Relayed *in cleartext* to the directory server. | **Yes** |
+
+They are separate Swift types (`EchoLinkProxyPassword`,
+`EchoLinkAccountPassword`) so neither can be passed where the other belongs, and
+both redact themselves in `description` so an interpolation cannot put one in a
+log. There is deliberately no option for the account password: a password on the
+command line lands in shell history.
+
+### What connecting actually does
+
+```
+proxy login          nonce -> callsign + digest
+OPEN                 to the DIRECTORY SERVER — the only OPEN a client sends
+account login        tunnelled as 0x02, answered "OK"
+CLOSE                the directory channel, closed on purpose. Not the session.
+RR + SDES            to the node, on 0x06 — this is what opens the session
+                     retransmitted until the node answers
+audio                on 0x05
+RR + BYE             on teardown
+```
+
+Two things here are worth knowing before debugging a failed session, because
+both contradict what the plan originally assumed:
+
+- **No `OPEN` is sent for the node.** `OPEN`/`CLOSE`/`STATUS`/`TCP_DATA` are the
+  tunnelled TCP connection to the directory server. The audio and control
+  channels are connectionless — the peer's address rides in each frame header —
+  so they need no setup at all.
+- **The `RR + SDES` on the control channel is what opens a session.** Without
+  it, nothing answers. `--help`'s "expect to be the first" applies most
+  sharply here.
+
+`--directory-server` needs the directory server's IPv4 address. There is
+deliberately no default: the proxy's `OPEN` carries a raw address, nothing here
+resolves DNS, and baking one operator's choice of a third party's server into
+the tool would be a guess about infrastructure rather than about the protocol.
+
+`--no-directory-login` skips straight to the node. Whether a node answers a
+client that never logged in is **not established** — no capture shows the
+attempt — so that flag is an experiment, not a supported mode.
+
+### What a live run has to settle
+
+The unit tests cover everything that is a decision rather than an I/O call, all
+of it against fixtures cut from real traffic. What they cannot cover is whether
+our *reading* of the protocol is right — a fixture replays what happened, and
+agrees with us by construction. A live run tests:
+
+- that a real proxy accepts our login digest (both recorded vectors reproduce
+  offline, but only against captures of a client that was not us);
+- that a real node answers the `RR + SDES` that opens a session, and does so
+  for a client that identifies itself as `swift-hamvoip` rather than as one of
+  the two clients the captures contain;
+- that GSM 06.10 audio we *encode* is intelligible at the far end. Decoding is
+  already evidenced: `GSMVoiceCodecTests` decodes the captured frames a real
+  peer sent, and finds them audible rather than noise. The encode direction has
+  never been heard by anyone;
+- that the synthesised playout clock (EL-7) sounds like speech rather than like
+  a stutter, across a real talkspurt boundary;
+- that the SF-1 watchdog cuts transmission at its limit, as it did for M2.
+
+### Live status, 2026-08-13
+
+**The session connects.** Proxy login, directory login and the node handshake
+all work on air: `*ECHOTEST*` answers by name and its station info arrives.
+What remains for M3 is audio — run with `--audio`, press space, talk, listen.
+
+Getting there turned up a three-part bug in the directory login, the important
+part being that the `ONLINE` line is what registers a station as *available*.
+Authentication is not registration: without it the server answers `OK` and
+never lists you, so every step reports success and no node will ever answer.
+The EL-10 entry in `DEVELOPMENT-PLAN.md` has the full comparison.
+
+Two practical notes from that attempt:
+
+- **Public proxies are single-user and heavily contended.** A proxy listed
+  `Ready` is often busy by the time you connect, and a busy one accepts the TCP
+  connection and then hangs up before sending its nonce — which the client
+  reports as `proxy: the proxy stream closed`. That is not a fault. The list is
+  at `http://www.echolink.org/proxylist.jsp`; probing a candidate by reading
+  its 8-byte greeting takes a second and saves a confusing failure.
+- **`--node-answer-timeout`** controls how long the opening SDES is resent
+  while waiting. Raise it when capturing an attempt for analysis.
+
+### If the audio grinds
+
+Three things caused that on the first live audio test, all in this client and
+all now fixed. If it comes back, they are the places to look:
+
+- **A drifting playout grid.** `tick(); sleep(20ms)` costs 20 ms *plus* the
+  tick *plus* scheduler slop, so frames go out every 22–25 ms into a device
+  consuming them every 20 ms. The speaker starves several times a second. The
+  loop now sleeps until an absolute deadline, as `M17Client` always did.
+- **Holes in the output stream.** Yielding nothing on a concealed or starved
+  tick leaves a gap the device underruns on. Every tick now yields exactly one
+  frame — a faded repeat of the last real one for a short run, then zeros.
+- **A jitter buffer far smaller than the arrival pattern needs.** This one took
+  a capture to size honestly. On a live 65-second session the proxied path
+  delivered **zero lost packets in either direction** — and arrivals with a
+  median gap of 0 ms, a p90 of 184 ms and a worst-case shortfall of **265 ms**
+  against a steady 20 ms grid. That signature is bursts: several packets land
+  together, then nothing for a sixth of a second. Nothing is missing; it is all
+  late, together, because the proxy tunnels UDP inside TCP and TCP bunches it.
+
+  A buffer that holds one 80 ms packet cannot absorb a 265 ms burst, so
+  `EchoLinkClient.defaultJitterBuffer` targets 280 ms with a 160 ms floor and a
+  500 ms ceiling, and adapts within that range.
+
+- **A stream clock that ignored real time.** The subtlest of the four, and the
+  one that made the others look unfixable. EchoLink's RTP timestamp is always
+  zero, so the sequence number is the only ordering signal — but **the sender
+  does not skip sequence numbers across a pause.** It stops, then resumes with
+  `seq + 1`. The same live session shows 339 packets spanning eleven silences
+  of half a second or more with exactly *one* sequence discontinuity.
+
+  A sequence-only clock therefore advances 80 ms across a four-second silence,
+  while `JitterBuffer`'s playout grid advances in real time. After the first
+  pause the two have diverged for good, every arriving frame looks like it
+  belongs in the distant past, and the buffer degenerates into a pass-through
+  with no jitter protection at all — which is why making it deeper stopped
+  helping. `EchoLinkSequenceExpander.expand` now takes the arrival time and
+  treats a wall-clock pause as a talkspurt boundary.
+
+- **A pause threshold set inside the normal rhythm.** Having added the arrival
+  clock, the question became what counts as a pause — and the first answer,
+  two packets' worth, was wrong. A tunnelled path delivers a *clump* of two or
+  three packets every ~200 ms, so gaps of that size are the rhythm, not a
+  silence. Measured across two sessions, the two populations are sharply
+  separated with nothing in between:
+
+      bunching   max 218 ms and 375 ms
+      silences   min 806 ms and 582 ms
+
+  At 240 ms the threshold sat inside the bunching range and re-latched on
+  ordinary delivery — three spurious re-latches in a 60-second session, each
+  un-priming the buffer and costing a re-prime, audible as a short drop in
+  otherwise clean audio. It is now 480 ms, in the empty valley. The buffer
+  floor moved to 240 ms for the same reason: adaptation can drive the target
+  down to the floor, and a floor below the arrival rhythm starves on every
+  clump.
+
+Depths are tuning values, not protocol facts, and they buy latency to pay for
+continuity. `--jitter-ms` sets the target for one run: raise it if the audio
+still drops out, lower it if the delay is annoying. A direct (non-proxied) path
+would not need anything like this much — an argument for direct mode, not
+against the default.
+
+### The M3 sign-off checklist
+
+Same shape as the M2 checklist in §5. Record the result on the PR.
+
+- [ ] Proxy login accepted.
+- [x] Directory login accepted — confirmed 2026-08-13.
+- [x] `*ECHOTEST*` answered the opening SDES — confirmed 2026-08-13.
+- [ ] Audio transmitted, and heard back intelligibly in the echo.
+- [ ] Inbound talkspurts reported, with no stutter across a boundary.
+- [ ] SF-1 watchdog cut transmission at its limit.
+- [ ] Clean teardown, terminal restored.

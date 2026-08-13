@@ -17,6 +17,8 @@ enum CLIValidationError: Error, Equatable, CustomStringConvertible {
     case callsignHasInvalidCharacters(String)
     case timeoutOutOfRange(seconds: Int)
     case notADTMFDigit(Character)
+    /// No callsign on the command line and none in the config file.
+    case callsignMissing(configPath: String)
 
     var description: String {
         switch self {
@@ -35,6 +37,8 @@ enum CLIValidationError: Error, Equatable, CustomStringConvertible {
             return "the transmit timeout must be between 5 and 3600 seconds, not \(seconds)"
         case .notADTMFDigit(let character):
             return "'\(character)' is not a DTMF digit; valid digits are 0-9, *, #, A-D"
+        case .callsignMissing(let configPath):
+            return "no callsign: pass --callsign, or put one in \(configPath)"
         }
     }
 }
@@ -151,9 +155,11 @@ struct NodeOptions: ParsableArguments {
     var username: String
 
     @Option(name: .long, help: ArgumentHelp(
-        "Your callsign, sent as the CALLING NAME IE.",
+        """
+        Your callsign, sent as the CALLING NAME IE. Defaults to the CALLSIGN         file in ~/.config/swift-hamvoip/.
+        """,
         valueName: "call"))
-    var callsign: String
+    var callsign: String?
 
     @Option(name: .long, help: ArgumentHelp(
         """
@@ -174,7 +180,7 @@ struct NodeOptions: ParsableArguments {
             port: port,
             node: node,
             username: username,
-            callsign: callsign,
+            callsign: try ConfigFile.requireCallsign(commandLineValue: callsign),
             secret: resolved.secret)
         return (destination, resolved.source)
     }

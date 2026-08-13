@@ -1,0 +1,66 @@
+# EL-2 — the *proxy's* half of an EchoLink proxy login and session lifecycle.
+#
+# Provenance (LP-1, `Tests/FIXTURES.md`): a capture of the maintainer's own
+# EchoLink session, taken 2026-08-12, the work that advanced OQ-9. Nothing here
+# comes from anyone else's implementation; these are the octets a real public
+# proxy put on the wire in reply to us.
+#
+# The capture is cited by SHA-256 and never by path — see the last section of
+# `Tests/FIXTURES.md`. It contains the operator's EchoLink account password in
+# cleartext, in a type 0x02 frame in the *client* direction, so only the
+# proxy's half is here and the client direction is not cut from this capture
+# at all.
+#
+# The exchange, as it happened:
+#
+#   <==  8 ASCII hex bytes, unframed             the nonce ("6fc8b7e3")
+#   ==>  callsign + LF + 16 raw digest bytes     omitted, see below
+#   ==>  0x01 OPEN                               omitted (client half)
+#   <==  0x04 STATUS  00 00 00 00                success
+#   ==>  0x02 TCP DATA                           OMITTED — the account password
+#   <==  0x02 TCP DATA  "OK"                     the directory server's reply
+#   <==  0x03 CLOSE
+#   ==>  0x01 OPEN                               omitted (client half)
+#   <==  0x04 STATUS  00 00 00 00                success
+#
+# Three things this fixture pins that no hand-built one could:
+#
+#  * The login exchange is NOT framed. The nonce arrives as 8 bare ASCII bytes
+#    before any 9-byte header appears, which is why a decoder that starts
+#    looking for headers at byte 0 desynchronises on a capture that includes
+#    the TCP handshake, and appears to work on one that does not.
+#  * The length field is LITTLE-endian: a 4-byte payload reads `04000000`.
+#    RFC 5456 and M17 are both big-endian, so this is the one length field in
+#    the tree running the other way, and the one most likely to be "corrected".
+#  * The peer IPv4 field is 0.0.0.0 on every directory and control frame. It is
+#    only meaningful on the 0x05/0x06 channels.
+#
+# The frame at index [4] is deliberately absent and must stay absent: it is the
+# directory login line, `'l'` + callsign + two separators + the operator's
+# account password + CR, in cleartext. The `[n]` indices make the gap visible.
+#
+# The one type 0x02 frame that IS here, index [5], is the two bytes 4f 4b —
+# "OK". It was cut with `--allow-tcp-data` after checking those exact two
+# bytes; it carries no credential and no third-party data. EL-6 tests against
+# it.
+# Machine-generated. The captures themselves are not in the repository —
+# they are the maintainer's own, and large. Regenerate with:
+#   scripts/pcap-to-fixture.py <capture> --transport tcp --stream 1 --dir in --range 0:8 --allow-tcp-data
+# Capture SHA-256: c66d11f9bce26158c8723c13c2846e62a2a35e040b929a16545f3f8433359ddf
+#
+# Each line is one EchoLink proxy frame verbatim, reassembled from the
+# TCP stream: the 9-byte header — type(1), peer IPv4(4), length(4,
+# LITTLE-endian) — and its payload. `[n]` is the frame's index in
+# arrival order across both directions, so a gap in the indices is a
+# frame deliberately left out.
+
+# [0] 0.000s <== LOGIN        nonce 6fc8b7e3      8B
+3666633862376533
+# [3] 1.596s <== STATUS          4B  success
+04 00000000 04000000 00000000
+# [5] 2.184s <== TCP DATA        2B
+02 00000000 02000000 4f4b
+# [6] 2.523s <== CLOSE           0B
+03 00000000 00000000
+# [8] 3.128s <== STATUS          4B  success
+04 00000000 04000000 00000000

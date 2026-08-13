@@ -68,7 +68,7 @@ extension MediaFormat: CustomStringConvertible {
     /// The RFC's own names for the bits that are set.
     ///
     /// An `OptionSet` gets `MediaFormat(rawValue: 4)` from the compiler, which
-    /// is what a live session printed where `docs/CLI.md` §5 promises the
+    /// is what a live session printed where `docs/CLI.md` §6 promises the
     /// harness "names a codec". A bitmask nobody can read at a glance is a bad
     /// thing to hand someone who is mid-call and deciding whether the
     /// negotiation went the way they meant it to.
