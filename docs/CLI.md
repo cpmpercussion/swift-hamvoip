@@ -931,6 +931,24 @@ all now fixed. If it comes back, they are the places to look:
   helping. `EchoLinkSequenceExpander.expand` now takes the arrival time and
   treats a wall-clock pause as a talkspurt boundary.
 
+- **A pause threshold set inside the normal rhythm.** Having added the arrival
+  clock, the question became what counts as a pause — and the first answer,
+  two packets' worth, was wrong. A tunnelled path delivers a *clump* of two or
+  three packets every ~200 ms, so gaps of that size are the rhythm, not a
+  silence. Measured across two sessions, the two populations are sharply
+  separated with nothing in between:
+
+      bunching   max 218 ms and 375 ms
+      silences   min 806 ms and 582 ms
+
+  At 240 ms the threshold sat inside the bunching range and re-latched on
+  ordinary delivery — three spurious re-latches in a 60-second session, each
+  un-priming the buffer and costing a re-prime, audible as a short drop in
+  otherwise clean audio. It is now 480 ms, in the empty valley. The buffer
+  floor moved to 240 ms for the same reason: adaptation can drive the target
+  down to the floor, and a floor below the arrival rhythm starves on every
+  clump.
+
 Depths are tuning values, not protocol facts, and they buy latency to pay for
 continuity. `--jitter-ms` sets the target for one run: raise it if the audio
 still drops out, lower it if the delay is annoying. A direct (non-proxied) path

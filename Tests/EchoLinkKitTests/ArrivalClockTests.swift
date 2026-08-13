@@ -36,18 +36,44 @@ final class ArrivalClockTests: XCTestCase {
     }
 
     func testOrdinaryBurstinessIsNotMistakenForAPause() {
-        // A proxied path delivers in bursts constantly — median gap zero, then
-        // a couple of hundred milliseconds. Re-latching on that would fight the
-        // jitter buffer rather than help it.
+        // A proxied path delivers a clump of two or three packets every
+        // ~200 ms, constantly. Re-latching on that rhythm fights the jitter
+        // buffer rather than helping it, and each spurious re-latch costs a
+        // re-prime — audible as a short drop in otherwise clean audio.
         var expander = EchoLinkSequenceExpander()
         _ = expander.expand(0, arrivedAt: .milliseconds(0))
         let together = expander.expand(1, arrivedAt: .milliseconds(0))
         let after = expander.expand(2, arrivedAt: .milliseconds(200))
 
-        XCTAssertFalse(together.isNewTalkspurt, "two packets in one burst")
-        XCTAssertFalse(after.isNewTalkspurt, "a 200 ms gap is bunching, not a pause")
+        XCTAssertFalse(together.isNewTalkspurt, "two packets in one clump")
+        XCTAssertFalse(after.isNewTalkspurt, "a 200 ms gap is the rhythm, not a pause")
         XCTAssertEqual(after.streamTime, together.streamTime + 80,
                        "and audio time still advances one packet per packet")
+    }
+
+    func testTheThresholdSitsInTheMeasuredValleyBetweenBunchingAndSilence() {
+        // Measured across two live sessions, the gaps are sharply bimodal with
+        // nothing in between:
+        //
+        //     bunching   max 218 ms and 375 ms
+        //     silences   min 806 ms and 582 ms
+        //
+        // The threshold has to separate them. An earlier 240 ms sat inside the
+        // bunching range and re-latched on ordinary delivery.
+        var expander = EchoLinkSequenceExpander()
+        _ = expander.expand(0, arrivedAt: .milliseconds(0))
+
+        // The largest gap ever observed that was still just bunching.
+        let bunching = expander.expand(1, arrivedAt: .milliseconds(375))
+        XCTAssertFalse(bunching.isNewTalkspurt,
+                       "375 ms was measured as normal delivery, not a pause")
+
+        var other = EchoLinkSequenceExpander()
+        _ = other.expand(0, arrivedAt: .milliseconds(0))
+        // The smallest gap ever observed that really was a silence.
+        let silence = other.expand(1, arrivedAt: .milliseconds(582))
+        XCTAssertTrue(silence.isNewTalkspurt,
+                      "582 ms was measured as a real sender pause")
     }
 
     func testWithoutArrivalTimesTheClockIsSequenceOnly() {

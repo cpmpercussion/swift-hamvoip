@@ -265,9 +265,14 @@ public actor EchoLinkClient: NetworkClient {
     /// demanded.
     ///
     /// Hence 280 ms initial target: above the worst observed shortfall, with
-    /// the floor at two whole packets and the ceiling high enough for the
-    /// 375 ms outlier. The buffer adapts within that range, so a kinder path
-    /// settles lower on its own.
+    /// the ceiling high enough for the largest outlier. The buffer adapts
+    /// within that range, so a kinder path settles lower on its own.
+    ///
+    /// The **floor is 240 ms**, not two packets. Adaptation may drive the
+    /// target down to the floor, and a floor below the arrival rhythm starves
+    /// on every clump: measured bunching reaches 218 ms on one session and
+    /// 375 ms on another, so anything under about 240 ms is below the p99 of
+    /// normal delivery on a tunnelled path.
     ///
     /// These are tuning values, not protocol facts, and they buy latency to
     /// pay for continuity. A direct (non-proxied) path would not need them —
@@ -275,7 +280,7 @@ public actor EchoLinkClient: NetworkClient {
     public static let defaultJitterBuffer = JitterBuffer(
         frameDuration: .milliseconds(20),
         targetDepth: .milliseconds(280),
-        minDepth: .milliseconds(160),
+        minDepth: .milliseconds(240),
         maxDepth: .milliseconds(500))
 
     /// How a stream transport is made. Tests inject `MockStreamTransport`;

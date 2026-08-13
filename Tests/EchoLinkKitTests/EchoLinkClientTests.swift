@@ -637,8 +637,10 @@ final class EchoLinkClientTests: XCTestCase {
             buffer.currentTargetDepth, .milliseconds(265),
             "the initial target must cover the worst measured shortfall")
         XCTAssertGreaterThanOrEqual(
-            buffer.minDepth, .milliseconds(160),
-            "the floor holds two whole packets")
+            buffer.minDepth, .milliseconds(240),
+            "the floor must sit above the measured arrival rhythm — adaptation "
+                + "can drive the target down to it, and a floor below the "
+                + "bunching starves on every clump")
         XCTAssertGreaterThanOrEqual(
             buffer.maxDepth, .milliseconds(375),
             "the ceiling must reach the largest observed gap")

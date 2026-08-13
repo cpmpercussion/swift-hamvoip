@@ -98,12 +98,27 @@ public struct EchoLinkSequenceExpander: Sendable, Equatable {
     public init() {}
 
     /// How far arrival time may run ahead of what the sequence implies before
-    /// the gap is read as a pause rather than as jitter.
+    /// the gap is read as a pause rather than as bunching.
     ///
-    /// Two packets' worth. Below that it is ordinary bunching — which on a
-    /// proxied path is constant — and re-latching on it would fight the jitter
-    /// buffer instead of helping it.
-    public static let arrivalPauseThreshold: Duration = .milliseconds(240)
+    /// **480 ms, chosen from a measured gap between two populations** rather
+    /// than from a round number of packets. Across two live sessions the
+    /// inbound arrival gaps are sharply bimodal, and nothing at all falls in
+    /// between:
+    ///
+    ///     bunching   max 218 ms (13 s session) and 375 ms (60 s session)
+    ///     silences   min 806 ms (13 s session) and 582 ms (60 s session)
+    ///
+    /// The proxy delivers a clump of two or three packets every ~200 ms, so
+    /// gaps of that order are the *normal rhythm* of a tunnelled path, not a
+    /// pause. An earlier version put this at 240 ms — inside the bunching
+    /// range — and re-latched on ordinary rhythm: in the 60-second session 14
+    /// gaps crossed it while only 11 were real silences, so three re-latches
+    /// were spurious. Each one un-primes the jitter buffer and costs a
+    /// re-prime, which is audible as a short drop in otherwise clean audio.
+    ///
+    /// Sitting in the empty valley leaves margin on both sides: 105 ms above
+    /// the largest bunching gap seen, 102 ms below the smallest real silence.
+    public static let arrivalPauseThreshold: Duration = .milliseconds(480)
 
     /// Arrival time of the newest packet accepted, when the caller supplies it.
     private var newestArrival: Duration?
