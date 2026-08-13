@@ -892,6 +892,27 @@ Two practical notes from that attempt:
 - **`--node-answer-timeout`** controls how long the opening SDES is resent
   while waiting. Raise it when capturing an attempt for analysis.
 
+### If the audio grinds
+
+Three things caused that on the first live audio test, all in this client and
+all now fixed. If it comes back, they are the places to look:
+
+- **A drifting playout grid.** `tick(); sleep(20ms)` costs 20 ms *plus* the
+  tick *plus* scheduler slop, so frames go out every 22–25 ms into a device
+  consuming them every 20 ms. The speaker starves several times a second. The
+  loop now sleeps until an absolute deadline, as `M17Client` always did.
+- **Holes in the output stream.** Yielding nothing on a concealed or starved
+  tick leaves a gap the device underruns on. Every tick now yields exactly one
+  frame — a faded repeat of the last real one for a short run, then zeros.
+- **A jitter buffer smaller than one packet.** `JitterBuffer()`'s 60 ms default
+  target is less than EchoLink's 80 ms packet, so it drains to empty between
+  packets. `EchoLinkClient.defaultJitterBuffer` targets 120 ms with a 100 ms
+  floor.
+
+The last one is a tuning value, not a protocol fact: raise
+`Configuration.jitterBuffer`'s depths if a path is jittery enough to still
+starve, at the cost of latency.
+
 ### The M3 sign-off checklist
 
 Same shape as the M2 checklist in §5. Record the result on the PR.

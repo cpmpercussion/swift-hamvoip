@@ -68,6 +68,8 @@ public enum EchoLinkClientError: Error, Equatable, CustomStringConvertible {
     case directoryLoginIncomplete
     /// The node never answered the SDES that opens a session.
     case nodeDidNotAnswer
+    /// `send(pcm:)` was handed something other than one codec frame.
+    case wrongSampleCount(expected: Int, actual: Int)
 
     public var description: String {
         switch self {
@@ -83,6 +85,8 @@ public enum EchoLinkClientError: Error, Equatable, CustomStringConvertible {
                 + "directory server address"
         case .nodeDidNotAnswer:
             return "the node did not answer — no reply to the SDES that opens a session"
+        case .wrongSampleCount(let expected, let actual):
+            return "expected one codec frame of \(expected) samples, got \(actual)"
         }
     }
 }
@@ -152,6 +156,10 @@ public actor EchoLinkClient: NetworkClient {
         public var transmitTimeout: Duration
         /// One codec frame — the playout tick. 20 ms.
         public var frameInterval: Duration
+
+        /// How far the playout grid may fall behind before it re-anchors
+        /// instead of sprinting to catch up.
+        public var maximumPlayoutLag: Duration
         /// The operator's callsign, for the proxy login and the directory.
         public var callsign: String
 
@@ -213,9 +221,10 @@ public actor EchoLinkClient: NetworkClient {
             directoryServer: EchoLinkPeerAddress? = nil,
             transmitTimeout: Duration = .seconds(180),
             frameInterval: Duration = .milliseconds(20),
+            maximumPlayoutLag: Duration = .milliseconds(200),
             nodeAnswerTimeout: Duration = .seconds(15),
             nodeAnswerRetryInterval: Duration = .milliseconds(800),
-            jitterBuffer: JitterBuffer = JitterBuffer(),
+            jitterBuffer: JitterBuffer = EchoLinkClient.defaultJitterBuffer,
             leveller: AudioLeveller = AudioLeveller()
         ) {
             self.callsign = callsign
@@ -227,12 +236,30 @@ public actor EchoLinkClient: NetworkClient {
             self.directoryServer = directoryServer
             self.transmitTimeout = transmitTimeout
             self.frameInterval = frameInterval
+            self.maximumPlayoutLag = maximumPlayoutLag
             self.nodeAnswerTimeout = nodeAnswerTimeout
             self.nodeAnswerRetryInterval = nodeAnswerRetryInterval
             self.jitterBuffer = jitterBuffer
             self.leveller = leveller
         }
     }
+
+    /// A jitter buffer sized for EchoLink rather than for a 20 ms-per-packet
+    /// protocol.
+    ///
+    /// `JitterBuffer()`'s own defaults target 60 ms of depth, which is **less
+    /// than one EchoLink packet**: audio arrives in 80 ms bursts of four
+    /// frames, so a 60 ms target drains to empty between packets and the buffer
+    /// starves roughly every packet. That is audible, and it was half of why
+    /// the first live audio was grindy.
+    ///
+    /// 120 ms target with a 100 ms floor holds one whole packet plus margin,
+    /// which is the least that can absorb this arrival pattern at all.
+    public static let defaultJitterBuffer = JitterBuffer(
+        frameDuration: .milliseconds(20),
+        targetDepth: .milliseconds(120),
+        minDepth: .milliseconds(100),
+        maxDepth: .milliseconds(300))
 
     /// How a stream transport is made. Tests inject `MockStreamTransport`;
     /// nothing here opens a socket itself (AU-5).
@@ -261,6 +288,7 @@ public actor EchoLinkClient: NetworkClient {
     // same shape `M17Client` uses, and for the same reason.
     private let elapsedSinceOrigin: @Sendable () -> Duration
     private let sleepFor: @Sendable (Duration) async throws -> Void
+    private let sleepUntilOffset: @Sendable (Duration) async throws -> Void
     private let makeDirectorySession:
         @Sendable (String, String, String, @escaping EchoLinkDirectorySession.Send)
             -> EchoLinkDirectorySession
@@ -292,6 +320,11 @@ public actor EchoLinkClient: NetworkClient {
     /// flag rather than a reading of `phase`, because `releaseSession` has to
     /// suspend part-way through and two callers must not both get in.
     private var isReleasing = false
+
+    /// The last frame decoded from real audio, repeated (and faded) to cover a
+    /// gap. `nil` until something has been heard.
+    private var lastDecodedFrame: [Int16]?
+    private var concealmentRun = 0
 
     private var inbound = EchoLinkStreamAudio()
     private var transmitter = EchoLinkStreamTransmitter()
@@ -333,6 +366,9 @@ public actor EchoLinkClient: NetworkClient {
         let origin = clock.now
         self.elapsedSinceOrigin = { sendableClock.now.duration(to: origin) * -1 }
         self.sleepFor = { duration in try await sendableClock.sleep(for: duration) }
+        self.sleepUntilOffset = { offset in
+            try await sendableClock.sleep(until: origin.advanced(by: offset), tolerance: nil)
+        }
         self.makeDirectorySession = { callsign, version, location, send in
             EchoLinkDirectorySession(
                 callsign: callsign, version: version, location: location,
@@ -611,7 +647,8 @@ public actor EchoLinkClient: NetworkClient {
     public func send(pcm: [Int16]) async throws -> EchoLinkRTPPacket? {
         guard case .transmitting = state, phase == .connected else { return nil }
         guard pcm.count == codec.samplesPerFrame else {
-            throw EchoLinkClientError.notConnected
+            throw EchoLinkClientError.wrongSampleCount(
+                expected: codec.samplesPerFrame, actual: pcm.count)
         }
 
         let encoded = try codec.encode(pcm)
@@ -717,28 +754,93 @@ public actor EchoLinkClient: NetworkClient {
 
     // MARK: - Playout
 
+    /// How many consecutive concealed frames before the repeat is faded out
+    /// entirely. Matches `M17StreamReceiver`.
+    private static let maximumConcealmentRun = 3
+
     private func startPlayoutLoop() {
         guard playoutTask == nil else { return }
         let interval = configuration.frameInterval
+        let maximumLag = configuration.maximumPlayoutLag
+        let elapsed = elapsedSinceOrigin
+        let sleepUntil = sleepUntilOffset
+
         playoutTask = Task { [weak self] in
+            // An ABSOLUTE grid, not `tick(); sleep(interval)`.
+            //
+            // The relative version drifts: each period costs the interval plus
+            // the tick plus scheduler slop, so 20 ms frames go out every 22-25
+            // ms into a device consuming them every 20 ms. The speaker starves
+            // a few times a second, and the result is a continuous grinding
+            // rather than an obvious fault — which is exactly how it presented
+            // on the first live audio test.
+            var next = elapsed() + interval
             while !Task.isCancelled {
+                do {
+                    try await sleepUntil(next)
+                } catch {
+                    return  // Cancelled: the session is over.
+                }
                 guard let self else { return }
                 await self.playoutTick()
-                try? await Task.sleep(for: interval)
+
+                next += interval
+                let now = elapsed()
+                // If the grid has fallen far behind — the app was suspended,
+                // say — re-anchor rather than sprinting to catch up.
+                if next + maximumLag < now {
+                    next = now + interval
+                }
             }
         }
     }
 
     private func playoutTick() {
         guard phase == .connected else { return }
+
+        // ⚠️ Every tick yields exactly one frame, including a concealed or
+        // silent one. Emitting nothing leaves a hole in the output stream, the
+        // device underruns, and the gap is audible — the second half of why the
+        // first live audio was grindy. `IAX2VoiceStream` and `M17StreamReceiver`
+        // both always produce PCM for the same reason.
+        var pcm: [Int16]
         switch buffer.pop() {
         case .frame(let payload):
-            guard var pcm = try? codec.decode(payload) else { return }
-            leveller.process(&pcm)  // RC-6/AU-4, in place
-            audioContinuation.yield(pcm)
-        case .concealment, .silence:
-            break
+            guard let decoded = try? codec.decode(payload) else {
+                // Undecodable bytes in the right slot: a gap, not audio, and
+                // not something to seed concealment from.
+                concealmentRun = 0
+                pcm = silentFrame()
+                break
+            }
+            lastDecodedFrame = decoded
+            concealmentRun = 0
+            pcm = decoded
+
+        case .concealment:
+            guard let previous = lastDecodedFrame,
+                  concealmentRun < Self.maximumConcealmentRun else {
+                concealmentRun += 1
+                pcm = silentFrame()
+                break
+            }
+            concealmentRun += 1
+            // Fade the repeat, so a run tails off instead of buzzing.
+            let attenuation = Double(Self.maximumConcealmentRun - concealmentRun + 1)
+                / Double(Self.maximumConcealmentRun + 1)
+            pcm = previous.map { Int16(clamping: Int(Double($0) * attenuation)) }
+
+        case .silence:
+            concealmentRun = 0
+            pcm = silentFrame()
         }
+
+        leveller.process(&pcm)  // RC-6/AU-4, in place
+        audioContinuation.yield(pcm)
+    }
+
+    private func silentFrame() -> [Int16] {
+        [Int16](repeating: 0, count: codec.samplesPerFrame)
     }
 
     // MARK: - Watchdog (SF-1)
@@ -803,6 +905,8 @@ public actor EchoLinkClient: NetworkClient {
         inbound.reset()
         transmitter.reset()
         buffer.reset()
+        lastDecodedFrame = nil
+        concealmentRun = 0
         setState(.idle)
         isReleasing = false
     }

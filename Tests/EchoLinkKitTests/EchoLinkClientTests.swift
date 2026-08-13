@@ -570,6 +570,67 @@ final class EchoLinkClientTests: XCTestCase {
         XCTAssertTrue(text.hasPrefix("oNDATA"))
     }
 
+    // MARK: - Playout continuity
+
+    func testEveryPlayoutTickYieldsAFrameEvenWithNothingBuffered() async throws {
+        // The bug this pins: an earlier version yielded nothing on
+        // .concealment/.silence, leaving holes in the output stream. The device
+        // underruns on a hole, and the result is continuous grinding rather
+        // than an obvious fault.
+        let harness = makeHarness()
+        try await connect(harness)
+
+        // Nothing is injected, so every tick is a starved one.
+        let collected = Task { () -> [[Int16]] in
+            var frames: [[Int16]] = []
+            for await pcm in harness.client.receivedAudio {
+                frames.append(pcm)
+                if frames.count == 5 { break }
+            }
+            return frames
+        }
+        let frames = try await collected.value
+
+        XCTAssertEqual(frames.count, 5, "a starved buffer must still tick")
+        XCTAssertTrue(frames.allSatisfy { $0.count == 160 },
+                      "and every frame is a whole 20 ms of samples")
+        XCTAssertTrue(frames.allSatisfy { $0.allSatisfy { $0 == 0 } },
+                      "with nothing to conceal from, silence is zeros")
+    }
+
+    func testCapturedAudioPlaysOutWithoutSkippingATick() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        let collected = Task { () -> [[Int16]] in
+            var frames: [[Int16]] = []
+            for await pcm in harness.client.receivedAudio {
+                frames.append(pcm)
+                if frames.count == 12 { break }
+            }
+            return frames
+        }
+
+        harness.transport.inject(try fixtureLines("live-proxy-audio-in.hex"))
+        let frames = try await collected.value
+
+        XCTAssertEqual(frames.count, 12, "the tick never skips")
+        XCTAssertTrue(frames.allSatisfy { $0.count == 160 })
+        XCTAssertTrue(frames.contains { $0.contains { $0 != 0 } },
+                      "the captured audio must reach the stream")
+    }
+
+    func testTheJitterBufferDefaultHoldsAWholeEchoLinkPacket() {
+        // 60 ms — JitterBuffer's own default — is less than one 80 ms EchoLink
+        // packet, so the buffer drains to empty between packets and starves
+        // about once per packet.
+        let buffer = EchoLinkClient.defaultJitterBuffer
+        XCTAssertGreaterThanOrEqual(
+            buffer.minDepth, .milliseconds(80),
+            "the floor must hold at least one whole packet")
+        XCTAssertEqual(buffer.frameDuration, .milliseconds(20))
+    }
+
     // MARK: - Transmit
 
     func testTransmitEmitsAPacketEveryFourFrames() async throws {
