@@ -11,11 +11,12 @@ import RadioCore
 /// for IAX2 and `m17` for M17. Everything below the CLI is `EchoLinkClient`;
 /// this file is a terminal around it.
 ///
-/// **This has never been run against a real node by this software.** The
-/// protocol was recovered from captures of a third-party client's sessions
-/// (OQ-9); nothing in this repository has yet spoken to an EchoLink proxy.
-/// Settling that is Milestone M3, and it is deliberately the first thing the
-/// banner says.
+/// **Milestone M3 passed 2026-08-13**: a live QSO through `*ECHOTEST*`, audio
+/// intelligible both ways, and on the same day `--list` returned 6389 entries
+/// from a live directory server. The protocol was recovered from captures of a
+/// third-party client's sessions (OQ-9) rather than from a specification, which
+/// the banner still says — that is a caveat about how the knowledge was
+/// obtained, not about whether it works.
 struct EchoLinkCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "echolink",
@@ -36,9 +37,9 @@ struct EchoLinkCommand: AsyncParsableCommand {
             rather than from a specification, so expect rough edges — but the \
             audio path itself has been heard working.
 
-            The one part still unproven on air is --list. The station-list FORMAT \
-            is conformance-tested against a real 6444-entry download; the request \
-            that asks for one has never been sent by this software.
+            --list is validated on air too, on the same day: 6389 entries from a \
+            live directory server, the count matching what the server declared. \
+            It stops after the directory login and needs no --peer.
 
             *ECHOTEST* is the obvious first contact: it echoes audio back, so one \
             operator alone can confirm the round trip end to end.
@@ -591,8 +592,8 @@ private final class EchoLinkSession: @unchecked Sendable {
                 + "recovered from packet captures, not a specification: expect rough edges.")
         if listStationsOnly {
             await console.log(
-                "The station list itself has NOT been fetched on air by this software — "
-                    + "the format is conformance-tested against a capture, the request is not.")
+                "Station list fetched on air 2026-08-13: 6389 entries from a live "
+                    + "directory server, count matching.")
         }
         await console.log(
             "An EchoLink node is a shared channel and may be a radio transmitter. "

@@ -628,11 +628,13 @@ public actor EchoLinkClient: NetworkClient {
     /// list is still arriving on the new one, which is also why
     /// `EchoLinkClient` must not treat a `CLOSE` as the session ending.
     ///
-    /// ⚠️ **Never run against a live server.** Every rule this depends on was
-    /// read off a capture; the request has never been sent by this code. The
-    /// parse is conformance-tested against the real 6444-entry download, but
-    /// the *fetch* is not, and cannot be until someone runs it — the same
-    /// standing caveat the rest of Phase 6 carried until M3.
+    /// ## Confirmed on air, 2026-08-13
+    ///
+    /// Every step above held against a live server on the first attempt: the
+    /// second `OPEN`, the `f0` CR request, and the framing. It returned 6389
+    /// entries, matching the count the server declared — a *different* list
+    /// from the 6444-entry capture the format was derived from, so the grammar
+    /// is no longer evidenced by a single download.
     ///
     /// - Parameter timeout: how long to wait for the terminator. The reference
     ///   download took 2.6 seconds; the default allows for a slow link rather

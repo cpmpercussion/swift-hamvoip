@@ -781,7 +781,7 @@ of a *third-party* client's sessions (OQ-9) rather than from a specification, so
 expect rough edges — but our reading of it has now met a real proxy, a real
 directory server and a real node.
 
-The one thing here that has **never** run on air is `--list` (§9.1).
+`--list` (§9.1) was validated on air the same day.
 
 ```sh
 swift run hamvoip-cli echolink \
@@ -1006,13 +1006,25 @@ One station a line, tab-separated: callsign, node number, status, address,
 location. Around 6500 lines, so pipe it. Lines beginning `#` are the server's
 own trailing notices and the summary count.
 
-**This has never been run against a live directory server.** The list *format*
-is conformance-tested against a real 6444-entry download and the parser is
-strict about short reads — a truncated list is an error, not a small list — but
-the request that asks for one has only ever been read off a capture, never
-sent. The banner says so when `--list` is passed. If it fails, the most likely
-causes are the second `OPEN` (the capture shows the login channel is not
-reused) or a directory server that wants something other than `f0` CR.
+### Validated on air, 2026-08-13
+
+```
+# EchoLink Server v2.6.159
+# ECHO1: Sydney, AU
+# 6386 station(s), 3 notice(s); the server declared 6389.
+Link down: local request
+```
+
+Everything read off the capture held against a live server: the second `OPEN`,
+the `f0` CR request, the framing, and the grammar. **6386 + 3 = 6389, matching
+the server's own declared count** — and since the parser treats a count
+mismatch as an error, a list that prints at all is one that arrived whole.
+
+This is a **different** list from the captured one (6389 entries against 6444,
+a day apart), so the format is no longer evidenced by a single download. The
+three notice rows came back in the same shape the capture showed
+structurally — a server version banner, a blank, and a server identification —
+which is what `notices` was built for.
 
 The list is deliberately **not** fetched during a normal `connect`: it is 433 kB
 and nothing on the path to a QSO needs it.

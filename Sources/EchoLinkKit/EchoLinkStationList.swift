@@ -169,6 +169,9 @@ public struct EchoLinkStation: Equatable, Sendable {
 /// capture is identified in `Tests/FIXTURES.md` by SHA-256 and lives outside
 /// both repos).
 ///
+/// It was then confirmed against a **second, live** download on 2026-08-13 —
+/// 6389 entries, count matching — so no rule here rests on a single list.
+///
 /// **That capture cannot become a fixture, and neither can any part of it.** It
 /// carries 6548 other operators' callsigns, their locations and 6261 IPv4
 /// addresses. So the tests for this file build their own list from invented

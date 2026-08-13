@@ -89,9 +89,9 @@ remembered; if it disagrees with the repository, the repository is right.
   login, directory login, RTP, the synthesised playout clock, GSM 06.10,
   `EchoLinkClient` and the station list are all in and tested. **Milestone M3
   passed 2026-08-13**: a live QSO through `*ECHOTEST*` from `hamvoip-cli
-  echolink`, audio intelligible both ways. The one piece never run on air is
-  EL-11's `--list` *fetch* — the list format is conformance-tested against a
-  real 6444-entry download, but this software has never sent the request.
+  echolink`, audio intelligible both ways. `--list` was confirmed against a
+  live directory server the same day — 6389 entries, count matching — so
+  nothing in Phase 6 is now unproven on air.
 - `RadioCore` and `IAX2Kit` are complete. `M17Kit` has reflector control,
   base-40 callsigns and stream-packet parse/serialise, but **no codec wiring
   and no `M17Client`** — M17-4 and M17-5 are the remaining work there.
@@ -1336,13 +1336,13 @@ name:
     INFO oNDATACONF Audio test server [9]  <our callsign and name>  This test
          server simply records and plays back transmissions for testing purposes.
 
-**M3 is signed off.** The remaining EchoLink work is EL-11's `--list` fetch,
-which is written but has never been run against a live directory server.
-`--location` and `--operator-name` set what the far end displays.
+**M3 is signed off**, and so is EL-11's `--list` fetch (6389 entries from a
+live directory server, same day). `--location` and `--operator-name` set what
+the far end displays.
 
 ---
 
-### EL-11 — Station list ✅ DONE (parser + fetch); the fetch is unproven on air
+### EL-11 — Station list ✅ DONE — parser and fetch, both confirmed on air
 **Depends on:** EL-6. **Blocks:** nothing — deliberately off the path to M3.
 **Files:** `Sources/EchoLinkKit/EchoLinkStationList.swift`,
 `Sources/EchoLinkKit/EchoLinkClient.swift` (`fetchStationList`),
@@ -1456,11 +1456,38 @@ reach one first could fail for a reason that is not about the list — which is
 exactly the confound to avoid on the run that first tests it. It therefore
 needs no `--peer` and no `--node`.
 
-**Not done: the fetch has never run against a live server.** The parse is
-conformance-tested against a real download; the request is not. `--list` says so
-in its banner. `fetchStationList` is deliberately **not** called by `connect` —
-a 433 kB download has no business on the path M3 just signed off, and a test
-asserts `connect` never sends the request.
+`fetchStationList` is deliberately **not** called by `connect` — a 433 kB
+download has no business on the path M3 just signed off, and a test asserts
+`connect` never sends the request.
+
+#### Confirmed on air, 2026-08-13
+
+```
+# EchoLink Server v2.6.159
+# ECHO1: Sydney, AU
+# 6386 station(s), 3 notice(s); the server declared 6389.
+Link down: local request
+```
+
+First attempt, and everything read off the capture held: the second `OPEN`, the
+`f0` CR request, the framing and the grammar. **6386 + 3 = 6389, matching the
+server's declared count** — and a count mismatch is a hard error here, so a list
+that prints at all is one that arrived whole.
+
+Three things this settles that the capture alone could not:
+
+- **The format does not rest on one download.** This list has 6389 entries
+  against the capture's 6444, a day apart and necessarily a different
+  population, and the same parser reads both.
+- **The notices were modelled correctly.** They were inferred from the capture
+  structurally — three trailing rows with a blank callsign, a blank node number
+  and `127.0.0.1`, shape-masked during analysis so as not to read other
+  operators' data. They came back as `EchoLink Server v2.6.159`, a blank, and
+  `ECHO1: Sydney, AU`: a server version banner and a server identification,
+  exactly the kind of thing `notices` exists to keep out of `stations` while
+  still counting toward the header's total.
+- **The request needs no node.** `--list` runs in `.directoryOnly` mode, so this
+  ran without any node session at all.
 
 **Done when:** ~~the list parses from a truncated-list fixture~~ — the list
 parses, with the format evidenced by measurement and a reproducible conformance
