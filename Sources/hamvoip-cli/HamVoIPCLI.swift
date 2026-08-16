@@ -29,11 +29,11 @@ struct HamVoIPCLI: AsyncParsableCommand {
                        level meters for both directions, and the SF-1 transmit watchdog
                        shown when it fires.
               m17      link an M17 reflector module and pass audio (Codec2 3200).
-                       NOT YET VALIDATED ON AIR — M17 transmit has never been sent to a
-                       real reflector. Needs Codec2.xcframework; see docs/CLI.md.
+                       Receive proven on air 2026-08-16; transmit sent but not yet
+                       confirmed heard. Needs Codec2.xcframework; see docs/CLI.md.
               echolink connect an EchoLink node through a proxy and pass audio
-                       (GSM 06.10). NOT YET VALIDATED ON AIR — this client has never
-                       spoken to a real proxy. Settling that is Milestone M3.
+                       (GSM 06.10). Validated on air 2026-08-13 — Milestone M3 —
+                       and since run from the app as well.
               oq5      settle OQ-5 — how a real node wants the MD5 RESULT information
                        element encoded — by asking one, instead of by reading somebody
                        else's implementation.

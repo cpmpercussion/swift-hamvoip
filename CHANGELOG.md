@@ -8,6 +8,30 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+### Changed
+
+- **The M17 warnings are narrower, because half of what they warned about has
+  happened.** `hamvoip-cli m17`'s banner, its help text and the top-level
+  subcommand list said M17 had never been run against a real reflector and its
+  audio had never been listened to. Both are now false: a net on **M17-434**
+  was listened to at length on **2026-08-16**, intelligible throughout, with
+  transmitting stations' callsigns displayed — through Currawong, on this
+  library. What remains true is the transmit half, and only that: transmissions
+  to **M17-432** and others were accepted, and **no operator has confirmed
+  hearing one**, so the encoder, the LSF fields and the SID are still unproven
+  at the far end. The banner now says exactly that instead of overstating it.
+- **The EchoLink subcommand no longer says it has never spoken to a proxy.**
+  That stopped being true when Milestone M3 passed on 2026-08-13, and it has
+  since run from the app as well.
+- **The README caught up with three releases.** It described `M17Kit` as
+  partial with no codec, no audio path and no `M17Client`, said M17 audio was
+  blocked on OQ-7, and listed EchoLink as unimplemented and unscheduled — all
+  true at v0.1 and none of it true since v0.3.0. It now carries a module table
+  for what is actually here, and separates what has been proven on the air from
+  what has only passed tests.
+
+No behaviour changed: this corrects claims, not conduct.
+
 ## [0.4.0] — 2026-08-13
 
 One feature, cut as its own release so Currawong can pin it: **an operator no

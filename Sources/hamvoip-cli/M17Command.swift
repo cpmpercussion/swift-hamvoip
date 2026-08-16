@@ -11,10 +11,18 @@ import RadioCore
 /// IAX2. Everything below the CLI is `M17Client`; this file is a terminal
 /// around it.
 ///
-/// **This has never been run against a real reflector with audio.** M17 RX was
-/// confirmed on air on 2026-08-11 (the OQ-7 run, receive-only, no codec), and
-/// TX has never been sent to a reflector at all. That is what this command
-/// exists to settle, and it is deliberately the first thing its banner says.
+/// **Receive is confirmed on air; transmit is sent but unconfirmed.** A net on
+/// M17-434 was listened to at length on 2026-08-16 — audio intelligible
+/// throughout, transmitting stations' callsigns displayed — which validates the
+/// decode path, the jitter buffer and the base-40 reading end to end. That
+/// session ran through Currawong rather than this command, on the same
+/// `M17Client` underneath.
+///
+/// Transmit has been sent to M17-432 and other reflectors and accepted, but
+/// **nobody has yet confirmed hearing it**. The encoder, the LSF fields and the
+/// SID are still unvalidated at the far end, which is the one thing this
+/// command's banner still warns about. See M17-6 for the parrot route to
+/// settling it single-handed.
 struct M17Command: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "m17",
@@ -27,10 +35,12 @@ struct M17Command: AsyncParsableCommand {
             module is a shared channel — everything transmitted is heard by everyone \
             linked to it. Nothing is sent until PTT is pressed.
 
-            NOT YET VALIDATED ON AIR. M17 receive was confirmed against a live \
-            reflector on 2026-08-11 (hamvoip-cli oq7, receive-only). Transmit has \
-            never been sent to a real reflector, and the audio path has never been \
-            listened to. Expect to be the first.
+            RECEIVE IS PROVEN; TRANSMIT IS NOT. A net on M17-434 was listened to \
+            at length on 2026-08-16 — intelligible audio, callsigns displayed — so \
+            the decode path works against real reflectors. Transmit has been sent \
+            and accepted, but no operator has yet confirmed hearing it, so the \
+            encoder and the LSF fields are unproven at the far end. Arrange a \
+            second receiver, or use a parrot, before assuming you are readable.
 
             Requires Codec2.xcframework:
 
@@ -375,8 +385,8 @@ private final class M17Session: @unchecked Sendable {
     private func printBanner() async {
         await console.log("hamvoip-cli m17 — M17 reflector audio (M17-5)")
         await console.log(
-            "NOT YET VALIDATED ON AIR: M17 transmit has never been sent to a real "
-                + "reflector, and this audio path has never been listened to.")
+            "Receive is proven on air (M17-434, 2026-08-16). Transmit is not: it has "
+                + "been sent and accepted, but nobody has confirmed hearing it.")
         await console.log(
             "A reflector module is a shared channel. Transmitting requires a licence.")
     }

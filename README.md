@@ -22,22 +22,35 @@ a 0.x release — the API will change.
 
 | Module | State |
 |---|---|
-| `RadioCore` | Complete. UDP and TCP transport abstractions, `NetworkClient` (the mode-agnostic seam: state, events, received audio, transmit), G.711 µ-law, adaptive jitter buffer, transmit watchdog, received-audio leveller, `AVAudioEngine` pipeline with 48 kHz ↔ 8 kHz conversion and a real-time-safe capture path. |
+| `RadioCore` | Complete. Transport abstractions for datagram and stream, G.711 µ-law, adaptive jitter buffer, transmit watchdog, received-audio leveller, `AVAudioEngine` pipeline with 48 kHz ↔ 8 kHz conversion and a real-time-safe capture path, and the `NetworkClient` seam an app is written against — state, events, received audio and a transmit path, with no protocol type in sight. |
 | `IAX2Kit` | Complete. AllStarLink over IAX2 (RFC 5456): frames and mini-frames, information elements, sequencing and retransmission, MD5 authentication, call state machine, voice, DTMF, registration, and `IAX2Client` composing them. |
+| `M17Kit` | **Code complete; transmit unconfirmed on air.** Reflector control, base-40 callsigns, stream mode both ways, Codec2 3200 (FR-2.4), and `M17Client`. Receive has been confirmed against a live reflector; transmit has not — see below. |
 | `EchoLinkKit` | Complete. Proxy transport, directory login, RTP/RTCP audio, GSM 06.10 over a vendored C target, the station directory, public proxy discovery, and `EchoLinkClient`. Proxied routes only — see below. |
-| `M17Kit` | **Code complete, never transmitted on air.** Reflector control, base-40 callsigns, stream parse/serialise with CRC, Codec2 3200 wiring, and `M17Client`. Receive was confirmed against a live reflector; transmit has not been. |
 | `hamvoip-cli` | macOS harness: `connect` (IAX2), `echolink`, `m17`, and the `oq5` / `oq7` experiment subcommands. |
 
-Two modes have carried a human voice both ways over the air:
+**What has been proven on the air, and what has not.** This distinction is kept
+carefully, because a green test suite says nothing about a radio:
 
-- **IAX2 — milestone M2, 2026-08-09**, against an ASL3 node (Asterisk +
-  app_rpt) in a VM: registration, authentication and a full two-way audio
-  session, all on the wire. Result table in [`docs/CLI.md`](docs/CLI.md) §6. A
-  second, different node corroborated the `connect` path the next day.
-- **EchoLink — milestone M3, 2026-08-13**, a two-way QSO through `*ECHOTEST*`
-  via a public proxy, from `hamvoip-cli echolink`, with clean teardown.
-  Sign-off table in [`docs/CLI.md`](docs/CLI.md) §9. The station directory was
-  confirmed the same day against a live directory server.
+- **IAX2 — proven both ways.** An ASL3 node (Asterisk + app_rpt) in a VM, on
+  2026-08-09: registration, authentication and a full two-way audio session on
+  the wire. That is Milestone M2; the result table is in
+  [`docs/CLI.md`](docs/CLI.md) §6. A second, different node corroborated the
+  `connect` path the next day.
+- **EchoLink — proven both ways.** A two-way QSO through `*ECHOTEST*` via a
+  public proxy on 2026-08-13, from `hamvoip-cli echolink`, with clean teardown
+  — Milestone M3, sign-off table in [`docs/CLI.md`](docs/CLI.md) §9. The
+  station directory was confirmed the same day against a live directory
+  server, and EchoLink has since run from the iOS app as well, including a
+  link to a UHF repeater heard live off-air.
+- **M17 receive — proven.** A net on M17-434 listened to at length on
+  2026-08-16: intelligible audio throughout, transmitting stations' callsigns
+  displayed. That exercises Codec2 decode, the jitter buffer, stream receive
+  and the base-40 reading, against traffic nobody here generated. An earlier
+  receive run on 2026-08-11 settled the stream frame size (OQ-7).
+- **M17 transmit — sent, not confirmed.** Transmissions to M17-432 and other
+  reflectors have been accepted, but **no operator has yet reported hearing
+  them**. The encoder, the LSF fields and the SID remain unvalidated at the far
+  end. Treat "it transmitted" and "it was readable" as different claims.
 
 Fixtures cut from those sessions are replayed by the conformance tests, so
 registration, call setup, an inbound over, both 16-bit time-stamp boundaries
@@ -46,32 +59,32 @@ actually sent rather than only against our reading of a specification.
 Everything else in the suite runs on hand-built fixtures and a mock transport;
 no test opens a socket.
 
-M17 has been listened to but never spoken: an on-air receive run on 2026-08-11
-settled the stream frame size (OQ-7). Nothing has yet transmitted to a
-reflector.
-
 ## What is not here yet
 
-- **M17 on air.** `M17Client` and the Codec2 path are written and tested
-  against a mock transport, but M17 transmit has never reached a reflector and
-  the audio path has never been listened to. Until a human with a licence does
-  that, M17 is "believed working", and the CLI says so.
+- **Confirmation that M17 transmit is readable** — see above. The cheapest
+  route is a parrot rather than a second operator, which is task M17-6.
 - **Direct (non-proxied) EchoLink.** `Route.direct` exists in the type so that
   adding it later is not a breaking change, and it throws. No capture of a
   direct session exists, and building the port assignment and socket setup from
   the plausible reading is what the clean-room policy forbids. The proxy is
   required on cellular anyway (FR-3.3), so nothing on mobile data is blocked.
-- **Transmit pacing on IAX2.** Each over opens by sending the buffered capture
-  frames as fast as the socket accepts them instead of pacing at 20 ms. One
-  node answered with `VNAK`; the retransmission engine recovered and audio was
+- **Transmit pacing.** Each over opens by sending the buffered capture frames
+  as fast as the socket accepts them instead of pacing at 20 ms. One node
+  answered with `VNAK`; the retransmission engine recovered and audio was
   intelligible throughout. Tracked as IAX-10.
-- **Multi-homed nodes.** A node with two interfaces may answer from an address
-  other than the one dialled, which the connected UDP socket in
-  `NWDatagramTransport` cannot accept; it surfaces as an unrelated socket
-  error. Observed on a live LAN node. Tracked as IAX-11.
+- **A readable error when a node answers from another address.** A node with
+  two interfaces may answer from an address other than the one dialled, which
+  the connected UDP socket in `NWDatagramTransport` cannot accept; it surfaces
+  as `Socket is not connected`, which points at the socket rather than at the
+  node's routing. Observed on a live LAN node. Decided and unimplemented;
+  IAX-11.
+- **Audio-session policy without an engine.** Reaching it currently means
+  owning an `AVAudioEngine`, which callers must not build first. RC-11.
 - **Two on-air checks worth re-running before v1**: PTT edge timing, which a
   full-duplex `Echo()` target cannot show, and the `Ctrl-C` / `kill` teardown
   paths.
+- **AllStarLink Web Transceiver** — the half of FR-1.3 that was never built, and
+  a question about sourcing before it is (OQ-10).
 - **Codec2 under LGPL-2.1 for App Store distribution** is an open licensing
   question (OQ-6), deliberately deferred until submission is actually in view.
   It gates shipping M17 in a signed iOS app rather than the code here.
