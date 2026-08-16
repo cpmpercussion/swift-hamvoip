@@ -145,15 +145,40 @@ has merged and the code it describes exists.
 ## 3. Phase map and dependencies
 
 ```
-Phase 0  Bootstrap        BOOT-1             (blocks everything)
-Phase 1  RadioCore        RC-1 … RC-10       (needs BOOT-1)
-Phase 2  IAX2Kit          IAX-1 … IAX-9      (needs RC-1..RC-4)
-Phase 3  CLI harness      CLI-1              (needs IAX-8)
-Phase 4  SwiftUI app      APP-1 … APP-7      (unblocked: OQ-3/3b/4 resolved)
-Phase 5  BLE PTT          BLE-1 … BLE-3      (needs APP-2)
-Phase 6  EchoLink         EL-1 … EL-11       ✅ complete; M3 passed 2026-08-13
-Phase 7  M17Kit           M17-1 … M17-5      (M17-1 ✅ done, OQ-2 resolved)
+Phase 0  Bootstrap        BOOT-1             ✅ complete
+Phase 1  RadioCore        RC-1 … RC-11       RC-11 open (small, unblocked)
+Phase 2  IAX2Kit          IAX-1 … IAX-11     IAX-10, IAX-11 open
+Phase 3  CLI harness      CLI-1              ✅ complete
+Phase 4  SwiftUI app      APP-1 … APP-9      APP-3 open — the only unmet
+                                             safety requirement (SF-4)
+Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
+Phase 6  EchoLink         EL-1 … EL-12       ✅ complete; M3 passed 2026-08-13
+Phase 7  M17Kit           M17-1 … M17-5      code ✅; live validation is the gap
 ```
+
+**Everything still open, in one list.** Four tasks and two questions — nothing
+else in this document is unfinished:
+
+| | What | Where | Size |
+|---|---|---|---|
+| **APP-3** | Live Activity — SF-4, the only unmet safety requirement | `currawong` | The largest of these |
+| **RC-11** | Audio-session policy without an engine (the app's `BU-3`) | here | Small |
+| **IAX-10** | Pace transmitted frames instead of bursting them | here | Small |
+| **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
+| **OQ-6** | Codec2 LGPL relinking vs App Store signing | maintainer | Deferred until submission, deliberately |
+| **OQ-10** | Web Transceiver — FR-1.3's unbuilt half | maintainer | Answer either way; "not now" is fine |
+
+**OQ-1b is not on that list on purpose.** It is settled as a *standing
+constraint* rather than an open decision: "EchoLink" is nominative use only,
+never in the app's name, icon, launch screen or App Store metadata. It binds
+every future task and needs no further answer.
+
+⛔ **And the thing that is not a task at all:** M17 has never carried audio in
+either direction, and EchoLink has never run from the app. No code in either
+repository can close that — it needs a licence, a radio and a second receiver.
+It is tracked as `BU-2`, `BU-4` and `BU-5` in `currawong/docs/BRINGUP.md`, and
+it is the highest-value work available, because everything above is written
+against a stack whose audio path two of three modes have never proven.
 
 Within a phase, tasks are ordered; a task lists its hard dependencies. Tasks
 with no unmet dependency may proceed in parallel on separate branches.
@@ -671,7 +696,7 @@ tolerated it, so nothing about OQ-5's conclusion changes.
 
 ---
 
-### IAX-10 — Pace transmitted frames instead of bursting them ⚠️ NEW
+### IAX-10 — Pace transmitted frames instead of bursting them ⚠️ NEW ⏳ OPEN
 **Depends on:** CLI-1. **Found by:** the M2 sign-off session, 2026-08-09.
 
 Every over in `connect3.pcap` opens with the whole of the first capture
@@ -694,7 +719,12 @@ shows no VNAK at the start of an over.
 
 ---
 
-### IAX-11 — A node may answer from an address other than the one dialled ⚠️ NEW
+### IAX-11 — A node may answer from an address other than the one dialled ⚠️ NEW ⏳ OPEN
+**Decided, not implemented.** The 2026-08-13 resolution below settles *what to
+build* — diagnose it, do not handle it — and `2464828` recorded that decision
+in this file. No code has changed: there is still no error naming the likely
+cause. The "Done when" at the end of this row is the task.
+
 **Depends on:** RC-1, IAX-8. **Found by:** a live LAN session against a
 multi-homed ASL node, 2026-08-10.
 **Files:** `Sources/RadioCore/NWDatagramTransport.swift` + tests.
@@ -823,6 +853,35 @@ in `RadioCoreTests` that is a plain `final class` rather than an actor; every
 mode's mapping table is asserted case by case; and a live IAX2 session shows
 `radioEvents` is exactly `events.compactMap(\.radioEvent)`, in order.
 
+### RC-11 — Audio-session policy without an engine ⏳ OPEN
+**Depends on:** RC-7 ✅. **Files:** `Sources/RadioCore/AudioPipeline.swift` +
+tests. **Raised by:** the app, as `BU-3` in `currawong/docs/BRINGUP.md`. Small,
+and unblocked.
+
+`AudioPipeline.configureSession()` is an **instance** method, so reaching the
+audio-session policy means owning an `AudioPipeline` — and owning one means
+having built an `AVAudioEngine`. That is the exact thing the app's `BU-1` says
+must not happen before the session is configured: an engine whose input unit is
+instantiated under the default `.soloAmbient` category reports a 0 Hz input
+rate and never recovers, which is a converter failure on every PTT press for
+the life of the process.
+
+So Currawong spells the category, mode and options itself, in
+`Sources/Currawong/AudioIO.swift`, with a comment saying why. **Two copies of
+the audio-session policy, kept in step by hand, on the path that governs
+whether the microphone works at all.**
+
+The fix is a static or free function holding the policy —
+`AudioPipeline.activateSession()` or similar — with the instance method calling
+it, so a caller can configure the session before deciding to build anything.
+
+**Done when:** the policy can be applied without constructing an
+`AVAudioPipeline` or an `AVAudioEngine`, the instance method delegates to it so
+the two cannot drift, and a test pins the category/mode/options. Then the app
+deletes its duplicate and the comment explaining it — **but that deletion is
+the app's own change, made in its repository after this ships in a release it
+depends on.** This repository does not write to Currawong.
+
 ## Phase 3 — CLI harness
 
 ### CLI-1 — `hamvoip-cli` (macOS) ✅ DONE (build/run/CI; live-node sign-off tracked separately via OQ-5)
@@ -862,23 +921,160 @@ call, locally notable in VK1. Trademark checked clear in class 9.
 - **APP-1** — xcodegen scaffold: iOS 16+ app depending on swift-hamvoip via
   SPM; background modes `audio` + `bluetooth-central` (PD-2); CI via
   `xcodebuild test -destination 'platform=iOS Simulator,…'` from the CLI.
+  ✅ **DONE** — `currawong` `19c6e3a`, CI in `30bfd61`.
 - **APP-2** — Connect screen + on-screen momentary PTT (PT-1): press-and-hold
   button → `startTransmit`/`stopTransmit`; TX state banner; interruption
   handling — `AVAudioSession.interruptionNotification` and route change
   force `stopTransmit` (SF-3). ViewModel logic unit-tested against a fake
-  `NetworkClient`.
+  `NetworkClient`. ✅ **DONE** — `currawong` `8f8b353`. SF-3 went further than
+  this row asked: transmit also drops on backgrounding, on the view
+  disappearing, and on the gesture being cancelled or dragged off the button.
 - **APP-3** — TX visibility without unlock (SF-4): Live Activity showing
   TX/RX state, plus `MPRemoteCommandCenter` toggle-PTT fallback (PT-4).
+  ⏳ **OPEN — and it is the only unmet safety requirement.** Written up below.
+  The PT-4 half shipped early, under APP-5.
 - **APP-4** — Settings: node list CRUD, watchdog timeout, stored in
-  `UserDefaults`; secrets in Keychain.
-- **APP-7** — Directories and discovery: two browsers and one lookup. ✅ DONE,
+  `UserDefaults`; secrets in Keychain. ✅ **DONE** — `currawong` `54bf219`
+  (saved channels: a name, a mode, and that mode's fields; reorderable,
+  deletable, selection remembered between launches, and the single-node
+  build's key read once and migrated) and `c8063c3` (watchdog settable per
+  node, 5–600 s, and it cannot be switched off). Operator identity —
+  callsign, name, location — was later hoisted out of the per-channel
+  settings to be app-wide (`ac2d264`, `dcf45b7`): one operator, not one per
+  channel.
+- **APP-5** — PTT input layer: BLE, accessory learn mode, remote command
+  (PT-2, PT-3, PT-4). ✅ **DONE** — written up below. **This is also where
+  Phase 5's BLE-1 … BLE-3 were delivered**; see the note under Phase 5.
+- **APP-6** — Microphone permission, asked for explicitly (iOS). ✅ **DONE** —
+  written up below. A fault rather than a feature, but it earned a task
+  because the app could not bootstrap its own permission.
+- **APP-7** — Directories and discovery: two browsers and one lookup.
+  ✅ **DONE** — written up below.
+- **APP-8** — Three modes through one seam: mode selection, per-mode connect
+  forms, EchoLink in the app, and Codec2 embedded for M17. ✅ **DONE** —
   written up below.
+- **APP-9** — Level meters and microphone gain. ✅ **DONE** — written up below.
 
-⚠️ **The app's task history has run ahead of this list.** `APP-5` (BLE and
-remote-command PTT controllers) and `APP-6` (microphone permission) exist as
-commits in the `currawong` repo with no rows here, which is why APP-7 is the
-next free identifier rather than APP-5. Writing those two up is a separate
-job and is not done.
+ℹ️ **APP-5 … APP-9 were written up after the fact**, on 2026-08-16, from the
+app's commit history. APP-5 and APP-6 had been cited by `currawong` commits
+for weeks with no row here to cite; APP-7 … APP-9 are new identifiers given to
+work that shipped without one. Numbering follows what those commits already
+claimed, so it is **not chronological** — APP-7, APP-8 and APP-9 all landed
+before APP-6.
+
+⚠️ **The app keeps a second list this plan does not own.**
+`currawong/docs/BRINGUP.md` tracks `BU-*` — *faults*, not features: things
+supposed to work already that do not, found by trying to key a real radio.
+They land straight on `main` in the app repo, no branch and no PR, until the
+app is confirmed working on air. That is a deliberate suspension of §1.1 for a
+loop that runs through an on-air session rather than through CI, and it is the
+app's call to make. **Read that file before planning app work** — it is where
+the live-validation state of all three modes actually lives, and one of its
+items (BU-3) is a task for *this* repository: see RC-11.
+
+### APP-3 — TX visibility without unlock (SF-4) ⏳ OPEN
+**Depends on:** APP-2 ✅. **The only unmet safety requirement**, and the only
+`APP-*` row with no code behind it.
+
+**What exists instead.** A full-bleed transmit banner
+(`TransmitBanner.swift`, `TransmitStatusPresentation.swift`), outside the pane
+container so it shows from every pane, naming the input that keyed and whether
+letting go will unkey. That is a stand-in and the app README says so: it is
+visible only while the app is on screen, which is precisely the case SF-4 is
+not about.
+
+**Why SF-4 exists.** A phone in a pocket with the screen locked, transmitting,
+is the failure this requirement is written against — a stuck open microphone
+into a repeater, which the operator cannot see and other operators cannot key
+over. The watchdog (SF-1) bounds how long that lasts; SF-4 is what makes it
+*visible* before the watchdog fires.
+
+**Shape of the work**, with the constraints that are already known:
+
+- A **widget extension target** in `project.yml`, bundle identifier
+  `au.charlesmartin.currawong.liveactivity` — already reserved by the OQ-3b
+  resolution, so no naming decision is outstanding.
+- **ActivityKit is iOS 16.1+, and the deployment target is iOS 16.0.** So the
+  call sites need availability guards rather than a target bump, unless the
+  maintainer would rather raise the floor — that is a decision, not a
+  detail, and it wants making before the work starts rather than during.
+- **macOS has no Live Activities.** The macOS build must still compile and
+  test; `make test-macos` is part of the definition of done, not an
+  afterthought.
+- **PD-4 still forbids CallKit**, which is the other way an app gets
+  lock-screen presence. It is not an option here, and this row is not a route
+  back to it.
+- Updates come from the app process, which stays alive during a session under
+  the `audio` background mode (PD-2). **No `voip` background mode, and no push
+  entitlement** — if the design appears to need either, stop and report it.
+- **The stale-state hazard is the real risk.** A Live Activity still showing
+  TX after transmit stopped is worse than none at all: it is a safety display
+  that lies. It must end on every path that ends transmit — release, watchdog
+  expiry (SF-1), BLE loss (SF-2), interruption or route change (SF-3),
+  disconnection, and app termination. Whatever the implementation, the test
+  that matters is that each of those paths is driven and the activity is
+  observed to end.
+
+**Done when:** transmit state is visible on a locked iPhone, it ends on all
+six paths above, the macOS build and tests are unaffected, and the README's
+safety table can say **Met** against SF-4.
+
+### APP-5 — PTT input layer: BLE, learn mode, remote command ✅ DONE
+**Delivered** in `currawong` `cd2a7da` ("APP-5 (partial)") and completed in
+`c8063c3`. Written up 2026-08-16.
+
+`RadioSession` conforms to `PTTSink`, so all three input paths — on-screen
+button, Bluetooth accessory, headset/remote button — reach **one** release
+path rather than three. That is the design point: a key has one way to be let
+go of, whichever thing keyed it.
+
+- **PT-2, BLE.** `BLECentral.swift` (a protocol seam over CoreBluetooth, so
+  the state logic is testable with a fake central), `CoreBluetoothCentral.swift`
+  (the real one), `BLEPTTController.swift` (scan, connect, auto-reconnect).
+- **PT-3, learn mode, no device whitelist.** `PTTMapping.swift` and
+  `AccessoryView.swift`: scan, press, release, press again, release again, and
+  the app records which (service, characteristic, payload) pairs fire on press
+  versus release. **It refuses an accessory it cannot learn** rather than
+  storing a mapping that would key and never unkey — which is the whole reason
+  learn mode exists instead of a device list.
+- **PT-4, remote command.** `RemoteCommandPTT.swift`. Off until switched on,
+  **latching rather than momentary** — the honest semantics for a button the
+  app cannot see the release of — and it says so wherever it can key the radio.
+- **SF-2 is met and is deliberately blunt:** every disconnection drops
+  transmit unconditionally, before the reconnect logic and before anything is
+  awaited, whether or not the accessory was the input holding the key.
+
+Tests: `BLEPTTControllerTests`, `RemoteCommandPTTTests`,
+`RadioSessionPTTSinkTests`, with fakes in `PTTFakes.swift`.
+
+⛔ **Never exercised with a real accessory.** Everything above is tested
+against a fake central. Learn mode against actual hardware — a commercial PTT
+button, a headset — is on-air-style validation and belongs in
+`currawong/docs/BRINGUP.md` as a `BU-*` item; it is not tracked here, and the
+app repo owns that file.
+
+### APP-6 — Ask for the microphone ✅ DONE
+**Delivered** in `currawong` `1ecc9e1`. A fault with a task number because the
+app could not get out of it on its own.
+
+On iOS the app could never transmit: PTT failed on the first press and every
+press after with "could not construct an `AVAudioConverter` for the requested
+PCM formats", and Currawong did not appear under Settings ▸ Privacy ▸
+Microphone at all. **One deadlock, two symptoms.** iOS shows the microphone
+prompt when an app first *touches* the microphone — installs a tap, starts the
+engine. Setting the session category and activating it does not count, so
+`configureSession()` never triggered it. Until permission is granted the input
+node reports a sample rate of 0, and `AudioPipeline.startCapture` builds its
+converter from that rate and throws before ever reaching `installTap`. So the
+app never touched the microphone, so it was never asked about, so the rate
+stayed 0.
+
+The fix is to ask explicitly, which is the only way out of the cycle.
+
+**Related but distinct:** the 0 Hz converter failure also had an ordering
+cause, fixed separately as `BU-1` in the app repo and confirmed on air
+2026-08-11. Read the two together — `BU-1` is why the pipeline is built lazily
+after activation; APP-6 is why there is a permission to activate under.
 
 ### APP-7 — Directories and discovery ✅ DONE
 **Delivered** in `currawong` `c285b61` (branch `task/app-ux-discovery`), with
@@ -933,7 +1129,69 @@ one that might earn its place next to the summary line; it is not a task yet.
 
 **What this did *not* settle: Web Transceiver — see OQ-10.**
 
+### APP-8 — Three modes through one seam ✅ DONE
+**Delivered** across `currawong` `f0c74c9` (AllStarLink or M17), `4bc870c`
+(M17 support: codec and mode selection), `54bf219` (three modes, and panes
+instead of one long screen) and `1346058` (EchoLink, with EL-12 proxy
+discovery in the app). Written up 2026-08-16.
+
+**The seam held.** Three protocols reach the app through one
+`RadioCore.NetworkClient`, and `CompositionRoot.swift` is still the only file
+that names a concrete client — which is the property Phase 4's preamble asks
+for, now tested rather than asserted (`CompositionRootTests`,
+`RadioModeTests`). What each mode asks the operator for differs enough that
+the connect form changes shape with the mode — a node number and a secret, a
+reflector module, or a proxy plus a node address and an account password — and
+`RadioMode` is where that fans out.
+
+**Codec2 is built by the app, not shipped by the library** (`7a2ac94`,
+`5b2e043`, and `currawong/docs/CODEC2.md` for why). `Codec2.xcframework` is
+7.6 MB of LGPL-2.1 binary, is not in version control, and the app's `make`
+targets build it on first use. FR-2.4 and LP-4 are satisfied by dynamic
+linking, which is also what keeps OQ-6 open rather than decided.
+
+**A caution on screen for M17 only, and that asymmetry is deliberate.** M17 has
+never carried audio anywhere, so the mode picker says so. EchoLink carries no
+such warning even though it has never run from the *app*, because its whole
+path — proxy login, directory login, a node answering, audio both ways — has
+run from the library's CLI. "Nobody has heard how this sounds" is something an
+operator can act on; "it worked from the CLI" is a fact about the state of the
+project, and a caution on two modes out of three is a caution nobody reads.
+The project-state version lives in the app README instead.
+
+### APP-9 — Level meters and microphone gain ✅ DONE
+**Delivered** in `currawong` `e754084` and `4734f13`. Written up 2026-08-16.
+`AudioLevel.swift`, `LevelMeterView.swift`, tests in `AudioLevelTests`.
+
+Peak meters for transmit and receive, scaled in dB with the good/hot/clipping
+zones marked, because "am I too quiet?" is otherwise a question only a stranger
+on the air can answer. Distinct from **AU-4**, which is the library's automatic
+levelling of *received* audio; this is the operator's view of both directions,
+plus a control over the transmit side.
+
+Three decisions worth not re-making:
+
+- **The gain scales captured samples rather than the microphone.** iOS does not
+  let an app change the built-in microphone's own level — `inputGain` is not
+  settable there — so the control applies 0 to +30 dB to the samples, hard
+  limited so a loud syllable flat-tops rather than wrapping to a click.
+- **Fixed gain, not an AGC.** A compressor would pump room noise up between
+  words, which on a repeater is antisocial in a way the operator cannot hear
+  from their own end.
+- **It sits with the meters, not on the connect form.** The gain belongs to the
+  phone rather than to any channel, and the form locks its fields while a link
+  is up — which is the only time an operator can tell what to set it to.
+
 ## Phase 5 — BLE PTT (after APP-2)
+
+✅ **DELIVERED — but in the app, under APP-5, not as BLE-1 … BLE-3.** The three
+rows below were written before the app existed and describe work that has since
+shipped as one input layer, because `RadioSession` conforms to `PTTSink` and
+all three inputs share one release path. They are kept for their requirement
+citations and their "no whitelist" instruction, both of which the
+implementation honours. **Do not open a `task/ble-1` branch expecting to find
+this work undone** — read APP-5, then `currawong/docs/BRINGUP.md` for the part
+that genuinely remains, which is that none of it has met a real accessory.
 
 - **BLE-1** — `BLEPTTManager` (CoreBluetooth, `bluetooth-central`
   background mode): scan, connect, auto-reconnect; connection loss while
@@ -1912,6 +2170,6 @@ Until then M17 is "believed working", and the CLI's banner says so.
 | **OQ-8** | ✅ **RESOLVED 2026-08-13 — keep a local copy, outside both repos.** The maintainer's call: M17's documentation situation is not going to improve, the project describes the specification as open, and the archived chapter is the best record there is, so use it rather than waiting for a better one. A copy of the Internet Archive capture now sits at `m17-spec-archive/` in the workspace with its retrieval URL, timestamp and SHA-256 (`d3ffacd2…`) recorded beside it. **Not committed**, and that half is a licence judgement rather than a preference: the page carries no licence statement, so redistributing it in an Apache-2.0 repository would assert a right nobody has checked. Holding a reference copy is a different act from republishing one. The citation chain in the repo is unchanged — `M17ReflectorProtocol.swift` and `docs/reference/PROVENANCE.md` still cite the archive URL; the local copy is the belt to that braces. **Original question:** the chapter we implement against was published as HTML at a readthedocs host that now 404s, so the only record of what we implemented against was a third-party archive that may itself disappear. | Nothing today; the maintenance risk is now hedged |
 | ~~OQ-9~~ | ✅ **RESOLVED 2026-08-12 — permitted sources named; Phase 6 unblocks. Maintainer's judgement.** The permitted sources for EchoLink protocol knowledge are: **(a)** RFC 3550 for RTP framing and **(b)** the ETSI/ITU GSM 06.10 specification for the codec, as spec anchors *for the parts they actually cover* — with the standing caveat that RFC 3550 does **not** describe this protocol as implemented (observed RTP version bits are 3, not 2; the proxy framing and the directory protocol on TCP 5200 fall outside it entirely), so where wire and RFC disagree the wire wins and the divergence is recorded; **(c) packet captures of the maintainer's own EchoLink sessions** are the **primary** source, under the same LP-1 fixture rule that governs IAX-9. Candidate **(d)**, prose write-ups, is admitted **only** under a provenance bar materially higher than the captures': because no published specification exists, most such prose derives from the very implementations LP-2 forbids (a summary of thebridge's source is the source at one remove, not "behavioural observation"), so a (d) source may be used only when its own provenance is independently established as *not* derived from forbidden implementations, and its use logged per `docs/reference/PROVENANCE.md` before any code depends on it. When (d) cannot clear that bar, the answer is another capture, not the write-up. **Standing procedural rules that come with this resolution:** (1) protocol ambiguities are settled by designing another on-air experiment and cutting another capture — never by reading an implementation; the pressure to peek is highest exactly where captures are thinnest, which is where the clean-room boundary matters most. (2) Capture work spans **multiple peers**: a single-peer capture already produced two confident wrong conclusions (SSRC always zero; sequence numbers start at zero) that a four-peer capture corrected — see the PROVENANCE.md OQ-9 entry. (3) Directory-server captures (TCP 5200) carry other operators' callsigns, locations and IPs; they get the same third-party-traffic hygiene the M17 OQ-7 capture did (`docs/CLI.md` §8), and no such capture's path is named in a versioned file. **Terms rechecked online 2026-08-12** against echolink.org directly (Access Policies, Validation, Download, Support): no anti-reverse-engineering clause, no client-software restriction, and no software EULA is even linked — the access policies govern *who* may connect (licensed amateurs) and what a Sysop node may interconnect *to*, never what client software reaches the service. echolink.org's own Download page lists compatible third-party implementations (EchoHam, EchoIRLP, svxLink/QTel, an Asterisk channel driver) with "we do not support these programs" — the service operator publicly acknowledges independent clients. This closes the narrow terms caveat left open under OQ-1 and does not disturb OQ-1's reasoning. **This resolves the sourcing question only** — OQ-1b (trademark, nominative use only) still governs all EchoLink naming, and LP-1/LP-2 are unchanged: no implementation source, at any level, is ever read. | ~~Phase 6~~ **unblocked** |
 | **OQ-10** | ⏳ **OPEN — implement AllStarLink Web Transceiver mode, or scope FR-1.3 down to the half that shipped?** **FR-1.3 asks for two things** — "registered node mode **and Web Transceiver mode**" — and only the first exists. IAX-8b delivered registration (§6.1, live-validated 2026-08-09) and the plan and CHANGELOG both credited it to FR-1.3, so the requirement has been reading as met ever since while half of it was never started. Surfaced 2026-08-16 by the Currawong discovery survey (`currawong/docs/DISCOVERY.md`), not by anything going wrong. **What is missing, concretely:** `https://allstarlink.github.io/user-guide/externalapps/` documents four sanctioned routes for third-party apps — Portal / Web Transceiver, IAX direct, SIP direct, and node registration. Currawong does **IAX direct** (FR-1.2) and **node registration** (IAX-8b). Web Transceiver is the one where the app authenticates with the operator's *AllStarLink Portal account* and the node owner flips "App Access" on per node — the column the public nodelist reports. So a node with App Access enabled but no `iax.conf` user context for us is reachable by RepeaterPhone and **not** by Currawong, and there is nothing the operator can do about it from our side. **Why this is the maintainer's and not an agent's:** it is new protocol work in the library, and it carries its own clean-room question. The only documentation found is a **forum thread** ("WebTransceiver Authentication API"), not a specification — so it does not clear the bar RFC 5456 and the M17 spec clear, and under the OQ-9 precedent for prose sources (candidate (d)) it would need its provenance independently established as not derived from a forbidden implementation before any code depended on it. A forum thread describing an authentication API is exactly the kind of source most likely to be a summary of the implementation, which is the implementation at one remove. **The encouraging half:** the terms question that OQ-1 had to work through for EchoLink looks materially easier here — AllStarLink documents third-party apps, names existing ones (RepeaterPhone, Transceive, DVSwitch Mobile, SharkRF M1KE), and ships a per-node switch for admitting them. That is closer to an invitation than a tolerance. **Either answer is fine and both are cheap to record; what is not fine is leaving FR-1.3 half-met and unlabelled.** If the answer is "not now", say so here and the requirement gets an explicit deferral. | Completion of **FR-1.3**. Nothing else — no shipped code depends on it, and no task is blocked waiting |
-| — | Packet capture of own AllStar session | IAX-9 |
+| ~~—~~ | ~~Packet capture of own AllStar session~~ **Done 2026-08-09** — `connect3.pcap` (voice, DTMF, mini-frame switch) and `oq5-confirm.pcap` (four registration exchanges), both of the maintainer's own traffic against their own ASL3 node, held at the workspace root. Six `live-*.hex` fixtures were cut from them; `wrap.pcap` followed for the two `0x8000` timestamp boundaries. Provenance in `Tests/FIXTURES.md` | IAX-9 ✅ |
 | ~~—~~ | ~~Packet capture of own EchoLink session (directory + proxy especially)~~ **Done 2026-08-12** — three captures (multi-peer), held in `experiment-data/`, SHA-256s in `echolink-oq9-result.txt`. Settled OQ-9's evidence question and the proxy framing / login digest; boundary calls logged in `docs/reference/PROVENANCE.md`. Paths deliberately unnamed in versioned files (one holds a live credential, one the full directory). Further Phase 6 captures still the maintainer's to run | OQ-9 ✅ / Phase 6 |
 | ~~—~~ | ~~Capture from a live M17 reflector~~ **Done 2026-08-11** — `hamvoip-cli oq7`, `m17-oq7.pcap`. Settled OQ-7. Passive traffic, so no `live-*.hex` fixture was cut from it; see `docs/CLI.md` §8 on that provenance question, which is still the maintainer's | OQ-7 ✅ |
