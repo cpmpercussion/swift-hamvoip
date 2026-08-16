@@ -23,14 +23,14 @@ major version is 0, the API may change in any release.
 - **The EchoLink subcommand no longer says it has never spoken to a proxy.**
   That stopped being true when Milestone M3 passed on 2026-08-13, and it has
   since run from the app as well.
-- **The README caught up with four releases.** It described `M17Kit` as partial
-  with no codec, no audio path and no `M17Client`, said M17 audio was blocked
-  on OQ-7, and listed EchoLink as unimplemented and unscheduled — all true at
-  v0.1 and none of it true since v0.3.0. It now carries the module table for
-  what is actually here, and separates what has been proven on the air from
+- **The README caught up with three releases.** It described `M17Kit` as
+  partial with no codec, no audio path and no `M17Client`, said M17 audio was
+  blocked on OQ-7, and listed EchoLink as unimplemented and unscheduled — all
+  true at v0.1 and none of it true since v0.3.0. It now carries a module table
+  for what is actually here, and separates what has been proven on the air from
   what has only passed tests.
 
-No code behaviour changed: this release corrects claims, not conduct.
+No behaviour changed: this corrects claims, not conduct.
 
 ## [0.4.0] — 2026-08-13
 

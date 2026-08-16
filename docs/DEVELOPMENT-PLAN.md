@@ -962,11 +962,10 @@ call, locally notable in VK1. Trademark checked clear in class 9.
 - **APP-9** — Level meters and microphone gain. ✅ **DONE** — written up below.
 
 ℹ️ **APP-5 … APP-9 were written up after the fact**, on 2026-08-16, from the
-app's commit history. APP-5 and APP-6 had been cited by `currawong` commits
-for weeks with no row here to cite; APP-7 … APP-9 are new identifiers given to
-work that shipped without one. Numbering follows what those commits already
-claimed, so it is **not chronological** — APP-7, APP-8 and APP-9 all landed
-before APP-6.
+app's commit history. APP-5 and APP-6 were cited by `currawong` commits with no
+row here to cite; APP-7 … APP-9 are new identifiers given to work that shipped
+without one. Numbering follows what those commits already claimed, so it is
+**not chronological** — APP-7, APP-8 and APP-9 all landed before APP-6.
 
 ⚠️ **The app keeps a second list this plan does not own.**
 `currawong/docs/BRINGUP.md` tracks `BU-*` — *faults*, not features: things
@@ -982,18 +981,16 @@ items (BU-3) is a task for *this* repository: see RC-11.
 **Depends on:** APP-2 ✅. **The only unmet safety requirement**, and the only
 `APP-*` row with no code behind it.
 
-**What exists instead.** A full-bleed transmit banner
-(`TransmitBanner.swift`, `TransmitStatusPresentation.swift`), outside the pane
-container so it shows from every pane, naming the input that keyed and whether
-letting go will unkey. That is a stand-in and the app README says so: it is
-visible only while the app is on screen, which is precisely the case SF-4 is
-not about.
+**What exists instead.** A full-bleed transmit banner (`TransmitBanner.swift`,
+`TransmitStatusPresentation.swift`) outside the pane container, naming the input
+that keyed and whether letting go will unkey. A stand-in, and the app README
+says so: it is visible only while the app is on screen, which is precisely the
+case SF-4 is not about.
 
-**Why SF-4 exists.** A phone in a pocket with the screen locked, transmitting,
-is the failure this requirement is written against — a stuck open microphone
-into a repeater, which the operator cannot see and other operators cannot key
-over. The watchdog (SF-1) bounds how long that lasts; SF-4 is what makes it
-*visible* before the watchdog fires.
+**Why SF-4 exists.** A phone in a pocket, screen locked, transmitting — a stuck
+open microphone into a repeater that the operator cannot see and other
+operators cannot key over. The watchdog (SF-1) bounds how long that lasts; SF-4
+makes it visible before the watchdog fires.
 
 **Shape of the work**, with the constraints that are already known:
 
@@ -1101,8 +1098,8 @@ an omission:
   to an address, so the directory listing *is* how a node is found. Built on
   EL-6 and EL-11; `StationDirectory`, `StationBrowserView`. Opens a directory-only
   session that contacts no node and transmits nothing.
-- **M17 — a reflector chooser.** Host names are typeable but 125 reflectors
-  across 20 countries are not memorable. Source is the M17 Project's published
+- **M17 — a reflector chooser.** Host names are typeable, but the published
+  list ran to 125 reflectors when read. Source is the M17 Project's published
   `M17Hosts.json`; the underlying data is DVRef's under **CC BY 4.0**, which
   requires attribution — carried in the Reflectors pane and the app README.
   `M17HostFile`, `HostFileReflectorDirectory`, `ReflectorBrowserView`.
@@ -1122,12 +1119,12 @@ independent reasons, both established by the DISCOVERY.md survey:
    web page would mean scraping a human-facing page — which the DVRef-style
    norm recorded in DISCOVERY.md argues against for the M17 data and which is
    no better manners here.
-2. **It is the wrong shape for the operator.** A node number is what everybody
-   quotes on the air, so the operator already has it; what they do not have is
+2. **It is the wrong shape for the operator.** A node number is what gets
+   quoted on the air, so the operator already has it; what they do not have is
    the address behind it, and for a node on a dynamic address they cannot. So
    `https://stats.allstarlink.org/api/stats/<node>` — public, unauthenticated,
    one node per request — answers one question about one node rather than
-   offering thirty thousand rows to scroll.
+   offering the whole register to scroll.
 
 The rationale also sits in the doc comment on `NodeLookup` so it is found from
 the code, not only from here. Three outcomes are distinguished because the fix
@@ -2196,33 +2193,31 @@ Until a second receiver or a parrot says otherwise, M17 transmit stays
 **Depends on:** M17-5 ✅. **Raised by:** the maintainer, 2026-08-16, after M17
 receive was confirmed on air and transmit was not.
 
-**The problem this solves.** Confirming that our M17 transmit is *readable*
+**The problem this solves.** Confirming our M17 transmit is *readable*
 currently needs a second operator with a receiver and the patience to report
-back. A parrot removes the second human: it echoes the transmission back, so
-one operator alone can hear what they sound like — which is exactly what
-`*ECHOTEST*` does for EchoLink, and what has made EchoLink the easiest of the
-three modes to validate.
+back. A parrot removes the second human — it echoes the transmission back, so
+one operator can hear what they sound like. It is what `*ECHOTEST*` does for
+EchoLink, and it is why EchoLink was the easiest mode to validate.
 
 **What we have been told, and its provenance.** From the M17-Users list
 (`https://groups.io/g/M17-Users/topic/would_a_parrot_reflector_be/113083205`),
 relayed by the maintainer: *"If you select a destination of #ECHO, that will
 cause any hotspot or repeater to parrot your transmission. That would be in
 place of a reflector or other station callsign in the destination."* Attributed
-to Jeff, **possibly AE5ME — the attribution is not confirmed** and nothing
-should be built on the name.
+to Jeff, **possibly AE5ME — unconfirmed**; build nothing on the name.
 
-**Treat that as a hypothesis to test on air, not as a specification.** It is
-prose from a mailing list, which is the weakest source class this project
-admits (the OQ-9 candidate-(d) bar), and it has not been checked against the
-M17 specification. It is a good hypothesis — it comes from the mode's own user
-community and costs one transmission to test — but it is not a citation.
+**A hypothesis to test on air, not a specification.** Mailing-list prose is the
+weakest source class this project admits (the OQ-9 candidate-(d) bar) and this
+has not been checked against the M17 spec. It is a *good* hypothesis — it comes
+from the mode's own users and costs one transmission to test — but it is not a
+citation.
 
-**And it does not encode.** `#` is **not in the M17 alphabet.** Table A.1 has
-40 symbols — space, `A`–`Z`, `0`–`9`, `-`, `/`, `.` — and `Base40Callsign.encode`
-throws on anything outside them, deliberately (FR-2.3), rather than coercing
-unknown characters to space the way the spec's illustrative C routine does. So
-`"#ECHO"` cannot be a base-40 destination as written. At least three readings
-survive that, and they are distinguishable by experiment:
+**And it does not encode.** `#` is **not in the M17 alphabet**: Table A.1 has 40
+symbols — space, `A`–`Z`, `0`–`9`, `-`, `/`, `.` — and `Base40Callsign.encode`
+throws on anything outside them by design (FR-2.3), rather than coercing to
+space the way the spec's illustrative C routine does. So `"#ECHO"` cannot be a
+base-40 destination as written. Three readings survive, distinguishable by
+experiment:
 
 1. **`#` is a user-interface convention** and what goes on the wire is the
    base-40 encoding of `"ECHO"`.
@@ -2236,17 +2231,15 @@ survive that, and they are distinguishable by experiment:
 
 **Read the specification first.** Appendix A.3 / Table A.2 is a permitted
 source and is where a reserved address would be defined; the archived reflector
-chapter in the workspace (OQ-8) does not mention echo or parrot at all. If the
-PDF names it, this stops being an experiment. **Do not settle it by reading
-anybody's firmware** — LP-1 and LP-2 are unchanged, and a parrot is not worth a
-clean-room breach.
+chapter (OQ-8) mentions neither echo nor parrot. If the PDF names it, this
+stops being an experiment. **Do not settle it by reading anybody's firmware** —
+LP-1 and LP-2 are unchanged, and a parrot is not worth a clean-room breach.
 
 **The library change underneath is small and worth having regardless.**
-`M17Client` sends `BROADCAST` as DST, hard-coded, because the module is chosen
-by `CONN`. Making the destination a configuration option — defaulting to
-`BROADCAST`, accepting a callsign or a raw 48-bit address — is a capability the
-mode plainly has and we do not expose, and it is what any of the three readings
-above would need.
+`M17Client` hard-codes `BROADCAST` as DST, since the module is chosen by
+`CONN`. Making the destination configurable — defaulting to `BROADCAST`,
+accepting a callsign or a raw 48-bit address — is a capability the mode has and
+we do not expose, and all three readings above need it.
 
 **Done when:** DST is configurable on `M17Client` with `BROADCAST` as the
 default; a raw address can be supplied for the case where no text encodes; the
@@ -2271,63 +2264,51 @@ Two constituencies, and they are not the same:
 - **Circumstance.** Anyone who cannot use audio right now: a house with
   children in it, a quiet carriage, a sleeping household, a noisy workshop.
 
-**Why it is worth doing.** No other client for these modes does it, as far as
-the maintainer is aware. It is a genuine differentiator, it fits the phone
-better than it fits a radio, and it uses hardware every target device already
-has. It is also the first feature in this project that would make the app
-*better* than a handheld rather than merely equivalent to one.
+**Why it is worth doing.** It fits a phone better than it fits a radio, it uses
+hardware every target device already has, and it would make the app better than
+a handheld rather than merely equivalent to one. Whether any existing client
+for these modes already does it is **unchecked** — worth ten minutes before
+committing to the work, and not a claim to make in public copy until somebody
+has looked.
 
 **SIL-1 — Design spike ⏳ OPEN. Nothing else in this phase is scheduled, and
 deliberately so.** Decide these before writing a task list; several could sink
 the feature or change its shape entirely:
 
-1. **What can on-device speech actually do with this audio?** This is the
-   crux and it is not the usual question. Received audio here is **8 kHz
-   narrowband, and has already been through a vocoder** — G.711 µ-law on
-   AllStarLink (kind), GSM 06.10 on EchoLink (less so), **Codec2 3200 on M17
-   (brutal)**. General-purpose speech recognition is trained on wideband
-   speech; 3200 bps Codec2 discards most of what a recogniser leans on.
-   Measure it before designing anything: take known audio, run it through each
-   mode's codec, transcribe it, and score the result **per codec**. A feature
-   that works on AllStarLink and produces nonsense on M17 is a different
-   product from one that works everywhere, and an accessibility feature that
-   silently degrades is worse than one that says "I cannot hear this well
-   enough".
-2. **Which API, and what does it cost in deployment target?** Apple's
-   on-device speech offerings have moved fast, and the most capable are the
-   newest — which collides with a floor that is about to become **iOS 16.1**
-   for a Live Activity (APP-3). An availability-gated feature on recent OSes
-   only may well be right; that is a decision to take with the numbers from
-   (1) in hand, not before. Same question for synthesis, where the older APIs
-   are more than adequate and the newer voices are simply better.
-3. **Speaking onto the air is a regulatory act.** Transmitting synthesised
-   speech is ordinary — a repeater does it every ten minutes — but station
-   identification is the operator's legal responsibility and must not be left
-   implicit in a text box. Work out what the app owes here, in VK1 terms
-   first.
-4. **The half-duplex trap.** Typing takes far longer than speaking. A net
-   moves at conversational speed and will not wait for someone typing a
-   sentence, so the interaction design — not the models — decides whether this
-   is usable. Canned phrases, a compose-then-send flow, an indication to the
-   channel that a station is composing: this is where the feature will be won
-   or lost, and it is worth prototyping before any of the plumbing.
-5. **Where it lives.** Transcription is *not* protocol work, so the default is
-   that all of it belongs in Currawong, above the `NetworkClient` seam, with
-   no library change at all — received PCM is already exposed there
-   (`receivedAudio`), and `send(pcm:)` already accepts synthesised audio. If
-   the design appears to need something from the library, that is a finding
-   worth reporting rather than a licence to reach downward.
-6. **Does it change the safety story?** SF-1 through SF-4 are written around
-   an operator who can hear their own transmission. An operator who cannot
-   hear is exactly who a stuck transmitter hurts most, so re-read the safety
-   requirements from that operator's point of view during the spike. This is
-   the part most likely to produce a new requirement rather than a new task.
+1. **What can on-device speech do with this audio?** The crux, and not the
+   usual question: received audio is **8 kHz and has already been through a
+   vocoder** — G.711 µ-law on AllStarLink (kind), GSM 06.10 on EchoLink (less
+   so), Codec2 3200 on M17 (brutal). Recognisers are trained on wideband
+   speech. **Measure per codec before designing anything**: known audio through
+   each mode's codec, transcribed, scored. A feature that works on AllStarLink
+   and produces nonsense on M17 is a different product — and an accessibility
+   feature that degrades silently is worse than one that says it cannot hear
+   well enough.
+2. **Which API, at what deployment floor?** The most capable on-device speech
+   APIs are the newest, which collides with a floor about to become iOS 16.1
+   for APP-3. Availability-gating to recent OSes may well be right; decide it
+   with (1)'s numbers in hand. Synthesis is the easier half — the older APIs
+   are adequate.
+3. **Speaking onto the air is a regulatory act.** Station identification is the
+   operator's legal responsibility and must not be left implicit in a text box.
+   Work out what the app owes, in VK1 terms first.
+4. **The half-duplex trap.** Typing is far slower than speaking, and a net will
+   not wait. The interaction design decides whether this is usable — canned
+   phrases, compose-then-send, an indication that a station is composing — so
+   prototype that before any plumbing.
+5. **Where it lives.** Not protocol work: all of it belongs in Currawong, above
+   the `NetworkClient` seam. `receivedAudio` already exposes PCM and
+   `send(pcm:)` already accepts it. Needing something from the library would be
+   a finding worth reporting, not a licence to reach downward.
+6. **Does it change the safety story?** SF-1 … SF-4 assume an operator who can
+   hear their own transmission — and an operator who cannot is exactly who a
+   stuck transmitter hurts most. Most likely to produce a new requirement
+   rather than a new task.
 
-**Done when:** a written finding covering (1) with **measured** per-codec
-numbers, a recommendation on (2), and a decision on (4)'s interaction model —
-enough to either decompose the phase into tasks or record why it is not worth
-building. A prototype that transcribes a recorded M17 over is worth more than
-any amount of reasoning about it.
+**Done when:** a written finding with **measured** per-codec numbers, a
+recommendation on the API, and a decision on the interaction model — enough to
+decompose the phase or to record why it is not worth building. A prototype
+transcribing a recorded M17 over beats any amount of reasoning about it.
 
 ⚠️ **Not a reason to delay APP-3.** SF-4 is a safety requirement with a
 requirement number; this is a feature idea, however good.
