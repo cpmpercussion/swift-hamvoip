@@ -545,10 +545,24 @@ actor ConnectSession {
     }
 
     private func hintFor(_ error: Error) -> String {
-        if case IAX2ClientError.rejected = error {
-            return "A REJECT usually means the username or the secret is wrong, or the node "
-                + "does not permit this account. If the secret is right, this may be OQ-5: "
-                + "run `hamvoip-cli oq5` to test the MD5 RESULT text encodings."
+        if case IAX2ClientError.rejected(let cause, _) = error {
+            if cause == nil {
+                // A REJECT with no CAUSE IE says nothing about whether the
+                // secret was ever examined: the peer may have refused the NEW
+                // before challenging, in which case the credentials are
+                // untested rather than wrong. The CLI cannot tell from here —
+                // `IAX2ClientEvent` does not surface the challenge — so point
+                // at the one thing that answers it.
+                return "The node gave no CAUSE, which leaves it open whether it ever asked for "
+                    + "the secret. A node that refuses the NEW outright never checks the "
+                    + "credentials, so a rejection here is not evidence that --username or the "
+                    + "secret is wrong; it is as likely to be a node that does not accept calls "
+                    + "from this account. Capture UDP \(destination.port) and look for an "
+                    + "AUTHREQ before the REJECT: if there is none, take it up with the node's "
+                    + "operator rather than changing credentials."
+            }
+            return "The node gave its reason above. That usually means the username or the "
+                + "secret is wrong, or that this account is not permitted to call this node."
         }
         if case IAX2ClientError.connectTimedOut = error {
             return "No answer. Check the host and port, and that this machine can reach UDP "
