@@ -149,7 +149,7 @@ Phase 0  Bootstrap        BOOT-1             (blocks everything)
 Phase 1  RadioCore        RC-1 … RC-10       (needs BOOT-1)
 Phase 2  IAX2Kit          IAX-1 … IAX-9      (needs RC-1..RC-4)
 Phase 3  CLI harness      CLI-1              (needs IAX-8)
-Phase 4  SwiftUI app      APP-1 … APP-4      (unblocked: OQ-3/3b/4 resolved)
+Phase 4  SwiftUI app      APP-1 … APP-7      (unblocked: OQ-3/3b/4 resolved)
 Phase 5  BLE PTT          BLE-1 … BLE-3      (needs APP-2)
 Phase 6  EchoLink         EL-1 … EL-11       ✅ complete; M3 passed 2026-08-13
 Phase 7  M17Kit           M17-1 … M17-5      (M17-1 ✅ done, OQ-2 resolved)
@@ -553,7 +553,12 @@ transmits 1 s of synthetic tone (asserting emitted datagram shapes),
 receives fixture voice datagrams and yields decoded PCM; watchdog expiry
 forces stopTransmit. **This is Milestone M1.**
 
-### IAX-8b — Registration, registered node mode (FR-1.3) ✅ DONE
+### IAX-8b — Registration, registered node mode (FR-1.3, first half) ✅ DONE
+
+⚠️ **This delivers registered node mode only.** FR-1.3 also asks for Web
+Transceiver mode, which does not exist and is not scheduled — see **OQ-10**.
+Read a ✅ on this row as "registration works", never as "FR-1.3 is met".
+
 **Depends on:** IAX-8 ✅. Written up after the fact: the work merged in
 `9794a8d` while the plan still mentioned it only as "a follow-up subtask"
 inside IAX-8, with no entry of its own.
@@ -575,7 +580,7 @@ registration path has run against anything other than a fixture.
 ℹ️ **One seam left open**, no longer urgent: the registrar calls
 `IAX2Auth.md5Response(challenge:secret:)` with the **default** encoding and
 carries no override, where `IAX2Call.Configuration` gained one in `c77ce86`.
-OQ-5 resolved *to* lowercase hex, so registered node mode (FR-1.3) works as
+OQ-5 resolved *to* lowercase hex, so registered node mode works as
 shipped and this is now a symmetry/hygiene item rather than a defect. Thread
 `md5ResultEncoding` through `IAX2Registrar.Configuration` in the same shape
 when convenient. See `docs/CLI.md`.
@@ -866,6 +871,67 @@ call, locally notable in VK1. Trademark checked clear in class 9.
   TX/RX state, plus `MPRemoteCommandCenter` toggle-PTT fallback (PT-4).
 - **APP-4** — Settings: node list CRUD, watchdog timeout, stored in
   `UserDefaults`; secrets in Keychain.
+- **APP-7** — Directories and discovery: two browsers and one lookup. ✅ DONE,
+  written up below.
+
+⚠️ **The app's task history has run ahead of this list.** `APP-5` (BLE and
+remote-command PTT controllers) and `APP-6` (microphone permission) exist as
+commits in the `currawong` repo with no rows here, which is why APP-7 is the
+next free identifier rather than APP-5. Writing those two up is a separate
+job and is not done.
+
+### APP-7 — Directories and discovery ✅ DONE
+**Delivered** in `currawong` `c285b61` (branch `task/app-ux-discovery`), with
+the source research in `currawong/docs/DISCOVERY.md` (2026-08-16). Written up
+after the fact, as IAX-8b was: the work merged while Phase 4 still listed only
+APP-1 … APP-4.
+
+Three modes, three shapes of answer — and the asymmetry is the decision, not
+an omission:
+
+- **EchoLink — a station browser.** Nothing in the library resolves a callsign
+  to an address, so the directory listing *is* how a node is found. Built on
+  EL-6 and EL-11; `StationDirectory`, `StationBrowserView`. Opens a directory-only
+  session that contacts no node and transmits nothing.
+- **M17 — a reflector chooser.** Host names are typeable but 125 reflectors
+  across 20 countries are not memorable. Source is the M17 Project's published
+  `M17Hosts.json`; the underlying data is DVRef's under **CC BY 4.0**, which
+  requires attribution — carried in the Reflectors pane and the app README.
+  `M17HostFile`, `HostFileReflectorDirectory`, `ReflectorBrowserView`.
+- **AllStarLink — a lookup, deliberately not a browser.** `NodeLookup.swift`:
+  `AllStarLinkNodeLookup` + `NodeLocator`, a button beside the node number on
+  the connect form.
+
+**Why AllStarLink got no browser — settled, do not re-litigate.** Two
+independent reasons, both established by the DISCOVERY.md survey:
+
+1. **The public bulk lists do not carry addresses.** `allstarlink.org/nodelist/`
+   is a searchable web page with no documented export endpoint; `astdb.txt` is
+   metadata only (number, callsign, description, location). The real
+   number→IP list is `rpt_extnodes`, which only *registered nodes* pull and
+   which is not a public endpoint. A browser built from what is public could
+   not offer the one field the connect form needs, and building one from the
+   web page would mean scraping a human-facing page — which the DVRef-style
+   norm recorded in DISCOVERY.md argues against for the M17 data and which is
+   no better manners here.
+2. **It is the wrong shape for the operator.** A node number is what everybody
+   quotes on the air, so the operator already has it; what they do not have is
+   the address behind it, and for a node on a dynamic address they cannot. So
+   `https://stats.allstarlink.org/api/stats/<node>` — public, unauthenticated,
+   one node per request — answers one question about one node rather than
+   offering thirty thousand rows to scroll.
+
+The rationale also sits in the doc comment on `NodeLookup` so it is found from
+the code, not only from here. Three outcomes are distinguished because the fix
+differs: no such node, listed but never registered, and directory unreachable.
+The host field stays editable — a private node is not listed at all and its
+owner hands out the address directly, so the lookup is an offer, not a gate.
+
+**Left on the table, knowingly:** the same response carries `keyed` and a
+`linkedNodes` tree, neither of which is read. "Is it keyed right now" is the
+one that might earn its place next to the summary line; it is not a task yet.
+
+**What this did *not* settle: Web Transceiver — see OQ-10.**
 
 ## Phase 5 — BLE PTT (after APP-2)
 
@@ -1845,6 +1911,7 @@ Until then M17 is "believed working", and the CLI's banner says so.
 | **OQ-7** | ✅ **RESOLVED 2026-08-11 — 54 bytes. The LSF CRC is not on the wire; `M17StreamPacket` changed to match.** Settled by `hamvoip-cli oq7` against a live reflector on UDP 17000, packet capture retained (`m17-oq7.pcap`, workspace, unversioned). One over of 52 consecutive stream datagrams, one SID, one transmitting station. Three independent readings of those bytes agree and only on this layout: **length** — 54 bytes, 52 of 52, no exceptions; **sequencing** — the two bytes at offset 34 ran 0, 1, 2 … 51, while at offset 36, where the 56-byte reading puts FN, the same bytes do not count at all and set bit 15 in 35 of 52 frames, which a mid-over last-frame flag must never be; **CRC** — the trailing two bytes are the M17 CRC16 (Part I: polynomial `0x5935`, init `0xFFFF`) over the preceding 52 bytes, valid 52 of 52. That third test is what rules out a truncated 56-byte frame — two bytes lost in transit would not leave a CRC closing over what remains — and it fails 0 of 52 for the LSF-CRC-present reading. Field offsets corroborated too: SID constant, DST/SRC decoding as base-40 callsigns at 6-11 and 12-17, TYPE `0x0005` at 18-19, META all zeros, and 16 bytes of Codec 2 differing in every frame at 36-51. **Scope of the claim:** one reflector, one over, one transmitting client — an observation about what M17-over-IP actually carries, not a correction to the specification, which says 240 bits and is what we implemented first. A second reflector disagreeing would be new information rather than a bug; the tally's guidance says so. **Original question:** the spec's Table 27 gives LICH as 240 bits, the full 30-byte LSF *including* its own CRC → 56 bytes; 54 is widely quoted elsewhere, and the difference is exactly whether that CRC is present. Unresolvable from the document, and LP-2 forbids reading an implementation to find out. | Unblocks **M17-4** stream TX/RX |
 | **OQ-8** | ✅ **RESOLVED 2026-08-13 — keep a local copy, outside both repos.** The maintainer's call: M17's documentation situation is not going to improve, the project describes the specification as open, and the archived chapter is the best record there is, so use it rather than waiting for a better one. A copy of the Internet Archive capture now sits at `m17-spec-archive/` in the workspace with its retrieval URL, timestamp and SHA-256 (`d3ffacd2…`) recorded beside it. **Not committed**, and that half is a licence judgement rather than a preference: the page carries no licence statement, so redistributing it in an Apache-2.0 repository would assert a right nobody has checked. Holding a reference copy is a different act from republishing one. The citation chain in the repo is unchanged — `M17ReflectorProtocol.swift` and `docs/reference/PROVENANCE.md` still cite the archive URL; the local copy is the belt to that braces. **Original question:** the chapter we implement against was published as HTML at a readthedocs host that now 404s, so the only record of what we implemented against was a third-party archive that may itself disappear. | Nothing today; the maintenance risk is now hedged |
 | ~~OQ-9~~ | ✅ **RESOLVED 2026-08-12 — permitted sources named; Phase 6 unblocks. Maintainer's judgement.** The permitted sources for EchoLink protocol knowledge are: **(a)** RFC 3550 for RTP framing and **(b)** the ETSI/ITU GSM 06.10 specification for the codec, as spec anchors *for the parts they actually cover* — with the standing caveat that RFC 3550 does **not** describe this protocol as implemented (observed RTP version bits are 3, not 2; the proxy framing and the directory protocol on TCP 5200 fall outside it entirely), so where wire and RFC disagree the wire wins and the divergence is recorded; **(c) packet captures of the maintainer's own EchoLink sessions** are the **primary** source, under the same LP-1 fixture rule that governs IAX-9. Candidate **(d)**, prose write-ups, is admitted **only** under a provenance bar materially higher than the captures': because no published specification exists, most such prose derives from the very implementations LP-2 forbids (a summary of thebridge's source is the source at one remove, not "behavioural observation"), so a (d) source may be used only when its own provenance is independently established as *not* derived from forbidden implementations, and its use logged per `docs/reference/PROVENANCE.md` before any code depends on it. When (d) cannot clear that bar, the answer is another capture, not the write-up. **Standing procedural rules that come with this resolution:** (1) protocol ambiguities are settled by designing another on-air experiment and cutting another capture — never by reading an implementation; the pressure to peek is highest exactly where captures are thinnest, which is where the clean-room boundary matters most. (2) Capture work spans **multiple peers**: a single-peer capture already produced two confident wrong conclusions (SSRC always zero; sequence numbers start at zero) that a four-peer capture corrected — see the PROVENANCE.md OQ-9 entry. (3) Directory-server captures (TCP 5200) carry other operators' callsigns, locations and IPs; they get the same third-party-traffic hygiene the M17 OQ-7 capture did (`docs/CLI.md` §8), and no such capture's path is named in a versioned file. **Terms rechecked online 2026-08-12** against echolink.org directly (Access Policies, Validation, Download, Support): no anti-reverse-engineering clause, no client-software restriction, and no software EULA is even linked — the access policies govern *who* may connect (licensed amateurs) and what a Sysop node may interconnect *to*, never what client software reaches the service. echolink.org's own Download page lists compatible third-party implementations (EchoHam, EchoIRLP, svxLink/QTel, an Asterisk channel driver) with "we do not support these programs" — the service operator publicly acknowledges independent clients. This closes the narrow terms caveat left open under OQ-1 and does not disturb OQ-1's reasoning. **This resolves the sourcing question only** — OQ-1b (trademark, nominative use only) still governs all EchoLink naming, and LP-1/LP-2 are unchanged: no implementation source, at any level, is ever read. | ~~Phase 6~~ **unblocked** |
+| **OQ-10** | ⏳ **OPEN — implement AllStarLink Web Transceiver mode, or scope FR-1.3 down to the half that shipped?** **FR-1.3 asks for two things** — "registered node mode **and Web Transceiver mode**" — and only the first exists. IAX-8b delivered registration (§6.1, live-validated 2026-08-09) and the plan and CHANGELOG both credited it to FR-1.3, so the requirement has been reading as met ever since while half of it was never started. Surfaced 2026-08-16 by the Currawong discovery survey (`currawong/docs/DISCOVERY.md`), not by anything going wrong. **What is missing, concretely:** `https://allstarlink.github.io/user-guide/externalapps/` documents four sanctioned routes for third-party apps — Portal / Web Transceiver, IAX direct, SIP direct, and node registration. Currawong does **IAX direct** (FR-1.2) and **node registration** (IAX-8b). Web Transceiver is the one where the app authenticates with the operator's *AllStarLink Portal account* and the node owner flips "App Access" on per node — the column the public nodelist reports. So a node with App Access enabled but no `iax.conf` user context for us is reachable by RepeaterPhone and **not** by Currawong, and there is nothing the operator can do about it from our side. **Why this is the maintainer's and not an agent's:** it is new protocol work in the library, and it carries its own clean-room question. The only documentation found is a **forum thread** ("WebTransceiver Authentication API"), not a specification — so it does not clear the bar RFC 5456 and the M17 spec clear, and under the OQ-9 precedent for prose sources (candidate (d)) it would need its provenance independently established as not derived from a forbidden implementation before any code depended on it. A forum thread describing an authentication API is exactly the kind of source most likely to be a summary of the implementation, which is the implementation at one remove. **The encouraging half:** the terms question that OQ-1 had to work through for EchoLink looks materially easier here — AllStarLink documents third-party apps, names existing ones (RepeaterPhone, Transceive, DVSwitch Mobile, SharkRF M1KE), and ships a per-node switch for admitting them. That is closer to an invitation than a tolerance. **Either answer is fine and both are cheap to record; what is not fine is leaving FR-1.3 half-met and unlabelled.** If the answer is "not now", say so here and the requirement gets an explicit deferral. | Completion of **FR-1.3**. Nothing else — no shipped code depends on it, and no task is blocked waiting |
 | — | Packet capture of own AllStar session | IAX-9 |
 | ~~—~~ | ~~Packet capture of own EchoLink session (directory + proxy especially)~~ **Done 2026-08-12** — three captures (multi-peer), held in `experiment-data/`, SHA-256s in `echolink-oq9-result.txt`. Settled OQ-9's evidence question and the proxy framing / login digest; boundary calls logged in `docs/reference/PROVENANCE.md`. Paths deliberately unnamed in versioned files (one holds a live credential, one the full directory). Further Phase 6 captures still the maintainer's to run | OQ-9 ✅ / Phase 6 |
 | ~~—~~ | ~~Capture from a live M17 reflector~~ **Done 2026-08-11** — `hamvoip-cli oq7`, `m17-oq7.pcap`. Settled OQ-7. Passive traffic, so no `live-*.hex` fixture was cut from it; see `docs/CLI.md` §8 on that provenance question, which is still the maintainer's | OQ-7 ✅ |
