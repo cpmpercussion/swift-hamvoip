@@ -493,6 +493,9 @@ actor ConnectSession {
         await console.log("  node      \(destination.node) at \(destination.host):\(destination.port)")
         await console.log("  username  \(destination.username)")
         await console.log("  callsign  \(destination.callsign)")
+        if !destination.callingNumber.isEmpty {
+            await console.log("  calling#  \(destination.callingNumber)")
+        }
         await console.log("  secret    \(secretSource)")
         await console.log("  watchdog  \(transmitTimeout) (SF-1)")
         if case .commandLine = secretSource {

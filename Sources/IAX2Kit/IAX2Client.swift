@@ -20,6 +20,7 @@ import RadioCore
 /// | ``node`` | CALLED NUMBER `0x01` (§8.6.1) | Required on NEW |
 /// | ``username`` | USERNAME `0x06` (§8.6.6) | Omitted when empty |
 /// | ``callsign`` | CALLING NAME `0x04` (§8.6.4) | Omitted when empty |
+/// | ``callingNumber`` | CALLING NUMBER `0x03` (§8.6.3) | Omitted when empty, which is the default |
 /// | ``secret`` | — | **Never sent.** Hashed with the CHALLENGE; only the MD5 digest goes out (§8.6.15) |
 ///
 /// ``host`` and ``port`` never appear in a frame at all — they address the UDP
@@ -33,6 +34,16 @@ public struct IAX2Destination: Sendable, Equatable {
 
     /// The operator's callsign, sent as CALLING NAME (§8.6.4).
     public let callsign: String
+
+    /// The identity the far end attributes the call to, sent as CALLING NUMBER
+    /// (§8.6.3). Omitted when empty, which is the default and what IAX Direct
+    /// (FR-1.2) and registered node mode have always sent.
+    ///
+    /// Web Transceiver needs it. There the USERNAME is a fixed context name
+    /// (`allstar-public`) shared by every guest, so it cannot identify anyone —
+    /// the node has to learn *who* is calling from somewhere else before it can
+    /// ask allstarlink.org whether to admit them. See IAX-12.
+    public let callingNumber: String
 
     /// The account name the node authenticates us as, sent as USERNAME
     /// (§8.6.6).
@@ -52,8 +63,10 @@ public struct IAX2Destination: Sendable, Equatable {
         callsign: String,
         username: String,
         secret: String,
-        node: String
+        node: String,
+        callingNumber: String = ""
     ) {
+        self.callingNumber = callingNumber
         self.host = host
         self.port = port
         self.callsign = callsign
@@ -76,6 +89,7 @@ public struct IAX2Destination: Sendable, Equatable {
             calledNumber: node,
             username: username.isEmpty ? nil : username,
             secret: secret.isEmpty ? nil : secret,
+            callingNumber: callingNumber.isEmpty ? nil : callingNumber,
             callingName: callsign.isEmpty ? nil : callsign,
             capability: .g711MuLaw,
             format: .g711MuLaw)

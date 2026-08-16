@@ -35,6 +35,32 @@ final class IAX2ClientTests: XCTestCase {
 
     private let samplesPerFrame = 160
 
+    // MARK: - CALLING NUMBER (IAX-12)
+
+    /// Absent by default, so IAX Direct and registered node mode send exactly
+    /// what they always sent. A zero-length CALLING NUMBER is not the same as
+    /// no CALLING NUMBER, and nodes are entitled to treat it differently.
+    func testCallRequestOmitsCallingNumberUnlessAsked() {
+        XCTAssertNil(IAX2ClientTests.node.callRequest.callingNumber)
+        XCTAssertEqual(IAX2ClientTests.node.callRequest.callingName, "N0CALL")
+    }
+
+    /// Web Transceiver needs it: USERNAME there is the shared context name
+    /// `allstar-public`, which identifies nobody, so the operator's identity has
+    /// to travel separately. See IAX-12 and `experiment-data/wt-oq10-result.txt`.
+    func testCallRequestCarriesCallingNumberWhenSet() {
+        let destination = IAX2Destination(
+            host: "node.example.test",
+            callsign: "N0CALL",
+            username: "allstar-public",
+            secret: "s3cr3t",
+            node: "55553",
+            callingNumber: "N0CALL")
+        XCTAssertEqual(destination.callRequest.callingNumber, "N0CALL")
+        XCTAssertEqual(destination.callRequest.username, "allstar-public")
+        XCTAssertEqual(destination.callRequest.callingName, "N0CALL")
+    }
+
     // MARK: - Harness
 
     private struct Harness {

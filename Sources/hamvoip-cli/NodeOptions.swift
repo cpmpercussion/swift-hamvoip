@@ -118,7 +118,8 @@ enum ArgumentValidation {
         node: String,
         username: String,
         callsign: String,
-        secret: String
+        secret: String,
+        callingNumber: String = ""
     ) throws -> IAX2Destination {
         IAX2Destination(
             host: try requireSimpleString(host, option: "--host"),
@@ -126,7 +127,9 @@ enum ArgumentValidation {
             callsign: try requireCallsign(callsign),
             username: try requireSimpleString(username, option: "--username"),
             secret: secret,
-            node: try requireSimpleString(node, option: "--node"))
+            node: try requireSimpleString(node, option: "--node"),
+            callingNumber: callingNumber.isEmpty
+                ? "" : try requireSimpleString(callingNumber, option: "--calling-number"))
     }
 }
 
@@ -163,6 +166,17 @@ struct NodeOptions: ParsableArguments {
 
     @Option(name: .long, help: ArgumentHelp(
         """
+        Identity sent as the CALLING NUMBER IE. Omitted by default, which is \
+        what IAX Direct and registered node mode have always done. Web \
+        Transceiver needs it: there the USERNAME is the shared context name \
+        `allstar-public`, so the node learns who is calling from this IE \
+        instead. See IAX-12.
+        """,
+        valueName: "number"))
+    var callingNumber: String?
+
+    @Option(name: .long, help: ArgumentHelp(
+        """
         Shared secret. HAZARD: a secret passed this way is visible in `ps` to \
         every process on the machine and is written to your shell history. \
         Prefer the HAMVOIP_SECRET environment variable, or omit this flag \
@@ -181,7 +195,8 @@ struct NodeOptions: ParsableArguments {
             node: node,
             username: username,
             callsign: try ConfigFile.requireCallsign(commandLineValue: callsign),
-            secret: resolved.secret)
+            secret: resolved.secret,
+            callingNumber: callingNumber ?? "")
         return (destination, resolved.source)
     }
 }
