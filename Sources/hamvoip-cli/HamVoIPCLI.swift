@@ -27,7 +27,8 @@ struct HamVoIPCLI: AsyncParsableCommand {
 
               connect  place a call and work it — spacebar for PTT, DTMF for node control,
                        level meters for both directions, and the SF-1 transmit watchdog
-                       shown when it fires.
+                       shown when it fires. Reaches a node three ways: IAX direct, a
+                       registered node, or Web Transceiver with only a portal account.
               m17      link an M17 reflector module and pass audio (Codec2 3200).
                        Receive proven on air 2026-08-16; transmit sent but not yet
                        confirmed heard. Needs Codec2.xcframework; see docs/CLI.md.
