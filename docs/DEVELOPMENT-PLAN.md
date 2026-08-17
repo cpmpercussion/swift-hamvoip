@@ -80,8 +80,8 @@ remembered; if it disagrees with the repository, the repository is right.
   `CGSM` target, a test-only `TestSupport` target and five test targets. One
   Swift dependency, `swift-argument-parser`, authorised by CLI-1; `CGSM` is
   vendored C, not a dependency (EL-8, LP-4).
-- `swift build` and `swift test` are green: **963 tests, no failures**
-  (checked 2026-08-17, after the v0.5.1 plan and docs catch-up). One of those is skipped unless
+- `swift build` and `swift test` are green: **981 tests, no failures**
+  (checked 2026-08-17, at the v0.5.2 tag). One of those is skipped unless
   `HAMVOIP_ECHOLINK_STATION_LIST` names a directory-list download — the EL-11
   conformance test, which cannot ship its data. CI runs the SPDX check on
   Ubuntu and build + test on macOS 14.
@@ -115,6 +115,10 @@ remembered; if it disagrees with the repository, the repository is right.
   behaviour change: one command per protocol (`iax2` with `connect` kept as an
   alias, `echolink`, `m17`), the OQ probes moved under `experiment`, and
   `--version` now reports the package version instead of a stale `0.1.0`.
+- **Released as `v0.5.2`, 2026-08-17** — IAX-13, the Web Transceiver token
+  fetch, plus `hamvoip-cli wt-token`. Cut on its own because Currawong's APP-12
+  settings screen has the portal-login pane written and disabled until a tag
+  carries the fetch; nothing else changed behaviour. 981 tests green at the tag.
 - **Released as `v0.4.0`, 2026-08-13** — EL-12, public proxy discovery. Cut as
   its own release because the app needs it: FR-3.3 makes the proxy the default on
   cellular, so every EchoLink session Currawong opens needs a proxy host, and

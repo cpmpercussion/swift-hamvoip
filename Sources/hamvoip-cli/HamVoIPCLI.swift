@@ -48,7 +48,7 @@ struct HamVoIPCLI: AsyncParsableCommand {
 
             Full documentation, including the M2 sign-off checklist: docs/CLI.md
             """,
-        version: "0.5.1",
+        version: "0.5.2",
         subcommands: [
             ConnectCommand.self, EchoLinkCommand.self, M17Command.self,
             WebTransceiverTokenCommand.self, ExperimentCommand.self,

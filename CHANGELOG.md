@@ -8,6 +8,14 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-08-17
+
+One task, cut as its own release because an app is waiting on it: Currawong's
+settings screen (APP-12) has "log in to the portal, get a token" written and
+tested behind a seam, and cannot switch it on until a released tag carries the
+fetch. No behaviour changes anywhere else — every existing client, destination
+and CLI command sends exactly what it sent in `v0.5.1`.
+
 ### Added
 
 - **Web Transceiver token fetch (IAX-13).** `WebTransceiverTokenSource` in
@@ -705,7 +713,8 @@ DMR, System Fusion (YSF), D-STAR, P25 and NXDN. All require AMBE or AMBE+2,
 which is patent-encumbered (NG-1). No MMDVM or USB modem support (NG-2), no MFi
 (NG-3), and no RF layer (NG-4).
 
-[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.3.0...v0.4.0
