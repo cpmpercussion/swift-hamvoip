@@ -8,6 +8,25 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- **Web Transceiver token fetch (IAX-13).** `WebTransceiverTokenSource` in
+  `IAX2Kit`, with `AllStarLinkPortalTokenFetcher` as the one implementation
+  against allstarlink.org's `auth-wt-legacy` endpoint: callsign and portal
+  password in, a `WebTransceiverToken` out. The three observed failures
+  (`login failed`, `Invalid JSON payload`, `Invalid JSON fields`) are separate
+  error cases, because retyping a password fixes exactly one of them. It is a
+  seam rather than a function because the endpoint is named `legacy` and
+  AllStarLink has a replacement project open (OQ-10, caveat 2) — the successor
+  should be a second conformance. `WebTransceiverToken.description` is
+  redacted: the token resolves to the operator's callsign on any WT-enabled
+  node, so it is a credential and must not fall into a log.
+- **`hamvoip-cli wt-token`** — the first half of `docs/CLI.md` §11 without
+  `curl` and a hand-built JSON body. Prints only the token, so
+  `TOKEN="$(hamvoip-cli wt-token --callsign VK1CPM)"` composes; takes the
+  password from `$ALLSTARLINK_PORTAL_PASSWORD` or a no-echo prompt, on the
+  same reasoning as `--secret`.
+
 ## [0.5.1] — 2026-08-17
 
 ### Changed

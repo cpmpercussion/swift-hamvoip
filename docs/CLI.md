@@ -1151,6 +1151,22 @@ presenting it.
 ### 11.1 Get a token
 
 ```sh
+export ALLSTARLINK_PORTAL_PASSWORD='…'     # or omit it and type it at the prompt
+TOKEN="$(hamvoip-cli wt-token --callsign "$CALLSIGN")"
+```
+
+Only the token reaches stdout, so it substitutes straight into step 11.2;
+everything else — the prompt, where the password came from, any complaint —
+goes to stderr. The password is your **allstarlink.org portal** password, not a
+node secret and not the static `allstar` secret the call itself presents.
+
+The token is 12 lowercase hex characters and is **stable across calls**, so
+treat it as a credential with a real lifetime, not a nonce.
+
+<details>
+<summary>The request underneath, for reference (IAX-13)</summary>
+
+```sh
 curl -s -X POST -H 'Content-Type: application/json' \
     -d "$(jq -n --arg u "$CALLSIGN" --arg p "$PORTAL_PASSWORD" \
           '{username:$u,password:$p}')" \
@@ -1162,10 +1178,18 @@ curl -s -X POST -H 'Content-Type: application/json' \
 ```
 
 `username` is your callsign — allstarlink.org portal logins are
-callsign/password. On failure `status` is `ERR` and `msg` distinguishes
-`Invalid JSON payload`, `Invalid JSON fields` and `login failed`. The token is
-12 lowercase hex characters and is **stable across calls**, so treat it as a
-credential with a real lifetime, not a nonce.
+callsign/password, and both key names are exact. On failure `status` is `ERR`
+and `msg` distinguishes `Invalid JSON payload`, `Invalid JSON fields` and
+`login failed`; the three arrive as separate `WebTransceiverTokenError` cases,
+because a wrong password is fixed by retyping it and a changed endpoint is not.
+
+The fetch lives in `IAX2Kit` behind `WebTransceiverTokenSource`
+(`AllStarLinkPortalTokenFetcher` is the one implementation) so the app can
+reach it too, and so the expected replacement for this `legacy` endpoint —
+ASL3-Manual #229, and OQ-10 caveat 2 — can arrive as a second conformance.
+`--endpoint` points the command at a successor without a rebuild.
+
+</details>
 
 ⚠️ The endpoint is named `legacy`, and AllStarLink's ASL3-Manual issue #229 sits
 under a project called "WebTransceiver Login API Replacement". Expect a
