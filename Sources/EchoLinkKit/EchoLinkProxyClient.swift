@@ -454,6 +454,19 @@ public actor EchoLinkProxyClient {
         guard generation == deadlineGeneration, state != .closed else { return }
         let error = EchoLinkProxyError.timedOut(operation: operation)
         finishNonce(.failure(error))
+        // An OPEN that timed out leaves no channel open, but the login is
+        // still good — so, like `handle(_:)` moving `state` before it
+        // delivers a STATUS outcome, this restores `state` to `.loggedIn`
+        // before `finishOpen` runs, so a retried `open(peer:)` finds a state
+        // that permits it rather than being wedged behind
+        // `.invalidTransition(from: .opening, ...)` forever. `openInFlight`
+        // still gates a late STATUS for this attempt: `finishOpen` below
+        // clears it, so that frame arrives with `openInFlight` already
+        // false and is forwarded as an ordinary frame instead of touching
+        // `state` again.
+        if state == .opening {
+            state = .loggedIn
+        }
         finishOpen(.failure(error))
     }
 
