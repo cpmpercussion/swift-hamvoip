@@ -119,7 +119,8 @@ enum ArgumentValidation {
         username: String,
         callsign: String,
         secret: String,
-        callingNumber: String = ""
+        callingNumber: String = "",
+        callingName: String = ""
     ) throws -> IAX2Destination {
         IAX2Destination(
             host: try requireSimpleString(host, option: "--host"),
@@ -129,7 +130,9 @@ enum ArgumentValidation {
             secret: secret,
             node: try requireSimpleString(node, option: "--node"),
             callingNumber: callingNumber.isEmpty
-                ? "" : try requireSimpleString(callingNumber, option: "--calling-number"))
+                ? "" : try requireSimpleString(callingNumber, option: "--calling-number"),
+            callingName: callingName.isEmpty
+                ? "" : try requireSimpleString(callingName, option: "--calling-name"))
     }
 }
 
@@ -177,6 +180,16 @@ struct NodeOptions: ParsableArguments {
 
     @Option(name: .long, help: ArgumentHelp(
         """
+        Value for the CALLING NAME IE, sent verbatim. Defaults to --callsign. \
+        Use this when the far end expects something that is not a callsign \
+        there: --callsign is upper-cased and character-checked, which would \
+        corrupt a lowercase-hex Web Transceiver token. See IAX-12.
+        """,
+        valueName: "name"))
+    var callingName: String?
+
+    @Option(name: .long, help: ArgumentHelp(
+        """
         Shared secret. HAZARD: a secret passed this way is visible in `ps` to \
         every process on the machine and is written to your shell history. \
         Prefer the HAMVOIP_SECRET environment variable, or omit this flag \
@@ -196,7 +209,8 @@ struct NodeOptions: ParsableArguments {
             username: username,
             callsign: try ConfigFile.requireCallsign(commandLineValue: callsign),
             secret: resolved.secret,
-            callingNumber: callingNumber ?? "")
+            callingNumber: callingNumber ?? "",
+            callingName: callingName ?? "")
         return (destination, resolved.source)
     }
 }

@@ -45,6 +45,16 @@ public struct IAX2Destination: Sendable, Equatable {
     /// ask allstarlink.org whether to admit them. See IAX-12.
     public let callingNumber: String
 
+    /// Overrides what goes in CALLING NAME (§8.6.4). Empty means "send
+    /// ``callsign``", which is the long-standing behaviour and what every
+    /// existing caller gets.
+    ///
+    /// It exists because ``callsign`` is normalised — upper-cased and character
+    /// checked — which is right for a callsign and wrong for anything else. A
+    /// Web Transceiver token is lowercase hex, so routing it through
+    /// ``callsign`` would silently corrupt it. See IAX-12.
+    public let callingName: String
+
     /// The account name the node authenticates us as, sent as USERNAME
     /// (§8.6.6).
     public let username: String
@@ -64,9 +74,11 @@ public struct IAX2Destination: Sendable, Equatable {
         username: String,
         secret: String,
         node: String,
-        callingNumber: String = ""
+        callingNumber: String = "",
+        callingName: String = ""
     ) {
         self.callingNumber = callingNumber
+        self.callingName = callingName
         self.host = host
         self.port = port
         self.callsign = callsign
@@ -90,7 +102,10 @@ public struct IAX2Destination: Sendable, Equatable {
             username: username.isEmpty ? nil : username,
             secret: secret.isEmpty ? nil : secret,
             callingNumber: callingNumber.isEmpty ? nil : callingNumber,
-            callingName: callsign.isEmpty ? nil : callsign,
+            callingName: {
+                let name = callingName.isEmpty ? callsign : callingName
+                return name.isEmpty ? nil : name
+            }(),
             capability: .g711MuLaw,
             format: .g711MuLaw)
     }

@@ -61,6 +61,28 @@ final class IAX2ClientTests: XCTestCase {
         XCTAssertEqual(destination.callRequest.callingName, "N0CALL")
     }
 
+    /// `callsign` is upper-cased and character-checked, which is right for a
+    /// callsign and destroys anything else. The override exists so a caller can
+    /// put a lowercase-hex value in CALLING NAME without it being normalised.
+    func testCallingNameOverrideIsSentVerbatim() {
+        let destination = IAX2Destination(
+            host: "node.example.test",
+            callsign: "N0CALL",
+            username: "allstar-public",
+            secret: "allstar",
+            node: "s",
+            callingNumber: "N0CALL",
+            callingName: "1b59df18107e")
+        XCTAssertEqual(destination.callRequest.callingName, "1b59df18107e")
+        XCTAssertEqual(destination.callRequest.callingNumber, "N0CALL")
+    }
+
+    /// Empty override means "send the callsign", so nothing that existed before
+    /// CALLING NAME became overridable changes behaviour.
+    func testCallingNameFallsBackToTheCallsign() {
+        XCTAssertEqual(IAX2ClientTests.node.callRequest.callingName, "N0CALL")
+    }
+
     // MARK: - Harness
 
     private struct Harness {
