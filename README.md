@@ -23,7 +23,7 @@ which is patented.
 
 ## Status
 
-**v0.5.1.** 963 tests, green on `main` — a few more with the Codec2 framework
+**v0.5.2.** 981 tests, green on `main` — a few more with the Codec2 framework
 present, and one that skips unless it is given a station-list download. This is
 a 0.x release — the API will change. As of v0.5.0 **every mode has both audio
 directions confirmed on the air.**

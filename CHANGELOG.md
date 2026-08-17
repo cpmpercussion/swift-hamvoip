@@ -8,6 +8,36 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-08-17
+
+One task, cut as its own release because an app is waiting on it: Currawong's
+settings screen (APP-12) has "log in to the portal, get a token" written and
+tested behind a seam, and cannot switch it on until a released tag carries the
+fetch. No behaviour changes anywhere else — every existing client, destination
+and CLI command sends exactly what it sent in `v0.5.1`.
+
+### Added
+
+- **Web Transceiver token fetch (IAX-13).** `WebTransceiverTokenSource` in
+  `IAX2Kit`, with `AllStarLinkPortalTokenFetcher` as the one implementation
+  against allstarlink.org's `auth-wt-legacy` endpoint: callsign and portal
+  password in, a `WebTransceiverToken` out. The three observed failures
+  (`login failed`, `Invalid JSON payload`, `Invalid JSON fields`) are separate
+  error cases, because retyping a password fixes exactly one of them. It is a
+  seam rather than a function because the endpoint is named `legacy` and
+  AllStarLink has a replacement project open (OQ-10, caveat 2) — the successor
+  should be a second conformance. `WebTransceiverToken.description` is
+  redacted: the token resolves to the operator's callsign on any WT-enabled
+  node, so it is a credential and must not fall into a log. The endpoint is
+  substitutable so the successor can be pointed at — and for that reason it must
+  be `https://`: the fetcher refuses anything else before sending, since the
+  request carries a portal password.
+- **`hamvoip-cli wt-token`** — the first half of `docs/CLI.md` §11 without
+  `curl` and a hand-built JSON body. Prints only the token, so
+  `TOKEN="$(hamvoip-cli wt-token --callsign VK1CPM)"` composes; takes the
+  password from `$ALLSTARLINK_PORTAL_PASSWORD` or a no-echo prompt, on the
+  same reasoning as `--secret`.
+
 ## [0.5.1] — 2026-08-17
 
 ### Changed
@@ -683,7 +713,8 @@ DMR, System Fusion (YSF), D-STAR, P25 and NXDN. All require AMBE or AMBE+2,
 which is patent-encumbered (NG-1). No MMDVM or USB modem support (NG-2), no MFi
 (NG-3), and no RF layer (NG-4).
 
-[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.3.0...v0.4.0
