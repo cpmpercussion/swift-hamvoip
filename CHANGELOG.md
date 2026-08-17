@@ -44,6 +44,23 @@ major version is 0, the API may change in any release.
 
 ### Changed
 
+- **A rejected call no longer blames the secret, or points at OQ-5.** The hint
+  said a REJECT "usually means the username or the secret is wrong" and
+  suggested running `hamvoip-cli oq5` to test MD5 encodings. Both were
+  misleading, and IAX-12 spent hours being misled by exactly this. A REJECT
+  carrying **no CAUSE** says nothing about the secret, because a node that
+  refuses the NEW outright never asks for one — now confirmed by capture: three
+  datagrams, NEW / REJECT / ACK, no AUTHREQ. The hint now says so, points at
+  `HAMVOIP_TRACE=1` to check for an AUTHREQ, and names the usual cause: a
+  username the node does not know. **Cause 50** gets its own hint, because it
+  is the authority check failing after successful authentication — a different
+  failure wanting a different fix, where changing the secret cannot help.
+- **`connect --help` documents Web Transceiver and `HAMVOIP_TRACE`.** Neither
+  was discoverable from the CLI: an operator with only a portal account had no
+  way to learn the mode existed, and the five call parameters are not
+  guessable. The top-level overview now says `connect` reaches a node three
+  ways rather than implying one.
+
 - **The M17 warnings are narrower, because half of what they warned about has
   happened.** `hamvoip-cli m17`'s banner, its help text and the top-level
   subcommand list said M17 had never been run against a real reflector and its

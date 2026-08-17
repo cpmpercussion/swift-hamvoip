@@ -33,6 +33,20 @@ struct ConnectCommand: AsyncParsableCommand {
               your shell history. Set HAMVOIP_SECRET instead, or supply nothing and
               type it at the prompt, where echo is disabled.
 
+            WEB TRANSCEIVER
+              To reach a node you have no credentials for, use your allstarlink.org
+              portal account instead. Fetch a token from /api/v2/auth-wt-legacy, then
+              call with --username allstar-public, --node s, the token in
+              --calling-name and the destination node number in --calling-number;
+              the secret is the static string `allstar`. None of that is guessable,
+              and all of it is spelled out in docs/CLI.md section 11.
+
+            DIAGNOSTICS
+              HAMVOIP_TRACE=1 writes every received frame, and the reason the call
+              ended, to stderr. Reach for it before theorising: a rejected call is
+              answered by some nodes before being dropped, so "connected" is not by
+              itself evidence of anything.
+
             LICENSING
               Transmitting on amateur frequencies requires a licence, and connecting
               to a node may key a repeater. Nothing is transmitted until you press
@@ -545,21 +559,33 @@ actor ConnectSession {
     }
 
     private func hintFor(_ error: Error) -> String {
-        if case IAX2ClientError.rejected(let cause, _) = error {
+        if case IAX2ClientError.rejected(let cause, let code) = error {
             if cause == nil {
                 // A REJECT with no CAUSE IE says nothing about whether the
                 // secret was ever examined: the peer may have refused the NEW
                 // before challenging, in which case the credentials are
-                // untested rather than wrong. The CLI cannot tell from here —
-                // `IAX2ClientEvent` does not surface the challenge — so point
-                // at the one thing that answers it.
+                // untested rather than wrong. IAX-12 later captured exactly
+                // that — three datagrams, NEW / REJECT / ACK, no AUTHREQ — so
+                // this is now an observed case rather than a supposition.
                 return "The node gave no CAUSE, which leaves it open whether it ever asked for "
                     + "the secret. A node that refuses the NEW outright never checks the "
                     + "credentials, so a rejection here is not evidence that --username or the "
-                    + "secret is wrong; it is as likely to be a node that does not accept calls "
-                    + "from this account. Capture UDP \(destination.port) and look for an "
-                    + "AUTHREQ before the REJECT: if there is none, take it up with the node's "
-                    + "operator rather than changing credentials."
+                    + "secret is wrong. Run again with HAMVOIP_TRACE=1 and look for an AUTHREQ "
+                    + "before the REJECT: if none arrives, the node refused the account rather "
+                    + "than the password, which is a conversation with its operator and not a "
+                    + "credential to change. The usual cause is a username the node does not "
+                    + "know — Web Transceiver's is the literal `allstar-public`, and putting a "
+                    + "callsign there produces precisely this."
+            }
+            if code == 50 {
+                // "No authority found". The node authenticated the call and
+                // then refused to authorise it, which is a different failure
+                // from a bad secret and wants a different fix (IAX-12).
+                return "Cause 50 is the authority check failing rather than a bad secret: the "
+                    + "node accepted the credentials, then asked allstarlink.org whether to "
+                    + "admit you and was told no. For Web Transceiver that means CALLING NAME "
+                    + "is not carrying a token the portal recognises — see docs/CLI.md §11. "
+                    + "Changing the secret will not help."
             }
             return "The node gave its reason above. That usually means the username or the "
                 + "secret is wrong, or that this account is not permitted to call this node."
