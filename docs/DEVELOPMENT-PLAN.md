@@ -990,6 +990,14 @@ Two decisions worth recording:
 - **`WebTransceiverToken.description` is redacted.** The token resolves to the
   operator's callsign on any WT-enabled node, so it is a credential; the string
   is reachable only through `.value`, and a test pins that.
+- **The endpoint must be `https://`, with no opt-out.** Substitutability is the
+  point of the seam, and it is also how a portal password could reach the wire in
+  clear — so `isPermittedEndpoint(_:)` gates the request and
+  `.insecureEndpoint(scheme:)` says nothing was sent. Raised by review on PR #32.
+- **`status: "ERR"` with no `msg` is `.malformedResponse`, not `.rejected("")`.**
+  Every observed failure carried a message, so a missing one means the answer is
+  not the documented shape — and `.rejected("")` would have shown an operator
+  "the portal refused the login:" followed by nothing. Also from review.
 
 The convenience landed as its own subcommand rather than a flag on `iax2`:
 `hamvoip-cli wt-token` prints only the token, which makes §11.1 a

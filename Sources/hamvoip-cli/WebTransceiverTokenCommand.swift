@@ -72,7 +72,8 @@ struct WebTransceiverTokenCommand: AsyncParsableCommand {
         name: .long,
         help: ArgumentHelp(
             "Login endpoint. Only for pointing at the replacement when there is one "
-                + "(OQ-10); the default is the observed `auth-wt-legacy` URL.",
+                + "(OQ-10); the default is the observed `auth-wt-legacy` URL. Must be https:// — "
+                + "this request carries your portal password.",
             valueName: "url"))
     var endpoint: String?
 
@@ -89,6 +90,14 @@ struct WebTransceiverTokenCommand: AsyncParsableCommand {
         if let endpoint {
             guard let parsed = URL(string: endpoint), parsed.scheme != nil else {
                 throw ValidationError("--endpoint is not a URL: \(endpoint)")
+            }
+            // Checked here as well as in the library, which refuses the request
+            // outright: this is a password going to a public web service, and
+            // being told before the prompt beats being told after typing it.
+            guard AllStarLinkPortalTokenFetcher.isPermittedEndpoint(parsed) else {
+                throw ValidationError(
+                    "--endpoint must be https:// — this request carries your portal password, "
+                    + "and \(parsed.scheme ?? "that scheme") would send it in clear")
             }
             url = parsed
         } else {
@@ -151,6 +160,8 @@ struct WebTransceiverTokenCommand: AsyncParsableCommand {
                 + "the way would look like this."
         case .requestFailed:
             return "Check the network, then that allstarlink.org is up."
+        case .insecureEndpoint:
+            return "Give --endpoint an https:// URL. Nothing was sent."
         }
     }
 }

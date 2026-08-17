@@ -82,6 +82,13 @@ public enum WebTransceiverTokenError: Error, Equatable, CustomStringConvertible 
     /// The request never completed, or the server answered with an HTTP error.
     case requestFailed(String)
 
+    /// The endpoint was not HTTPS, so nothing was sent.
+    ///
+    /// Its own case rather than a `requestFailed`: nothing was attempted, and the
+    /// fix is a configuration one. See
+    /// ``AllStarLinkPortalTokenFetcher/isPermittedEndpoint(_:)``.
+    case insecureEndpoint(scheme: String)
+
     public var description: String {
         switch self {
         case .loginFailed:
@@ -102,6 +109,10 @@ public enum WebTransceiverTokenError: Error, Equatable, CustomStringConvertible 
             return "the portal's answer was not the expected JSON: \(detail)"
         case .requestFailed(let detail):
             return "could not reach the portal login endpoint: \(detail)"
+        case .insecureEndpoint(let scheme):
+            return
+                "refusing to send a portal password to a \(scheme):// endpoint — the login "
+                + "endpoint must be https://, and nothing was sent"
         }
     }
 }
@@ -159,7 +170,27 @@ public struct AllStarLinkPortalTokenFetcher: WebTransceiverTokenSource {
         self.session = session
     }
 
+    /// Whether a URL is one a portal password may be sent to.
+    ///
+    /// HTTPS only, and checked rather than assumed because ``url`` is
+    /// substitutable — the point of that is the successor endpoint (OQ-10), and
+    /// a successor typed with the wrong scheme would put an operator's
+    /// allstarlink.org password on the wire in clear. There is no opt-out: this
+    /// request carries a password to a public web service, so there is no
+    /// legitimate `http://` for it, and a flag to allow one would exist only to
+    /// be found by somebody debugging at 2 a.m.
+    ///
+    /// Compared case-insensitively — `URL` does not normalise `HTTPS://`.
+    public static func isPermittedEndpoint(_ url: URL) -> Bool {
+        url.scheme?.caseInsensitiveCompare("https") == .orderedSame
+    }
+
     public func token(username: String, password: String) async throws -> WebTransceiverToken {
+        guard Self.isPermittedEndpoint(url) else {
+            throw WebTransceiverTokenError.insecureEndpoint(
+                scheme: url.scheme ?? "none")
+        }
+
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -252,12 +283,20 @@ public struct AllStarLinkPortalTokenFetcher: WebTransceiverTokenSource {
     /// Compared case-insensitively after trimming: two of the three observed
     /// messages are capitalised and one is not, which is enough to say the
     /// capitalisation is nobody's contract.
+    ///
+    /// An `ERR` with **no message** is not a rejection: every observed failure
+    /// carried one, so a missing `msg` is the response not being the documented
+    /// shape rather than the portal declining to say why. Reporting it as
+    /// `.rejected(message: "")` would put "the portal refused the login:" and
+    /// nothing after it in front of an operator, and would claim we know a
+    /// decision was made when all we know is that we cannot read the answer.
     static func error(forMessage message: String) -> WebTransceiverTokenError {
         let normalised = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch normalised {
         case "login failed": return .loginFailed
         case "invalid json payload": return .invalidJSONPayload
         case "invalid json fields": return .invalidJSONFields
+        case "": return .malformedResponse("status ERR with no message")
         default: return .rejected(message: message)
         }
     }

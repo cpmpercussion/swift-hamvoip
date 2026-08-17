@@ -20,7 +20,10 @@ major version is 0, the API may change in any release.
   AllStarLink has a replacement project open (OQ-10, caveat 2) — the successor
   should be a second conformance. `WebTransceiverToken.description` is
   redacted: the token resolves to the operator's callsign on any WT-enabled
-  node, so it is a credential and must not fall into a log.
+  node, so it is a credential and must not fall into a log. The endpoint is
+  substitutable so the successor can be pointed at — and for that reason it must
+  be `https://`: the fetcher refuses anything else before sending, since the
+  request carries a portal password.
 - **`hamvoip-cli wt-token`** — the first half of `docs/CLI.md` §11 without
   `curl` and a hand-built JSON body. Prints only the token, so
   `TOKEN="$(hamvoip-cli wt-token --callsign VK1CPM)"` composes; takes the
