@@ -1,5 +1,12 @@
 # swift-hamvoip
 
+[![CI](https://github.com/cpmpercussion/swift-hamvoip/actions/workflows/ci.yml/badge.svg)](https://github.com/cpmpercussion/swift-hamvoip/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/cpmpercussion/swift-hamvoip?label=release)](https://github.com/cpmpercussion/swift-hamvoip/releases/latest)
+[![Swift 5.9+](https://img.shields.io/badge/Swift-5.9%2B-F05138?logo=swift&logoColor=white)](#requirements)
+[![Platforms](https://img.shields.io/badge/platforms-iOS%2016%2B%20%C2%B7%20macOS%2013%2B-0071e3)](#requirements)
+[![Proven on air](https://img.shields.io/badge/proven%20on%20air-IAX2%20%C2%B7%20EchoLink%20%C2%B7%20M17-2ea44f)](#status)
+[![Licence: Apache-2.0](https://img.shields.io/github/license/cpmpercussion/swift-hamvoip?color=blue)](LICENSE)
+
 Permissively licensed Swift implementations of unencumbered amateur radio VoIP
 protocols. Apple platforms are the primary target; the protocol code itself is
 portable Swift with the transport behind an adapter.
@@ -16,7 +23,7 @@ which is patented.
 
 ## Status
 
-**v0.5.0.** 963 tests, green on `main` — a few more with the Codec2 framework
+**v0.5.1.** 963 tests, green on `main` — a few more with the Codec2 framework
 present, and one that skips unless it is given a station-list download. This is
 a 0.x release — the API will change. As of v0.5.0 **every mode has both audio
 directions confirmed on the air.**
