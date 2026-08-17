@@ -472,6 +472,79 @@ final class EchoLinkProxyClientTests: XCTestCase {
         let state = await client.sessionState
         XCTAssertEqual(state, .open)
     }
+
+    /// The deadline can fire while `open(peer:)` is still suspended in
+    /// `send(...)` — before `awaitOpenOutcome()` has run — in which case the
+    /// timeout is *stashed* and `finishOpen` has no continuation to resume.
+    /// The flags must come down in the timeout path itself, or a STATUS
+    /// landing in that window still passes `handle(_:)`'s in-flight gate,
+    /// moves `state`, and overwrites the stashed timeout with a success for
+    /// an attempt already declared dead. Found by review on the first
+    /// version of the timeout fix, whose comment claimed `finishOpen`
+    /// cleared the flag — true only on the parked path the other two
+    /// timeout tests exercise.
+    func testDeadlineFiringDuringTheOpenSendLeavesALateStatusInert() async throws {
+        let transport = GatedSendTransport()
+        let manualClock = ManualTestClock()
+        let client = EchoLinkProxyClient(
+            callsign: Self.callsign,
+            password: .publicProxy,
+            transport: transport,
+            clock: manualClock,
+            openTimeout: .seconds(5),
+            nonceTimeout: .seconds(5)
+        )
+
+        let loginTask = Task { try await client.login() }
+        transport.yieldToClient(Data(Self.nonce.utf8))
+        try await loginTask.value
+
+        // Collect what reaches the session layer, so the late STATUS can be
+        // shown to arrive as an ordinary frame rather than vanish.
+        let forwarded = Task { () -> EchoLinkProxyFrame? in
+            for await frame in client.frames { return frame }
+            return nil
+        }
+
+        transport.gateNextSend = true
+        let open = Task { try await client.open(peer: EchoLinkPeerAddress(1, 2, 3, 4)) }
+
+        // Hold until open() is genuinely inside send(), then fire the deadline
+        // while it is still there.
+        await waitWhile { !transport.isBlockedInSend }
+        let armed = await manualClock.waitUntilSleepers(1)
+        XCTAssertTrue(armed, "the open deadline never armed")
+        manualClock.advance(by: .seconds(5))
+
+        // The STATUS that would have answered the OPEN, arriving after the
+        // deadline but before send() has returned. Hand the receive loop the
+        // cooperative thread so it is fully processed while open() is still
+        // suspended — the window under test.
+        transport.yieldToClient(try statusSuccess())
+        for _ in 0 ..< 100 { await Task.yield() }
+
+        transport.releaseSend()
+
+        do {
+            _ = try await open.value
+            XCTFail("open() must surface the timeout, not the superseded STATUS")
+        } catch let error as EchoLinkProxyError {
+            XCTAssertEqual(error, .timedOut(operation: "open"))
+        }
+
+        let state = await client.sessionState
+        XCTAssertEqual(state, .loggedIn, "a STATUS for a dead attempt must not move state")
+
+        // Bounded: under regression the STATUS is consumed as the open's
+        // outcome and never reaches `frames`, so an unconditional await here
+        // would hang the test instead of failing it. The collector has had
+        // the cooperative thread repeatedly by now; cancelling turns a
+        // missing frame into a nil and a failed assertion.
+        for _ in 0 ..< 100 { await Task.yield() }
+        forwarded.cancel()
+        let frame = await forwarded.value
+        XCTAssertEqual(frame?.type, .status, "the stale STATUS is forwarded, not swallowed")
+    }
 }
 
 // MARK: - Reentrancy test doubles
@@ -522,6 +595,56 @@ private final class ReplyDuringSendTransport: StreamTransport, @unchecked Sendab
         // Hand the receive loop the cooperative thread while this send is still
         // in flight, so the reply is fully handled before `open()` resumes.
         for _ in 0 ..< 100 { await Task.yield() }
+    }
+
+    func close() async {
+        continuation.finish()
+    }
+}
+
+/// Holds `send` open — cooperatively, no real blocking — until the test
+/// releases it, so a deadline can be driven to fire *while* `open(peer:)` is
+/// still suspended in its send: the window where the timeout outcome is
+/// stashed rather than resumed, which is the case
+/// `testDeadlineFiringDuringTheOpenSendLeavesALateStatusInert` exists for.
+private final class GatedSendTransport: StreamTransport, @unchecked Sendable {
+    let incoming: AsyncStream<Data>
+    private let continuation: AsyncStream<Data>.Continuation
+    private let lock = NSLock()
+    private var gateFlag = false
+    private var releasedFlag = false
+    private var inSendFlag = false
+
+    /// When true, the next `send` parks until `releaseSend()`.
+    var gateNextSend: Bool {
+        get { lock.withLock { gateFlag } }
+        set { lock.withLock { gateFlag = newValue } }
+    }
+
+    /// Whether a gated `send` is currently parked.
+    var isBlockedInSend: Bool { lock.withLock { inSendFlag } }
+
+    init() {
+        var escaped: AsyncStream<Data>.Continuation!
+        incoming = AsyncStream<Data>(bufferingPolicy: .unbounded) { escaped = $0 }
+        continuation = escaped
+    }
+
+    func yieldToClient(_ bytes: Data) {
+        continuation.yield(bytes)
+    }
+
+    func releaseSend() {
+        lock.withLock { releasedFlag = true }
+    }
+
+    func send(_ bytes: Data) async throws {
+        guard lock.withLock({ gateFlag }) else { return }
+        lock.withLock { inSendFlag = true }
+        defer { lock.withLock { inSendFlag = false } }
+        while !lock.withLock({ releasedFlag }) {
+            await Task.yield()
+        }
     }
 
     func close() async {

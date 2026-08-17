@@ -459,15 +459,24 @@ public actor EchoLinkProxyClient {
         // delivers a STATUS outcome, this restores `state` to `.loggedIn`
         // before `finishOpen` runs, so a retried `open(peer:)` finds a state
         // that permits it rather than being wedged behind
-        // `.invalidTransition(from: .opening, ...)` forever. `openInFlight`
-        // still gates a late STATUS for this attempt: `finishOpen` below
-        // clears it, so that frame arrives with `openInFlight` already
-        // false and is forwarded as an ordinary frame instead of touching
-        // `state` again.
+        // `.invalidTransition(from: .opening, ...)` forever.
         if state == .opening {
             state = .loggedIn
         }
         finishOpen(.failure(error))
+        // `finishNonce`/`finishOpen` clear their in-flight flags only when a
+        // continuation was parked. If this deadline fired while `login()` or
+        // `open(peer:)` was still suspended in its `send(...)` — before the
+        // await-side ran — the failure was stashed with the flag still set,
+        // and a late reply landing in that window would still pass
+        // `handle(_:)`'s in-flight gate: it could move `state` again and
+        // overwrite the stashed timeout with an outcome for an attempt this
+        // deadline has already declared dead. The deadline is terminal for
+        // whichever operation it was armed for (only one can be in flight),
+        // so both flags come down here; the await-side consuming the stash
+        // tolerates an already-cleared flag.
+        nonceInFlight = false
+        openInFlight = false
     }
 
     // MARK: Continuations
