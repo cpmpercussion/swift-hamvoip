@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import XCTest
-import EchoLinkKit
+@testable import EchoLinkKit
 import RadioCore
 import TestSupport
 
@@ -918,6 +918,154 @@ final class EchoLinkClientTests: XCTestCase {
         XCTAssertTrue(control.isEmpty, "directoryOnly sent an SDES to a node")
     }
 
+    // MARK: - Actor reentrancy (plan rule 10)
+
+    /// The bug this pins: a teardown racing the directory-login await must
+    /// not be papered over by `connect` reporting success anyway.
+    ///
+    /// The account login's `OK` is delivered from inside the *tunnelled
+    /// login line's* own write, and the stream is torn down in the same
+    /// breath — reproducing, deterministically, a peer that answers `OK` and
+    /// then immediately drops the connection. `handle(_:)` forks an
+    /// unstructured `Task` to feed the reply to `EchoLinkDirectorySession`
+    /// (see `EchoLinkClient.handle(_:)`'s `.data` case) rather than awaiting
+    /// it inline, so the frame pump's own loop can reach end-of-stream —
+    /// and so `linkFinished()` — before that forked task ever runs. Without
+    /// the post-await `guard phase == .connecting` this raced `connect` into
+    /// setting `.connected` (and emitting it) after `releaseSession` had
+    /// already set `.idle` and emitted `.disconnected`.
+    func testTeardownDuringDirectoryLoginAwaitFailsConnectRatherThanSucceeding() async throws {
+        let okFrame = EchoLinkProxyFrame(
+            type: .data, peer: Self.directoryServer, payload: Data("OK".utf8)
+        ).encoded
+        let transport = TeardownDuringWriteTransport(reply: okFrame)
+        let client = EchoLinkClient(
+            codec: StubCodec(),
+            configuration: .init(
+                callsign: Self.callsign,
+                operatorName: "Test Operator",
+                accountPassword: EchoLinkAccountPassword("not-a-real-password"),
+                directoryServer: Self.directoryServer,
+                transmitTimeout: .seconds(180),
+                frameInterval: .milliseconds(20),
+                nodeAnswerTimeout: .seconds(20),
+                nodeAnswerRetryInterval: .milliseconds(50)
+            ),
+            clock: ContinuousClock(),
+            transportFactory: { _ in transport }
+        )
+
+        let events = Task { () -> [EchoLinkClientEvent] in
+            var seen: [EchoLinkClientEvent] = []
+            for await event in client.events {
+                seen.append(event)
+                if case .disconnected = event { break }
+            }
+            return seen
+        }
+
+        let task = Task {
+            try await client.connect(to: destination(), mode: .directoryOnly)
+        }
+
+        transport.inject(Data(Self.nonce.utf8))
+        // [0] proxy login, [1] OPEN to the directory server.
+        await waitWhile { transport.sentCount < 2 }
+        transport.inject(try statusSuccess())
+        // The next write is the tunnelled account login: arm the race so the
+        // reply and the teardown both land while that write is in flight.
+        transport.triggerOnNextSend = true
+
+        do {
+            try await task.value
+            XCTFail("connect must not report success on a session that was torn down")
+        } catch let error as EchoLinkClientError {
+            XCTAssertEqual(error, .notConnected)
+        }
+
+        let seen = await events.value
+        XCTAssertFalse(
+            seen.contains { if case .connected = $0 { return true }; return false },
+            ".connected must never be emitted once teardown has already run"
+        )
+        XCTAssertTrue(
+            seen.contains { if case .disconnected = $0 { return true }; return false },
+            "the teardown that raced connect must still have reported itself"
+        )
+
+        let connected = await client.isConnected
+        XCTAssertFalse(connected)
+    }
+
+    /// The same reentrancy hazard, on the transmit path this time:
+    /// `startTransmit()` suspends once, arming the watchdog, before it commits
+    /// anything, and an actor is reentrant across an `await`, so a
+    /// `stopTransmit()` can run to completion on this same actor in that gap
+    /// (plan rule 10). A test that only exercises key-then-unkey in that order
+    /// — as `testStopTransmitFlushesRatherThanClippingTheOver` above does —
+    /// would not find a regression here, so this one delivers the
+    /// `stopTransmit()` from inside `startTransmit()`'s own suspension, via
+    /// `reentrancyTestHook` — the same seam `IAX2Client` and `M17Client` use
+    /// for their equivalent hazard.
+    ///
+    /// Before the fix this raced `state` and lost: the interleaved
+    /// `stopTransmit()` read `state` before `startTransmit()` had set it,
+    /// concluded there was nothing to stop, and `startTransmit()` then resumed
+    /// and committed `.transmitting` anyway — with the watchdog it had just
+    /// armed now disarmed by the very `stopTransmit()` that "did nothing". An
+    /// unbounded open mic.
+    func testStopTransmitDuringStartTransmitSuspensionPreventsPhantomKey() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        await harness.client.setReentrancyTestHookForTesting { [client = harness.client] in
+            await client.stopTransmit()
+        }
+
+        do {
+            try await harness.client.startTransmit()
+            XCTFail("startTransmit must not succeed once a stopTransmit ran while it was suspended")
+        } catch {
+            XCTAssertEqual(error as? EchoLinkClientError, .transmitCancelled)
+        }
+
+        if case .transmitting = harness.client.state {
+            XCTFail("state must not read .transmitting: PTT was never actually granted")
+        }
+        XCTAssertEqual(harness.client.state, .receiving)
+
+        let packet = try await harness.client.transmit(pcm: [Int16](repeating: 42, count: 160))
+        XCTAssertNil(packet, "not transmitting, so audio is dropped rather than keyed onto the air")
+    }
+
+    /// The same race, but the ordinary case it must not break: once the
+    /// interleaved `stopTransmit()` has finished superseding a suspended
+    /// `startTransmit()`, a fresh, sequential `startTransmit()` — a normal
+    /// re-key — still succeeds.
+    func testStartTransmitSucceedsAfterBeingSupersededByStopTransmit() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        await harness.client.setReentrancyTestHookForTesting { [client = harness.client] in
+            await client.stopTransmit()
+        }
+        do {
+            try await harness.client.startTransmit()
+            XCTFail("startTransmit must not succeed once a stopTransmit ran while it was suspended")
+        } catch {
+            XCTAssertEqual(error as? EchoLinkClientError, .transmitCancelled)
+        }
+        await harness.client.setReentrancyTestHookForTesting(nil)
+
+        try await harness.client.startTransmit()
+        guard case .transmitting = harness.client.state else {
+            return XCTFail("the re-key after the race did not move the state")
+        }
+
+        await harness.client.stopTransmit()
+        XCTAssertEqual(harness.client.state, .receiving)
+    }
+
     /// And the list can then be fetched over that session.
     func testStationListCanBeFetchedWithoutEverReachingANode() async throws {
         let harness = makeHarness(
@@ -1066,5 +1214,72 @@ func waitWhile(
     while await condition(), ContinuousClock.now < deadline {
         await Task.yield()
         try? await Task.sleep(for: .milliseconds(1))
+    }
+}
+
+// MARK: - Reentrancy test doubles
+
+/// A `StreamTransport` that, on one armed write, delivers a canned reply and
+/// then tears the connection down — both from *inside* that `send` call —
+/// and only afterwards yields the cooperative thread back, so every task that
+/// was going to run as a result of the reply and the teardown gets the chance
+/// to run before the write returns.
+///
+/// The `EchoLinkClient` counterpart of `EchoLinkProxyClientTests`'s
+/// `ReplyDuringSendTransport`: that one reproduces the reentrancy window
+/// around a single actor's own continuation. This one reproduces the same
+/// hazard one layer up, where a reply arriving on the proxy's `frames` stream
+/// is fed to `EchoLinkDirectorySession` from an unstructured `Task` that the
+/// frame pump does not await — so the pump's own loop can reach
+/// end-of-stream, and so `EchoLinkClient.linkFinished()`, before that
+/// forked task ever runs.
+private final class TeardownDuringWriteTransport: StreamTransport, @unchecked Sendable {
+    let incoming: AsyncStream<Data>
+    private let continuation: AsyncStream<Data>.Continuation
+    private let reply: Data
+    private let lock = NSLock()
+    private var sentChunks: [Data] = []
+    private var armed = false
+
+    var sentCount: Int { lock.withLock { sentChunks.count } }
+
+    var triggerOnNextSend: Bool {
+        get { lock.withLock { armed } }
+        set { lock.withLock { armed = newValue } }
+    }
+
+    init(reply: Data) {
+        var escaped: AsyncStream<Data>.Continuation!
+        incoming = AsyncStream<Data>(bufferingPolicy: .unbounded) { escaped = $0 }
+        continuation = escaped
+        self.reply = reply
+    }
+
+    func inject(_ bytes: Data) {
+        continuation.yield(bytes)
+    }
+
+    func send(_ bytes: Data) async throws {
+        lock.withLock { sentChunks.append(bytes) }
+        let shouldTrigger = lock.withLock { () -> Bool in
+            guard armed else { return false }
+            armed = false
+            return true
+        }
+        guard shouldTrigger else { return }
+
+        // The reply, and the peer dropping the connection right after it —
+        // both queued before this write returns.
+        continuation.yield(reply)
+        continuation.finish()
+        // Hand the cooperative thread to every task this should wake:
+        // the proxy's own receive loop reaching end-of-stream, the frame
+        // pump reaching end-of-stream in turn, and the forked task that
+        // feeds the reply to the directory session.
+        for _ in 0 ..< 500 { await Task.yield() }
+    }
+
+    func close() async {
+        continuation.finish()
     }
 }

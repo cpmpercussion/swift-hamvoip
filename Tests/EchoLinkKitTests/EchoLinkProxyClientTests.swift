@@ -14,6 +14,7 @@ final class EchoLinkProxyClientTests: XCTestCase {
     private struct Harness {
         let client: EchoLinkProxyClient
         let transport: MockStreamTransport
+        let clock: ManualTestClock
     }
 
     private func makeHarness(
@@ -21,15 +22,16 @@ final class EchoLinkProxyClientTests: XCTestCase {
         nonceTimeout: Duration = .seconds(5)
     ) -> Harness {
         let transport = MockStreamTransport()
+        let clock = ManualTestClock()
         let client = EchoLinkProxyClient(
             callsign: Self.callsign,
             password: .publicProxy,
             transport: transport,
-            clock: ManualTestClock(),
+            clock: clock,
             openTimeout: openTimeout,
             nonceTimeout: nonceTimeout
         )
-        return Harness(client: client, transport: transport)
+        return Harness(client: client, transport: transport, clock: clock)
     }
 
     private func fixtureLines(_ name: String) throws -> [Data] {
@@ -259,6 +261,80 @@ final class EchoLinkProxyClientTests: XCTestCase {
         } catch let error as EchoLinkProxyError {
             XCTAssertEqual(error, .streamClosed)
         }
+    }
+
+    // MARK: - Open timeout
+
+    /// The bug this pins: a timed-out `OPEN` left `state` stuck at `.opening`
+    /// forever, because `deadlineElapsed` failed the parked continuation but
+    /// never restored `state`. Every later `open(peer:)` then threw
+    /// `.invalidTransition(from: .opening, ...)` — wedged for the life of the
+    /// session, on a link that had every reason to retry.
+    func testOpenTimeoutRestoresStateSoARetryIsPossible() async throws {
+        let harness = makeHarness(openTimeout: .seconds(5))
+        try await login(harness)
+        harness.transport.clearSent()
+
+        let peer = EchoLinkPeerAddress(1, 2, 3, 4)
+        let task = await startOpen(harness, peer: peer)
+
+        // Don't advance until the deadline has actually armed — advancing
+        // early computes the deadline against already-advanced time and the
+        // timer never fires.
+        let armed = await harness.clock.waitUntilSleepers(1)
+        XCTAssertTrue(armed, "the open deadline never armed")
+        harness.clock.advance(by: .seconds(5))
+
+        do {
+            try await task.value
+            XCTFail("open() must time out when no STATUS ever arrives")
+        } catch let error as EchoLinkProxyError {
+            XCTAssertEqual(error, .timedOut(operation: "open"))
+        }
+
+        // Not `.opening`: the login is still good and no channel exists, so
+        // this is the state that legally allows a retry.
+        let state = await harness.client.sessionState
+        XCTAssertEqual(state, .loggedIn)
+
+        // And the retry itself must get past the state check.
+        harness.transport.clearSent()
+        let retry = await startOpen(harness, peer: peer)
+        harness.transport.inject(try statusSuccess())
+        try await retry.value
+
+        let finalState = await harness.client.sessionState
+        XCTAssertEqual(finalState, .open)
+    }
+
+    /// A STATUS that arrives after its OPEN already timed out must be inert:
+    /// `openInFlight` was cleared by the timeout, so `handle(_:)` no longer
+    /// treats this frame as the outcome of that attempt, and `state` — already
+    /// restored to `.loggedIn` — must not be moved again by it.
+    func testStatusArrivingAfterAnOpenTimeoutIsIgnored() async throws {
+        let harness = makeHarness(openTimeout: .seconds(5))
+        try await login(harness)
+
+        let task = await startOpen(harness, peer: EchoLinkPeerAddress(1, 2, 3, 4))
+
+        let armed = await harness.clock.waitUntilSleepers(1)
+        XCTAssertTrue(armed, "the open deadline never armed")
+        harness.clock.advance(by: .seconds(5))
+
+        do {
+            try await task.value
+            XCTFail("open() must time out when no STATUS ever arrives")
+        } catch let error as EchoLinkProxyError {
+            XCTAssertEqual(error, .timedOut(operation: "open"))
+        }
+
+        // The STATUS that should have answered the timed-out OPEN, arriving
+        // late — after this attempt no longer has anything waiting on it.
+        harness.transport.inject(try statusSuccess())
+        try? await Task.sleep(for: .milliseconds(50))
+
+        let state = await harness.client.sessionState
+        XCTAssertEqual(state, .loggedIn, "a stale STATUS must not resurrect or corrupt state")
     }
 
     // MARK: - Frame delivery to the session layer
