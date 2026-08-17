@@ -72,7 +72,7 @@ do not improvise a different design.
 
 ## 2. Current state
 
-**Updated 2026-08-13.** Everything below is checked against the tree, not
+**Updated 2026-08-17.** Everything below is checked against the tree, not
 remembered; if it disagrees with the repository, the repository is right.
 
 - `Package.swift` defines four library products — `RadioCore`, `IAX2Kit`,
@@ -80,8 +80,8 @@ remembered; if it disagrees with the repository, the repository is right.
   `CGSM` target, a test-only `TestSupport` target and five test targets. One
   Swift dependency, `swift-argument-parser`, authorised by CLI-1; `CGSM` is
   vendored C, not a dependency (EL-8, LP-4).
-- `swift build` and `swift test` are green: **962 tests, no failures**
-  (checked 2026-08-17, after the v0.5.0 pre-release review fixes). One of those is skipped unless
+- `swift build` and `swift test` are green: **963 tests, no failures**
+  (checked 2026-08-17, after the v0.5.1 plan and docs catch-up). One of those is skipped unless
   `HAMVOIP_ECHOLINK_STATION_LIST` names a directory-list download — the EL-11
   conformance test, which cannot ship its data. CI runs the SPDX check on
   Ubuntu and build + test on macOS 14.
@@ -111,6 +111,10 @@ remembered; if it disagrees with the repository, the repository is right.
   token-scoped `cancel(ifCurrent:)` to make the fix race-proof against a
   concurrent double key-up). This is the release Currawong's APP-11 pins.
   962 tests green at the tag.
+- **Released as `v0.5.1`, 2026-08-17** — a CLI and docs pass, no library
+  behaviour change: one command per protocol (`iax2` with `connect` kept as an
+  alias, `echolink`, `m17`), the OQ probes moved under `experiment`, and
+  `--version` now reports the package version instead of a stale `0.1.0`.
 - **Released as `v0.4.0`, 2026-08-13** — EL-12, public proxy discovery. Cut as
   its own release because the app needs it: FR-3.3 makes the proxy the default on
   cellular, so every EchoLink session Currawong opens needs a proxy host, and
@@ -156,8 +160,8 @@ Phase 0  Bootstrap        BOOT-1             ✅ complete
 Phase 1  RadioCore        RC-1 … RC-11       RC-11 open (small, unblocked)
 Phase 2  IAX2Kit          IAX-1 … IAX-11     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1              ✅ complete
-Phase 4  SwiftUI app      APP-1 … APP-9      APP-3 open — the only unmet
-                                             safety requirement (SF-4)
+Phase 4  SwiftUI app      APP-1 … APP-11     APP-3, APP-11 open; APP-3 is the
+                                             only unmet safety req. (SF-4)
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
 Phase 6  EchoLink         EL-1 … EL-12       ✅ complete; M3 2026-08-13, and
                                              since run from the app
@@ -1019,6 +1023,7 @@ call, locally notable in VK1. Trademark checked clear in class 9.
   forms, EchoLink in the app, and Codec2 embedded for M17. ✅ **DONE** —
   written up below.
 - **APP-9** — Level meters and microphone gain. ✅ **DONE** — written up below.
+- **APP-11** — Web Transceiver in the app — IAX-12's app half.
 
 ℹ️ **APP-5 … APP-9 were written up after the fact**, on 2026-08-16, from the
 app's commit history. APP-5 and APP-6 were cited by `currawong` commits with no
@@ -1227,15 +1232,13 @@ this sounds" is something an operator can act on; "it worked from the CLI" is a
 fact about the state of the project, and a caution on two modes out of three is
 a caution nobody reads.
 
-⚠️ **Both halves of that have since changed, and the on-screen copy has not.**
-As of 2026-08-16: EchoLink **has** run from the app — `*ECHOTEST*` end to end,
-and a link to VK1RBM heard live off-air on UHF — and M17 **receive** is proven
-through the app against a net on M17-434. What remains unproven is M17
-transmit, which has been sent and never confirmed heard. So the picker's M17
-caution is now too broad: it warns about a mode whose receive path the operator
-can hear working. Narrowing it to the transmit half is app work, and it should
-wait until M17-6 or a second receiver settles which way that sentence should
-read.
+✅ **Resolved since, in two steps.** The caution came down in `currawong`
+`7f7d92c` (2026-08-16, the same evening receive was proven): a warning on a
+mode whose receive path the operator can hear working is a warning they learn
+to dismiss, and the app has exactly one user, who knows the project's state
+better than any label. `isValidatedOnAir` went with it rather than lingering
+as a property nothing reads. Then M17 transmit was confirmed heard on
+2026-08-17 (see §2), so nothing the caution guarded remains unproven.
 
 ### APP-9 — Level meters and microphone gain ✅ DONE
 **Delivered** in `currawong` `e754084` and `4734f13`. Written up 2026-08-16.
@@ -1259,6 +1262,35 @@ Three decisions worth not re-making:
 - **It sits with the meters, not on the connect form.** The gain belongs to the
   phone rather than to any channel, and the form locks its fields while a link
   is up — which is the only time an operator can tell what to set it to.
+
+### APP-11 — Web Transceiver in the app ⏳ OPEN
+**Depends on:** IAX-12 ✅ (library `v0.5.0`), APP-8 ✅. **Where:** `currawong`.
+(There is no APP-10; the number was skipped when this task was opened in the
+2026-08-17 status table.)
+
+The library half is done: `IAX2Destination` gained `callingNumber` and
+`callingName` (IAX-12), and `hamvoip-cli iax2` reaches a WT-enabled node with
+nothing but an AllStarLink portal account — `docs/CLI.md` §11 is the
+walkthrough. The app cannot: its AllStarLink form asks for a node secret,
+which is precisely the thing a WT operator does not have. An operator with
+only a portal account still cannot use Currawong to reach a node.
+
+Scope:
+
+- **Raise the dependency floor to `v0.5.1`.** `from: 0.4.0` already resolves
+  forward, but the WT fields exist only from `v0.5.0`, so the manifest should
+  say what the code requires. The bump also carries the SF-1 reentrancy fix —
+  a safety fix worth taking even if the WT form waits, so refreshing
+  `Package.resolved` should not sit behind this task if it stalls.
+- **A credentials variant of the AllStarLink mode, not a fourth mode.** WT is
+  the same protocol to the same nodes; `RadioMode` stays three-wide.
+  `NodeSettings` grows the WT fields and the connect form changes shape with
+  them, the way APP-8 already has it change per mode.
+- **Credentials:** the WT parameter mapping (shared username/password pair,
+  extension, token carried in CALLING NAME) is in `docs/CLI.md` §11. Decide
+  what belongs in `NodeSettings` versus entered per session; the token is not
+  a node secret and does not belong in the Keychain slot that holds one.
+- The app README and `docs/BRINGUP.md` catch up as part of the task.
 
 ## Phase 5 — BLE PTT (after APP-2)
 
@@ -2113,7 +2145,7 @@ only record of what we implemented against is a third-party archive.
 The spec states **no timer values at all**. The 5 s connect and 30 s keepalive
 deadlines are local policy, documented as such and injectable.
 
-### M17-4 — Stream mode RX/TX (FR-2.2)
+### M17-4 — Stream mode RX/TX (FR-2.2) ✅ DONE
 **Depends on:** M17-3 ✅, M17-1 ✅ (OQ-2 resolved). Needs a `Package.swift`
 change (codec2 C shim target) — one of the few tasks permitted to touch it.
 
@@ -2194,7 +2226,7 @@ Two things M17-4 inherits from that:
   the code running it, and it is why a reflector sending some third length
   would be reported rather than look like silence.
 
-### M17-5 — `M17Client` public API
+### M17-5 — `M17Client` public API ✅ DONE
 **Depends on:** M17-4. Mirrors IAX-8: conforms to `NetworkClient`,
 composes jitter buffer + Codec2 + watchdog + leveller; fixture-driven
 end-to-end test; then a CLI-1 subcommand (`hamvoip-cli m17 …`) for live
@@ -2251,7 +2283,7 @@ would be new information rather than a bug. The parrot route M17-6 proposed is
 no longer needed for *this* question; the CLI banner's "believed working"
 wording should be updated to cite this confirmation.
 
-### M17-6 — A chosen destination, and the parrot route to confirming transmit ⏳ OPEN (re-scoped 2026-08-17)
+### M17-6 — A chosen destination ⏳ OPEN (re-scoped 2026-08-17; the parrot half is moot)
 **Depends on:** M17-5 ✅. **Raised by:** the maintainer, 2026-08-16, after M17
 receive was confirmed on air and transmit was not.
 

@@ -8,6 +8,8 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-08-17
+
 ### Changed
 
 - **The CLI is protocol-first: one command per mode.** `connect` is renamed
@@ -681,7 +683,8 @@ DMR, System Fusion (YSF), D-STAR, P25 and NXDN. All require AMBE or AMBE+2,
 which is patent-encumbered (NG-1). No MMDVM or USB modem support (NG-2), no MFi
 (NG-3), and no RF layer (NG-4).
 
-[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.2.0...v0.3.0
