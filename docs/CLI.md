@@ -1131,3 +1131,86 @@ protocol gap. All three were red herrings — the real cause was the CLI's own
 task group ending on the first completed loop, which under `--no-audio` is
 immediate. Tracing what actually arrived, and why the call ended, is what
 separated them. Reach for it before theorising.
+
+## 11. Web Transceiver — connecting to a node that has never heard of you
+
+Web Transceiver (WT) is the AllStarLink route for an operator with a portal
+account but no node of their own. The node owner enables it per node; you need
+no entry in anyone's `iax.conf`. This is the second half of FR-1.3 (IAX-12).
+
+It is two steps: get a token from the portal, then place an ordinary IAX2 call
+presenting it.
+
+### 11.1 Get a token
+
+```sh
+curl -s -X POST -H 'Content-Type: application/json' \
+    -d "$(jq -n --arg u "$CALLSIGN" --arg p "$PORTAL_PASSWORD" \
+          '{username:$u,password:$p}')" \
+    https://allstarlink.org/api/v2/auth-wt-legacy
+```
+
+```json
+{"status":"OK","auth":1,"token":"1b59df18107e"}
+```
+
+`username` is your callsign — allstarlink.org portal logins are
+callsign/password. On failure `status` is `ERR` and `msg` distinguishes
+`Invalid JSON payload`, `Invalid JSON fields` and `login failed`. The token is
+12 lowercase hex characters and is **stable across calls**, so treat it as a
+credential with a real lifetime, not a nonce.
+
+⚠️ The endpoint is named `legacy`, and AllStarLink's ASL3-Manual issue #229 sits
+under a project called "WebTransceiver Login API Replacement". Expect a
+successor; keep the token fetch behind its own seam.
+
+### 11.2 Place the call
+
+```sh
+hamvoip-cli connect \
+    --host "$(dig +short "$NODE.nodes.allstarlink.org")" --port 4569 \
+    --node s \
+    --username allstar-public \
+    --calling-name "$TOKEN" \
+    --calling-number "$NODE" \
+    --callsign "$CALLSIGN"
+# HAMVOIP_SECRET=allstar
+```
+
+Four of those are not what you would guess, and each was established by
+observation against a live node:
+
+| What | Value | Why |
+|---|---|---|
+| `--node` | `s` | WT never dials the node number. It calls the Asterisk start extension and the node answers, like a phone call in. Dialling the node number gives *No such context/extension*. |
+| `--username` | `allstar-public` | A shared account, not your callsign. A callsign here draws a bare REJECT with no CAUSE and no challenge. |
+| secret | `allstar` | Static, and the same on every ASL3 node — it ships in `iax.conf`. It is not your token and not your portal password. |
+| `--calling-name` | the **token** | The node passes CALLING NAME to allstarlink.org, which resolves it to your callsign. This is the identity proof. |
+| `--calling-number` | the **node number** | Becomes `NODENUM` on the node and selects which node you attach to. |
+
+`--calling-name` exists precisely for this: `--callsign` is upper-cased and
+character-checked, which is right for a callsign and would corrupt a
+lowercase-hex token.
+
+The node answers after roughly ten seconds — it plays "connected to node" and
+speaks the node number before attaching you. That delay is normal and is not a
+stall.
+
+### 11.3 Checking it worked
+
+A WT client appears in the target node's link list **by callsign**, so the
+connection is verifiable from outside without access to the node:
+
+```sh
+curl -s "https://stats.allstarlink.org/api/stats/$NODE" \
+    | jq -r '.stats.data.nodes' | tr ',' '\n' | grep "$CALLSIGN"
+```
+
+```
+TVK1CPM
+```
+
+That is the check to trust. A client-side "CONNECTED" is **not** sufficient: the
+node answers on its failure path too, before hanging up, so an unauthorised call
+still reports as connected for a second or so. If a call drops after about a
+second, the authority check failed; if it holds, you are attached.
