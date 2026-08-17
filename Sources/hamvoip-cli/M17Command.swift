@@ -11,18 +11,16 @@ import RadioCore
 /// IAX2. Everything below the CLI is `M17Client`; this file is a terminal
 /// around it.
 ///
-/// **Receive is confirmed on air; transmit is sent but unconfirmed.** A net on
-/// M17-434 was listened to at length on 2026-08-16 — audio intelligible
-/// throughout, transmitting stations' callsigns displayed — which validates the
-/// decode path, the jitter buffer and the base-40 reading end to end. That
-/// session ran through Currawong rather than this command, on the same
-/// `M17Client` underneath.
-///
-/// Transmit has been sent to M17-432 and other reflectors and accepted, but
-/// **nobody has yet confirmed hearing it**. The encoder, the LSF fields and the
-/// SID are still unvalidated at the far end, which is the one thing this
-/// command's banner still warns about. See M17-6 for the parrot route to
-/// settling it single-handed.
+/// **Both directions are confirmed on air.** A net on M17-434 was listened to
+/// at length on 2026-08-16 — audio intelligible throughout, transmitting
+/// stations' callsigns displayed — which validates the decode path, the jitter
+/// buffer and the base-40 reading end to end. On 2026-08-17 transmit followed:
+/// audio sent to M17-434 module B was heard, readable, through Mseven — an
+/// independent client — which validates the encoder, the LSF fields and the
+/// SID at a decoder this project did not write. Both sessions ran through
+/// Currawong rather than this command, on the same `M17Client` underneath.
+/// Scope: one reflector, one receiving implementation, one operator at both
+/// ends — see the M17-5 entry in `docs/DEVELOPMENT-PLAN.md`.
 struct M17Command: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "m17",
@@ -35,12 +33,10 @@ struct M17Command: AsyncParsableCommand {
             module is a shared channel — everything transmitted is heard by everyone \
             linked to it. Nothing is sent until PTT is pressed.
 
-            RECEIVE IS PROVEN; TRANSMIT IS NOT. A net on M17-434 was listened to \
-            at length on 2026-08-16 — intelligible audio, callsigns displayed — so \
-            the decode path works against real reflectors. Transmit has been sent \
-            and accepted, but no operator has yet confirmed hearing it, so the \
-            encoder and the LSF fields are unproven at the far end. Arrange a \
-            second receiver, or use a parrot, before assuming you are readable.
+            Receive was proven on air 2026-08-16 (a net on M17-434, intelligible \
+            audio, callsigns displayed) and transmit on 2026-08-17 (heard readable \
+            on M17-434 B through an independent client). Validated against one \
+            reflector and one receiving implementation so far.
 
             Requires Codec2.xcframework:
 
@@ -186,10 +182,19 @@ private final class M17Session: @unchecked Sendable {
 
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.runEventLoop() }
-            group.addTask { await self.runReceiveLoop() }
-            group.addTask { await self.runTransmitLoop() }
-            group.addTask { await self.runAudioSignalLoop() }
             group.addTask { await self.runStatusTicker() }
+            // The media loops end the session when they finish — which is right
+            // when audio is live and the devices go away, and wrong under
+            // --no-audio, where their streams are empty and finish at once. Left
+            // in the group unconditionally they ended every signalling-only
+            // session the instant it connected, so `--duration` never applied
+            // and a reflector-side drop could never be observed. See
+            // ConnectCommand, where this was found while working IAX-12.
+            if pipeline != nil {
+                group.addTask { await self.runReceiveLoop() }
+                group.addTask { await self.runTransmitLoop() }
+                group.addTask { await self.runAudioSignalLoop() }
+            }
             if let keyReader {
                 group.addTask { await self.runKeyLoop(keyReader) }
             }
