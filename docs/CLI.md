@@ -1187,7 +1187,9 @@ The fetch lives in `IAX2Kit` behind `WebTransceiverTokenSource`
 (`AllStarLinkPortalTokenFetcher` is the one implementation) so the app can
 reach it too, and so the expected replacement for this `legacy` endpoint —
 ASL3-Manual #229, and OQ-10 caveat 2 — can arrive as a second conformance.
-`--endpoint` points the command at a successor without a rebuild.
+`--endpoint` points the command at a successor without a rebuild — it must be
+`https://`, and both the command and the library refuse anything else before the
+password is sent.
 
 </details>
 

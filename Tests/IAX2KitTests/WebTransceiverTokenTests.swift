@@ -126,6 +126,19 @@ final class WebTransceiverTokenTests: XCTestCase {
         }
     }
 
+    /// An `ERR` with nothing to say is the response not being the documented
+    /// shape, not a decision the portal made. `.rejected(message: "")` would show
+    /// an operator "the portal refused the login:" and then nothing.
+    func testERRWithNoMessageIsMalformedRatherThanARejection() {
+        for json in [#"{"status":"ERR"}"#, #"{"status":"ERR","msg":""}"#, #"{"status":"ERR","msg":"  "}"#] {
+            XCTAssertThrowsError(try Fetcher.parse(body(json))) { error in
+                guard case .malformedResponse = error as? WebTransceiverTokenError else {
+                    return XCTFail("expected .malformedResponse for \(json), got \(error)")
+                }
+            }
+        }
+    }
+
     /// A message we have not seen is still the most useful thing to show
     /// someone, so it is carried rather than flattened into "login failed".
     func testUnseenFailureMessageIsCarriedVerbatim() {
@@ -153,6 +166,7 @@ final class WebTransceiverTokenTests: XCTestCase {
             .loginFailed, .invalidJSONPayload, .invalidJSONFields,
             .rejected(message: "account suspended"),
             .malformedResponse("no status field"), .requestFailed("timed out"),
+            .insecureEndpoint(scheme: "http"),
         ]
         XCTAssertEqual(Set(all.map(\.description)).count, all.count)
         XCTAssertTrue(WebTransceiverTokenError.loginFailed.description.contains("password"))
@@ -182,6 +196,63 @@ final class WebTransceiverTokenTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? WebTransceiverTokenError, .loginFailed)
         }
+    }
+
+    // MARK: Where a password may be sent
+
+    /// The endpoint is substitutable so a successor can be pointed at (OQ-10) —
+    /// which is exactly how a portal password could end up on the wire in clear.
+    /// HTTPS is the only scheme, with no opt-out.
+    func testOnlyHTTPSEndpointsArePermitted() throws {
+        XCTAssertTrue(
+            Fetcher.isPermittedEndpoint(
+                try XCTUnwrap(URL(string: "https://allstarlink.org/api/v3/auth-wt"))))
+        XCTAssertTrue(
+            Fetcher.isPermittedEndpoint(try XCTUnwrap(URL(string: "HTTPS://allstarlink.org/x"))),
+            "URL does not normalise the scheme's case")
+
+        for rejected in [
+            "http://allstarlink.org/api/v2/auth-wt-legacy",
+            "http://localhost:8080/auth",
+            "ftp://allstarlink.org/auth",
+            "file:///tmp/auth",
+        ] {
+            XCTAssertFalse(
+                Fetcher.isPermittedEndpoint(try XCTUnwrap(URL(string: rejected))), rejected)
+        }
+    }
+
+    /// And the fetcher refuses rather than trusting its caller to have checked.
+    /// The assertion that matters is that this happens *before* any request: the
+    /// error says nothing was sent, and it must be true.
+    func testAnInsecureEndpointIsRefusedWithoutSendingAnything() async {
+        // A session that fails the test if it is ever asked to do anything.
+        final class ForbiddenProtocol: URLProtocol {
+            nonisolated(unsafe) static var wasUsed = false
+            override class func canInit(with request: URLRequest) -> Bool {
+                wasUsed = true
+                return false
+            }
+            override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ForbiddenProtocol.self]
+
+        let fetcher = Fetcher(
+            url: URL(string: "http://allstarlink.org/api/v2/auth-wt-legacy")!,
+            session: URLSession(configuration: configuration))
+
+        do {
+            _ = try await fetcher.token(username: "VK1CPM", password: "hunter2")
+            XCTFail("expected .insecureEndpoint")
+        } catch {
+            XCTAssertEqual(
+                error as? WebTransceiverTokenError, .insecureEndpoint(scheme: "http"))
+        }
+        XCTAssertFalse(ForbiddenProtocol.wasUsed, "the password must not reach a URL loader")
+        XCTAssertTrue(
+            WebTransceiverTokenError.insecureEndpoint(scheme: "http").description
+                .contains("nothing was sent"))
     }
 
     /// The endpoint's own name is part of the OQ-10 caveat, so it is pinned:
