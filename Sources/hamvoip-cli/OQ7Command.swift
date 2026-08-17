@@ -8,7 +8,7 @@ import RadioCore
 
 // MARK: - Command
 
-/// `hamvoip-cli oq7` — settle OQ-7 by watching a live reflector, in the same
+/// `hamvoip-cli experiment oq7` — settle OQ-7 by watching a live reflector, in the same
 /// spirit as `oq5`: ask the network a question the document cannot answer,
 /// rather than read somebody else's implementation.
 ///

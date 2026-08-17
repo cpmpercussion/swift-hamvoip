@@ -7,7 +7,7 @@ import RadioCore
 
 // MARK: - Command
 
-/// `hamvoip-cli oq5` — settle OQ-5 against a live node, in one session,
+/// `hamvoip-cli experiment oq5` — settle OQ-5 against a live node, in one session,
 /// without recompiling anything.
 struct OQ5Command: AsyncParsableCommand {
     static let configuration = CommandConfiguration(

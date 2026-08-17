@@ -126,7 +126,7 @@ struct RawTerminal {
     let descriptor: Int32
 
     /// Whether the given descriptor is a terminal at all. A CLI run with its
-    /// input piped (CI, a smoke test, `hamvoip-cli connect < /dev/null`) has
+    /// input piped (CI, a smoke test, `hamvoip-cli iax2 < /dev/null`) has
     /// no keyboard, and must not pretend otherwise.
     static func isTerminal(_ descriptor: Int32 = STDIN_FILENO) -> Bool {
         isatty(descriptor) == 1

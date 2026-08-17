@@ -22,9 +22,16 @@ never on this executable.
 ```sh
 swift build                       # builds the libraries and the executable
 swift run hamvoip-cli --help
-swift run hamvoip-cli connect --help
-swift run hamvoip-cli oq5 --help
+swift run hamvoip-cli iax2 --help
+swift run hamvoip-cli experiment oq5 --help
 ```
+
+Since v0.5.0 the CLI is organised one command per protocol — `iax2`,
+`echolink`, `m17` — with the probes that answer an open question gathered
+under `experiment` rather than sitting at the top level next to the protocols
+they interrogate. `connect` remains as a working alias for `iax2`, so nothing
+that already invokes it — including the session records later in this
+document, which are quoted as they were run — breaks or needs rewriting.
 
 For repeated use, build once and run the binary directly — `swift run`
 re-checks the build graph every time, which adds a second of latency to
@@ -32,7 +39,7 @@ something you will start and stop a lot:
 
 ```sh
 swift build -c release
-.build/release/hamvoip-cli connect --host node.example.org --node 55553 \
+.build/release/hamvoip-cli iax2 --host node.example.org --node 55553 \
     --username vk1xyz --callsign VK1XYZ
 ```
 
@@ -51,10 +58,10 @@ your terminal is allowed. `--no-audio` skips the microphone entirely.
 
 ---
 
-## 2. `connect`
+## 2. `iax2`
 
 ```
-hamvoip-cli connect --host <h> [--port 4569] --node <n> --username <u>
+hamvoip-cli iax2 --host <h> [--port 4569] --node <n> --username <u>
                     --callsign <c> [--secret <s>]
                     [--transmit-timeout 180] [--no-audio]
                     [--dtmf <digits>] [--duration <seconds>]
@@ -220,20 +227,20 @@ In order of preference:
 
 ```sh
 # 1. Interactive prompt. Echo is disabled; nothing is stored anywhere.
-hamvoip-cli connect --host … --node … --username vk1xyz --callsign VK1XYZ
+hamvoip-cli iax2 --host … --node … --username vk1xyz --callsign VK1XYZ
 
 # 2. Environment variable, for repeated use in one shell session.
 read -rs HAMVOIP_SECRET && export HAMVOIP_SECRET
-hamvoip-cli connect --host … --node … --username vk1xyz --callsign VK1XYZ
+hamvoip-cli iax2 --host … --node … --username vk1xyz --callsign VK1XYZ
 
 # 2a. One-shot, from a file or the Keychain. Nothing persists, nothing
 #     reaches argv, and only the path reaches your shell history.
-HAMVOIP_SECRET="$(cat ~/.config/hamvoip/secret)" hamvoip-cli connect …
+HAMVOIP_SECRET="$(cat ~/.config/hamvoip/secret)" hamvoip-cli iax2 …
 HAMVOIP_SECRET="$(security find-generic-password -a hamvoip -s <account> -w)" \
-    hamvoip-cli connect …
+    hamvoip-cli iax2 …
 
 # 3. --secret. Scripting only, and it costs you the hazard above.
-hamvoip-cli connect … --secret "$(cat ~/.config/hamvoip/secret)"
+hamvoip-cli iax2 … --secret "$(cat ~/.config/hamvoip/secret)"
 ```
 
 **If it prompts when you expected it not to, the variable was not in the
@@ -315,7 +322,7 @@ changes.
 
 ```sh
 export HAMVOIP_SECRET=…            # or let it prompt
-hamvoip-cli oq5 --host node.example.org --node 55553 \
+hamvoip-cli experiment oq5 --host node.example.org --node 55553 \
     --username vk1xyz --callsign VK1XYZ
 ```
 
@@ -379,7 +386,7 @@ CONCLUSION: this node accepts MD5 RESULT as lowercase-hex …
 How much work this is depends on which candidate won. There are three cases,
 and only the first is free.
 
-**A text encoding, on the `connect` path — configuration only.**
+**A text encoding, on the `iax2` path — configuration only.**
 `IAX2Call.Configuration.md5ResultEncoding` carries the encoding and
 `IAX2Call` uses it when it answers an AUTHREQ, so nothing needs recompiling
 but your own call site:
@@ -414,7 +421,7 @@ is now a symmetry item rather than a defect.
 takes a `String`, so a digest sent as sixteen raw bytes is not reachable
 through either configuration point — which is exactly why the `oq5` probe
 builds `.unknown(id: 0x10, …)` by hand for that candidate. Should raw bytes
-win, IAX2Kit needs a byte-valued MD5 RESULT path before either `connect` or
+win, IAX2Kit needs a byte-valued MD5 RESULT path before either `iax2` or
 registration can authenticate.
 
 Do **not** change the digest computation in `md5Response` in any of these
@@ -511,9 +518,9 @@ hung up" and knowing why.
 
 1. **The call comes up.** ✅ *Observed 2026-08-09 against ASL3:*
    `CONNECTED  codec G.711 µ-law`, reached with authentication, which confirms
-   OQ-5 for the `connect` path as well as the registration path.
-   `hamvoip-cli connect …` reaches `CONNECTED` and names a codec. Note whether
-   it needed auth; if it did, OQ-5 has just been confirmed for the `connect`
+   OQ-5 for the `iax2` path as well as the registration path.
+   `hamvoip-cli iax2 …` reaches `CONNECTED` and names a codec. Note whether
+   it needed auth; if it did, OQ-5 has just been confirmed for the `iax2`
    path too.
 
 2. **Audio is intelligible inbound.** Listen to somebody else on the node, or
@@ -651,10 +658,10 @@ normal, and is also how you confirm the link from the other side.
 
 ```sh
 # Listen for five minutes on a busy module.
-swift run hamvoip-cli oq7 --reflector <host> --module C --callsign VK1XYZ
+swift run hamvoip-cli experiment oq7 --reflector <host> --module C --callsign VK1XYZ
 
 # Until Ctrl-C, stopping early once 40 frames have arrived, with a report file.
-swift run hamvoip-cli oq7 --reflector <host> --module C --callsign VK1XYZ \
+swift run hamvoip-cli experiment oq7 --reflector <host> --module C --callsign VK1XYZ \
     --duration 0 --min-frames 40 --report ../experiment-data/oq7-result.txt
 ```
 
@@ -772,7 +779,7 @@ otherwise have carried.
 
 ## 9. `echolink` — EchoLink through a proxy (EL-10, Milestone M3)
 
-The live-validation harness for EchoLink, and the counterpart to `connect` for
+The live-validation harness for EchoLink, and the counterpart to `iax2` for
 IAX2 and `m17` for M17. Everything below the CLI is `EchoLinkClient`.
 
 **✅ Milestone M3 passed, 2026-08-13**: a live QSO through `*ECHOTEST*`, audio
@@ -1105,7 +1112,7 @@ Set `HAMVOIP_TRACE=1` and `IAX2Call` writes one line per received full frame to
 **stderr**, plus the reason any call leg terminates:
 
 ```sh
-HAMVOIP_TRACE=1 hamvoip-cli connect --host … --node … --username … --no-audio
+HAMVOIP_TRACE=1 hamvoip-cli iax2 --host … --node … --username … --no-audio
 ```
 
 ```
@@ -1167,7 +1174,7 @@ successor; keep the token fetch behind its own seam.
 ### 11.2 Place the call
 
 ```sh
-hamvoip-cli connect \
+hamvoip-cli iax2 \
     --host "$(dig +short "$NODE.nodes.allstarlink.org")" --port 4569 \
     --node s \
     --username allstar-public \
