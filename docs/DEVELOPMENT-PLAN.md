@@ -170,7 +170,7 @@ Phase 8  Silent mode      SIL-1              🔬 spike first — nothing schedu
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
 | **SIL-1** | Silent operating mode — design spike, on-device STT/TTS | `currawong` | Unscoped by design |
 | **OQ-6** | Codec2 LGPL relinking vs App Store signing | maintainer | Deferred until submission, deliberately |
-| **IAX-12** | Web Transceiver auth — FR-1.3's unbuilt half. OQ-10 resolved 2026-08-17: build it, and the endpoint contract is already observed | here | Small — one HTTPS call and a credential substitution |
+| **APP-11** | Expose Web Transceiver in the app — the library half landed 2026-08-17 (IAX-12), so an operator with only a portal account cannot yet use Currawong to reach a node | `currawong` | Small; the seam already carries it |
 
 **OQ-1b is not on that list on purpose.** It is settled as a *standing
 constraint* rather than an open decision: "EchoLink" is nominative use only,
@@ -587,9 +587,9 @@ forces stopTransmit. **This is Milestone M1.**
 ### IAX-8b — Registration, registered node mode (FR-1.3, first half) ✅ DONE
 
 ⚠️ **This delivers registered node mode only.** FR-1.3 also asks for Web
-Transceiver mode, which does not exist yet but is now scheduled as **IAX-12**
-(OQ-10 resolved 2026-08-17). Read a ✅ on this row as "registration works",
-never as "FR-1.3 is met".
+Transceiver mode, which **IAX-12 delivered on 2026-08-17** (OQ-10 resolved the
+same day). Read a ✅ on this row as "registration works" — FR-1.3 is met by
+this row *and* IAX-12 together, not by this one alone.
 
 **Depends on:** IAX-8 ✅. Written up after the fact: the work merged in
 `9794a8d` while the plan still mentioned it only as "a follow-up subtask"
@@ -616,6 +616,50 @@ OQ-5 resolved *to* lowercase hex, so registered node mode works as
 shipped and this is now a symmetry/hygiene item rather than a defect. Thread
 `md5ResultEncoding` through `IAX2Registrar.Configuration` in the same shape
 when convenient. See `docs/CLI.md`.
+
+### IAX-12 — Web Transceiver, FR-1.3's second half ✅ DONE
+**Depends on:** IAX-8b ✅, OQ-10 ✅ (both resolved 2026-08-17). **Delivered** the
+same day, and proven on the air rather than only in tests.
+
+**What it is.** An operator with an allstarlink.org portal account and no node
+of their own can reach any node whose owner permits it, with no entry in
+anyone's `iax.conf`. That was the half of FR-1.3 nobody had built.
+
+**The call.** Four of these five are not what anyone would guess, which is why
+OQ-10 sat open:
+
+    USERNAME        allstar-public       literal; a callsign draws a bare REJECT
+    secret          allstar              static, ships in every ASL3 iax.conf
+    CALLED NUMBER   s                    WT never dials the node number
+    CALLING NAME    <token>              from POST /api/v2/auth-wt-legacy
+    CALLING NUMBER  <target node>        becomes NODENUM, passed to Rpt()
+
+`IAX2Destination` gained `callingNumber` and `callingName`, both defaulting to
+the previous behaviour so IAX Direct and registered node mode are untouched.
+`--calling-name` is sent verbatim: `--callsign` is upper-cased and
+character-checked, which would corrupt a lowercase-hex token.
+
+**Proven, not asserted.** Confirmed against **61624**, a node we do not operate
+and which has no local knowledge of our callsign: the call held, and our
+callsign appeared in that node's *published* link list as `TVK1CPM`. Every
+earlier result came from our own node, where a passing authority check could
+always have been explained by the node knowing us locally.
+
+**The token is the identity proof.** The client never asserts a callsign — it
+presents a token and the authority server *returns* the callsign. So CallerID
+is not spoofable here, which is the opposite of how it looked halfway through.
+
+**Three bugs in our own code fell out of this**, each of which had been
+producing misleading evidence for hours: `--no-audio` sessions ended the instant
+they connected; every session end was announced as `--duration elapsed`; and
+Asterisk's `command '255'` NOTICE turned out to be our own RFC-correct
+UNSUPPORT. `HAMVOIP_TRACE=1` was added to tell such things apart and is what
+finally did. See `docs/CLI.md` §10 and §11, and the method note in
+`experiment-data/wt-oq10-result.txt` — client-side success was never a usable
+oracle, and three conclusions were drawn and retracted before the node's own
+console was consulted.
+
+**Left for the app:** Currawong does not expose WT yet. APP-11.
 
 ### IAX-9 — Capture-replay conformance test ✅ DONE
 **Depends on:** IAX-8. **Delivered** as
@@ -1138,7 +1182,7 @@ owner hands out the address directly, so the lookup is an offer, not a gate.
 one that might earn its place next to the summary line; it is not a task yet.
 
 **What this did *not* settle: Web Transceiver — OQ-10, resolved 2026-08-17 and
-now scheduled as IAX-12.**
+delivered the same day as IAX-12.**
 
 ### APP-8 — Three modes through one seam ✅ DONE
 **Delivered** across `currawong` `f0c74c9` (AllStarLink or M17), `4bc870c`

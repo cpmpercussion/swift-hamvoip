@@ -83,10 +83,11 @@ no test opens a socket.
 - **Two on-air checks worth re-running before v1**: PTT edge timing, which a
   full-duplex `Echo()` target cannot show, and the `Ctrl-C` / `kill` teardown
   paths.
-- **AllStarLink Web Transceiver** — the half of FR-1.3 that was never built.
-  The sourcing question is settled (OQ-10, 2026-08-17: the authentication
-  endpoint was observed directly rather than read out of another client), and
-  the work is now scheduled as IAX-12.
+- **AllStarLink Web Transceiver** — FR-1.3's missing half, **built and proven
+  on 2026-08-17** (IAX-12, closing OQ-10). An operator with a portal account
+  and no node of their own can reach any node that permits it; confirmed
+  against a node we do not operate. See `docs/CLI.md` §11. What remains is
+  exposing it in Currawong, which is app work, not library work.
 - **Codec2 under LGPL-2.1 for App Store distribution** is an open licensing
   question (OQ-6), deliberately deferred until submission is actually in view.
   It gates shipping M17 in a signed iOS app rather than the code here.
