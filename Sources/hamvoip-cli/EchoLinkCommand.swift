@@ -472,10 +472,19 @@ private final class EchoLinkSession: @unchecked Sendable {
 
         await withTaskGroup(of: Void.self) { group in
             group.addTask { _ = await eventPump.value }
-            group.addTask { await self.runReceiveLoop() }
-            group.addTask { await self.runTransmitLoop() }
-            group.addTask { await self.runAudioSignalLoop() }
             group.addTask { await self.runStatusTicker() }
+            // The media loops end the session when they finish — which is right
+            // when audio is live and the devices go away, and wrong under
+            // --no-audio, where their streams are empty and finish at once. Left
+            // in the group unconditionally they ended every signalling-only
+            // session the instant it connected, so `--duration` never applied
+            // and a node-side drop could never be observed. See ConnectCommand,
+            // where this was found while working IAX-12.
+            if pipeline != nil {
+                group.addTask { await self.runReceiveLoop() }
+                group.addTask { await self.runTransmitLoop() }
+                group.addTask { await self.runAudioSignalLoop() }
+            }
             if let keyReader {
                 group.addTask { await self.runKeyLoop(keyReader) }
             }
