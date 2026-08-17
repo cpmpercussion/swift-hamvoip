@@ -23,33 +23,31 @@ struct HamVoIPCLI: AsyncParsableCommand {
         commandName: "hamvoip-cli",
         abstract: "Drive swift-hamvoip against a real AllStarLink node from a terminal.",
         discussion: """
-            Five subcommands:
+            One command per protocol, plus the measurement probes:
 
-              connect  place a call and work it — spacebar for PTT, DTMF for node control,
-                       level meters for both directions, and the SF-1 transmit watchdog
-                       shown when it fires. Reaches a node three ways: IAX direct, a
-                       registered node, or Web Transceiver with only a portal account.
-              m17      link an M17 reflector module and pass audio (Codec2 3200).
-                       Receive proven on air 2026-08-16; transmit sent but not yet
-                       confirmed heard. Needs Codec2.xcframework; see docs/CLI.md.
-              echolink connect an EchoLink node through a proxy and pass audio
-                       (GSM 06.10). Validated on air 2026-08-13 — Milestone M3 —
-                       and since run from the app as well.
-              oq5      settle OQ-5 — how a real node wants the MD5 RESULT information
-                       element encoded — by asking one, instead of by reading somebody
-                       else's implementation.
-              oq7      re-check OQ-7 — the M17 IP stream frame size, settled at 54 bytes
-                       on 2026-08-11 — by measuring what a live reflector sends.
-                       Receive-only.
+              iax2       place an IAX2 call to an AllStarLink node and work it —
+                         spacebar for PTT, DTMF for node control, level meters both
+                         directions, and the SF-1 transmit watchdog shown when it
+                         fires. Reaches a node three ways: IAX direct, a registered
+                         node, or Web Transceiver with only a portal account.
+                         (`connect` still works as an alias.)
+              echolink   connect an EchoLink node through a proxy and pass audio
+                         (GSM 06.10). Validated on air 2026-08-13 — Milestone M3 —
+                         and since run from the app as well.
+              m17        link an M17 reflector module and pass audio (Codec2 3200).
+                         Both directions proven on air — receive 2026-08-16,
+                         transmit 2026-08-17. Needs Codec2.xcframework; docs/CLI.md.
+              experiment the on-air probes that settled OQ-5 and OQ-7, kept for
+                         re-checking those answers against further peers.
 
             Transmitting on amateur frequencies requires a licence. Connecting to a node
             can key a repeater; nothing is transmitted until you ask for it.
 
             Full documentation, including the M2 sign-off checklist: docs/CLI.md
             """,
-        version: "0.1.0 (CLI-1)",
+        version: "0.5.0",
         subcommands: [
-            ConnectCommand.self, M17Command.self, EchoLinkCommand.self,
-            OQ5Command.self, OQ7Command.self,
+            ConnectCommand.self, EchoLinkCommand.self, M17Command.self,
+            ExperimentCommand.self,
         ])
 }

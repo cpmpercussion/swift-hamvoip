@@ -16,17 +16,18 @@ which is patented.
 
 ## Status
 
-**v0.4.0.** 945 tests, green on `main` — a few more with the Codec2 framework
+**v0.5.0.** 963 tests, green on `main` — a few more with the Codec2 framework
 present, and one that skips unless it is given a station-list download. This is
-a 0.x release — the API will change.
+a 0.x release — the API will change. As of v0.5.0 **every mode has both audio
+directions confirmed on the air.**
 
 | Module | State |
 |---|---|
 | `RadioCore` | Complete. Transport abstractions for datagram and stream, G.711 µ-law, adaptive jitter buffer, transmit watchdog, received-audio leveller, `AVAudioEngine` pipeline with 48 kHz ↔ 8 kHz conversion and a real-time-safe capture path, and the `NetworkClient` seam an app is written against — state, events, received audio and a transmit path, with no protocol type in sight. |
 | `IAX2Kit` | Complete. AllStarLink over IAX2 (RFC 5456): frames and mini-frames, information elements, sequencing and retransmission, MD5 authentication, call state machine, voice, DTMF, registration, and `IAX2Client` composing them. |
-| `M17Kit` | **Code complete; transmit unconfirmed on air.** Reflector control, base-40 callsigns, stream mode both ways, Codec2 3200 (FR-2.4), and `M17Client`. Receive has been confirmed against a live reflector; transmit has not — see below. |
+| `M17Kit` | Complete. Reflector control, base-40 callsigns, stream mode both ways, Codec2 3200 (FR-2.4), and `M17Client`. Both directions confirmed against live reflectors — see below. |
 | `EchoLinkKit` | Complete. Proxy transport, directory login, RTP/RTCP audio, GSM 06.10 over a vendored C target, the station directory, public proxy discovery, and `EchoLinkClient`. Proxied routes only — see below. |
-| `hamvoip-cli` | macOS harness: `connect` (IAX2), `echolink`, `m17`, and the `oq5` / `oq7` experiment subcommands. |
+| `hamvoip-cli` | macOS harness, one command per protocol: `iax2` (alias `connect`), `echolink`, `m17` — plus `experiment`, the on-air probes that settled OQ-5 and OQ-7. |
 
 **What has been proven on the air, and what has not.** This distinction is kept
 carefully, because a green test suite says nothing about a radio:
@@ -35,22 +36,26 @@ carefully, because a green test suite says nothing about a radio:
   2026-08-09: registration, authentication and a full two-way audio session on
   the wire. That is Milestone M2; the result table is in
   [`docs/CLI.md`](docs/CLI.md) §6. A second, different node corroborated the
-  `connect` path the next day.
+  call path the next day, and on 2026-08-17 Web Transceiver reached a
+  third-party node that has no local knowledge of this project's credentials —
+  the strongest interoperability evidence so far, because nothing about that
+  node was ours to configure.
 - **EchoLink — proven both ways.** A two-way QSO through `*ECHOTEST*` via a
   public proxy on 2026-08-13, from `hamvoip-cli echolink`, with clean teardown
   — Milestone M3, sign-off table in [`docs/CLI.md`](docs/CLI.md) §9. The
   station directory was confirmed the same day against a live directory
   server, and EchoLink has since run from the iOS app as well, including a
   link to a UHF repeater heard live off-air.
-- **M17 receive — proven.** A net on M17-434 listened to at length on
-  2026-08-16: intelligible audio throughout, transmitting stations' callsigns
-  displayed. That exercises Codec2 decode, the jitter buffer, stream receive
-  and the base-40 reading, against traffic nobody here generated. An earlier
-  receive run on 2026-08-11 settled the stream frame size (OQ-7).
-- **M17 transmit — sent, not confirmed.** Transmissions to M17-432 and other
-  reflectors have been accepted, but **no operator has yet reported hearing
-  them**. The encoder, the LSF fields and the SID remain unvalidated at the far
-  end. Treat "it transmitted" and "it was readable" as different claims.
+- **M17 — proven both ways.** Receive first: a net on M17-434 listened to at
+  length on 2026-08-16, intelligible audio throughout, transmitting stations'
+  callsigns displayed — Codec2 decode, the jitter buffer, stream receive and
+  the base-40 reading, against traffic nobody here generated. Transmit
+  followed on 2026-08-17: audio sent to M17-434 module B was heard, readable,
+  through an independent client monitoring the same reflector — which
+  validates the encoder, the LSF fields and the SID at a decoder this project
+  did not write. Scope so far: one reflector, one receiving implementation,
+  one operator at both ends. An earlier receive run on 2026-08-11 settled the
+  stream frame size (OQ-7).
 
 Fixtures cut from those sessions are replayed by the conformance tests, so
 registration, call setup, an inbound over, both 16-bit time-stamp boundaries
@@ -61,8 +66,10 @@ no test opens a socket.
 
 ## What is not here yet
 
-- **Confirmation that M17 transmit is readable** — see above. The cheapest
-  route is a parrot rather than a second operator, which is task M17-6.
+- **A configurable M17 destination.** `M17Client` hard-codes `BROADCAST` as
+  DST — sufficient for reflector work, confirmed on air, but a capability the
+  mode has and this library does not expose. The rump of task M17-6, whose
+  other half (confirming transmit) closed on 2026-08-17.
 - **Direct (non-proxied) EchoLink.** `Route.direct` exists in the type so that
   adding it later is not a breaking change, and it throws. No capture of a
   direct session exists, and building the port assignment and socket setup from
@@ -80,14 +87,10 @@ no test opens a socket.
   IAX-11.
 - **Audio-session policy without an engine.** Reaching it currently means
   owning an `AVAudioEngine`, which callers must not build first. RC-11.
-- **Two on-air checks worth re-running before v1**: PTT edge timing, which a
-  full-duplex `Echo()` target cannot show, and the `Ctrl-C` / `kill` teardown
-  paths.
-- **AllStarLink Web Transceiver** — FR-1.3's missing half, **built and proven
-  on 2026-08-17** (IAX-12, closing OQ-10). An operator with a portal account
-  and no node of their own can reach any node that permits it; confirmed
-  against a node we do not operate. See `docs/CLI.md` §11. What remains is
-  exposing it in Currawong, which is app work, not library work.
+- **One on-air check worth re-running before v1**: the `Ctrl-C` / `kill`
+  teardown paths, which take a different code path from `q` and were not
+  re-confirmed at the M2 sign-off. (The other item that used to sit here, PTT
+  edge timing, met its half-duplex target — a parrot node — on 2026-08-17.)
 - **Codec2 under LGPL-2.1 for App Store distribution** is an open licensing
   question (OQ-6), deliberately deferred until submission is actually in view.
   It gates shipping M17 in a signed iOS app rather than the code here.
@@ -102,7 +105,7 @@ Swift 5.9 or later; iOS 16 or later; macOS 13 or later.
 ## Installation
 
 ```swift
-.package(url: "https://github.com/cpmpercussion/swift-hamvoip.git", from: "0.4.0")
+.package(url: "https://github.com/cpmpercussion/swift-hamvoip.git", from: "0.5.0")
 ```
 
 Then depend on the products you need:
@@ -185,16 +188,47 @@ let client = IAX2Client(clock: manualClock, transportFactory: { _ in mock })
 ## The command-line harness
 
 `hamvoip-cli` is a macOS harness for exercising the stack against a real node
-without a GUI — connect, monitor levels, key up, send DTMF. `connect` is the
-IAX2 path, `echolink` the EchoLink one (`--auto-proxy` finds and probes a public
-proxy rather than making you read echolink.org's list, and `--list` dumps the
-station directory without needing a node), `m17` links a reflector, and `oq5` / `oq7`
-are the two on-air experiments that settled the digest encoding and the M17
-frame size. See [`docs/CLI.md`](docs/CLI.md).
+without a GUI — connect, monitor levels, key up, send DTMF. One command per
+protocol: `iax2` places and works an AllStarLink call (formerly `connect`,
+which still works as an alias), `echolink` connects a node through a proxy
+(`--auto-proxy` finds and probes a public proxy rather than making you read
+echolink.org's list, and `--list` dumps the station directory without needing
+a node), and `m17` links a reflector module. The on-air measurement probes
+that settled OQ-5 and OQ-7 live under `experiment` — kept because a settled
+answer is a claim about the peers measured so far, and re-checking against a
+new peer is one command. See [`docs/CLI.md`](docs/CLI.md).
 
 ```sh
+export HAMVOIP_SECRET="$(cat path/to/secret)"   # never --secret: argv is visible in ps
+
+# AllStarLink, with your own credentials on the node (IAX direct / registered)
+swift run hamvoip-cli iax2 --host node.example.org --node 55553 \
+    --username vk1abc --callsign VK1ABC
+
+# AllStarLink Web Transceiver: no node credentials, only an allstarlink.org
+# portal account. The token is the identity; the secret is the static string
+# every ASL3 node ships. docs/CLI.md §11 explains each parameter.
+TOKEN=$(curl -s -X POST https://allstarlink.org/api/v2/auth-wt-legacy \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"VK1ABC","password":"portal-password"}' | jq -r .token)
+swift run hamvoip-cli iax2 --host node.example.org --node s \
+    --username allstar-public --secret allstar \
+    --calling-name "$TOKEN" --calling-number 61624
+
+# EchoLink: browse the directory (no node involved), then connect. The proxy
+# is found and probed for you; the account password is prompted with echo off.
+swift run hamvoip-cli echolink --auto-proxy --callsign VK1ABC --list
+swift run hamvoip-cli echolink --auto-proxy --callsign VK1ABC \
+    --peer 203.0.113.7 --node '*ECHOTEST*'
+
+# M17: link module C of a reflector (needs Codec2.xcframework — see above)
+swift run hamvoip-cli m17 --host ref.example.org --module C --callsign VK1ABC
+
 swift run hamvoip-cli --help
 ```
+
+Spacebar toggles PTT in every session; nothing is transmitted until it is
+pressed. Transmitting on amateur frequencies requires a licence.
 
 ## Safety
 

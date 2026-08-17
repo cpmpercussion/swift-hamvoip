@@ -568,7 +568,7 @@ public actor IAX2Call {
         /// encoding — hex or not, upper or lower case. It cannot be settled
         /// from the specification, and LP-2 forbids reading another
         /// implementation to find out, so it has to be settled against a live
-        /// node. `hamvoip-cli oq5` does exactly that.
+        /// node. `hamvoip-cli experiment oq5` does exactly that.
         ///
         /// It is configurable here so that the answer, once known, is a
         /// one-line change at the call site rather than a library edit — and

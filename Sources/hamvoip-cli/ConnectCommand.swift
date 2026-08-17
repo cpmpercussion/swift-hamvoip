@@ -7,11 +7,15 @@ import RadioCore
 
 // MARK: - Command
 
-/// `hamvoip-cli connect` — one live call to an AllStar node, driven from a
+/// `hamvoip-cli iax2` — one live call to an AllStar node, driven from a
 /// terminal.
 struct ConnectCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "connect",
+        // Renamed from `connect` when the CLI went protocol-first (one command
+        // per mode, like `m17` and `echolink`). The old name stays as an
+        // alias: it appears throughout docs/CLI.md's session records and in
+        // three milestones' worth of muscle memory.
+        commandName: "iax2",
         abstract: "Place an IAX2 call to an AllStarLink node and work it from the terminal.",
         discussion: """
             Connects, plays received audio through the default output device, and \
@@ -51,7 +55,8 @@ struct ConnectCommand: AsyncParsableCommand {
               Transmitting on amateur frequencies requires a licence, and connecting
               to a node may key a repeater. Nothing is transmitted until you press
               the spacebar.
-            """)
+            """,
+        aliases: ["connect"])
 
     @OptionGroup var node: NodeOptions
 

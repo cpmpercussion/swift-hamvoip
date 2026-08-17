@@ -8,6 +8,23 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+### Changed
+
+- **The CLI is protocol-first: one command per mode.** `connect` is renamed
+  `iax2`, alongside `echolink` and `m17` — the top level now names the three
+  protocols rather than mixing one verb, two modes and two experiment probes.
+  `connect` remains a working alias, so scripts and the session records in
+  `docs/CLI.md` stay valid. The probes moved under an `experiment` group
+  (`hamvoip-cli experiment oq5` / `oq7`): both questions they settle are
+  settled, but a settled answer is a claim about the peers measured so far,
+  and `oq7` in particular is the plan's named tool for re-checking the frame
+  size against a second reflector. `--version` now reports the package
+  version instead of a CLI-1-era `0.1.0`.
+- **The README caught up with v0.5.0**: M17 marked proven both ways with its
+  scope caveat, the third-party-node Web Transceiver evidence added to the
+  IAX2 row, the stale pre-v1 checklist and module table refreshed, and the
+  CLI section rewritten for the protocol-first names.
+
 ## [0.5.0] — 2026-08-17
 
 Two things earn this release its number: **Web Transceiver** (IAX-12), which
