@@ -531,6 +531,12 @@ public struct IAX2CallRequest: Sendable, Equatable {
 /// to give up on an unanswered ring imposes that policy itself.
 public actor IAX2Call {
 
+    /// Frame tracing to stderr, enabled with `HAMVOIP_TRACE=1`. A spike aid for
+    /// IAX-12: the node sends something we do not recognise and the session ends
+    /// at that instant, which no client-side message currently explains.
+    nonisolated static let traceEnabled =
+        ProcessInfo.processInfo.environment["HAMVOIP_TRACE"] != nil
+
     /// VERSION IE (`0x0b`) payload: "the value 2" (§8.6.10).
     public static let protocolVersion: UInt16 = 0x0002
 
@@ -1048,6 +1054,12 @@ public actor IAX2Call {
     // MARK: The state machine (§6.2, §6.3, §6.7, §6.9)
 
     private func handle(_ frame: IAX2FullFrame) async throws {
+        if IAX2Call.traceEnabled {
+            let line = "RX type=\(frame.type) subclass=0x"
+                + String(frame.subclass.rawByte, radix: 16)
+                + " payload=\(frame.payload.count)B\n"
+            FileHandle.standardError.write(Data(line.utf8))
+        }
         switch frame.type {
         case .iax:
             guard let message = frame.iaxMessage else {
@@ -1369,6 +1381,9 @@ public actor IAX2Call {
     /// it for good.
     private func terminate(_ reason: IAX2CallTermination) async {
         guard state != .dead else { return }
+        if IAX2Call.traceEnabled {
+            FileHandle.standardError.write(Data("TERMINATE \(reason)\n".utf8))
+        }
         cancelConnectDeadline()
         termination = reason
         transition(to: .dead)

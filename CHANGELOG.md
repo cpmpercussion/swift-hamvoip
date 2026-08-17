@@ -8,6 +8,40 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- **Web Transceiver: the half of FR-1.3 that was never built** (IAX-12, closing
+  OQ-10). An operator with an allstarlink.org portal account but no node of
+  their own can now reach any node whose owner has enabled it, with no entry in
+  anyone's `iax.conf`. `IAX2Destination` gains `callingNumber` (CALLING NUMBER,
+  §8.6.3) and `callingName` (CALLING NAME, §8.6.4), surfaced as
+  `--calling-number` and `--calling-name`; both default to the previous
+  behaviour, so IAX Direct and registered node mode send exactly what they
+  always sent. `--calling-name` is sent verbatim, because `--callsign` is
+  upper-cased and character-checked and would corrupt a lowercase-hex token.
+  The recipe — which extension to dial, which credential to present, and which
+  IE carries what — is documented in `docs/CLI.md` §11, along with how to verify
+  a connection from a node's *published* link list rather than trusting the
+  client. Established by observation against a node we operate and confirmed
+  against one we do not.
+- **`HAMVOIP_TRACE=1`** writes one line per received full frame, and the reason
+  any call leg terminated, to stderr. `docs/CLI.md` §10. It exists because three
+  separate client-side signals were misleading at once while IAX-12 was being
+  worked out, and tracing what actually arrived is what separated them.
+
+### Fixed
+
+- **`--no-audio` sessions ended the instant they connected.** The session's task
+  group ended on the first completed child, and the media loops complete
+  immediately when there are no audio devices — so `--duration` never applied,
+  and a node-side hangup could never be observed. Signalling-only sessions now
+  run for as long as they are asked to.
+- **Every session end was reported as `--duration elapsed`.** The duration task
+  used `try? await Task.sleep(...)`, which swallows the cancellation raised when
+  another task ends the session, and then announced the timer regardless. A
+  remote hangup no longer claims to be a timer expiry. The same bug was present
+  in `connect`, `echolink` and `m17`.
+
 ### Changed
 
 - **The M17 warnings are narrower, because half of what they warned about has

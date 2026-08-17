@@ -481,7 +481,14 @@ private final class EchoLinkSession: @unchecked Sendable {
             }
             if let duration {
                 group.addTask {
-                    try? await Task.sleep(for: duration)
+                    // See ConnectCommand: `try?` would swallow cancellation and
+                    // report a timer that never fired, masking the real reason the
+                    // session ended.
+                    do {
+                        try await Task.sleep(for: duration)
+                    } catch {
+                        return
+                    }
                     await self.note("--duration elapsed")
                     await self.requestQuit()
                 }
