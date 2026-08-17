@@ -214,16 +214,36 @@ actor ConnectSession {
 
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.runEventLoop() }
-            group.addTask { await self.runReceiveLoop() }
-            group.addTask { await self.runTransmitLoop() }
-            group.addTask { await self.runAudioSignalLoop() }
             group.addTask { await self.runStatusTicker() }
+            // The media loops end the session when they finish — which is right
+            // when audio is live and the devices go away, and wrong under
+            // --no-audio, where their streams are empty and finish at once. Left
+            // in the group unconditionally they ended every signalling-only
+            // session the instant it connected, so `--duration` never applied and
+            // a node-side hangup could never be observed. Found while working
+            // IAX-12; see experiment-data/wt-oq10-result.txt.
+            if pipeline != nil {
+                group.addTask { await self.runReceiveLoop() }
+                group.addTask { await self.runTransmitLoop() }
+                group.addTask { await self.runAudioSignalLoop() }
+            }
             if let keyReader {
                 group.addTask { await self.runKeyLoop(keyReader) }
             }
             if let duration {
                 group.addTask {
-                    try? await Task.sleep(for: duration)
+                    // `try?` here would swallow the CancellationError raised when
+                    // another task ends the session first, and we would announce a
+                    // timer that never fired — which is exactly what happened while
+                    // investigating IAX-12: every node-side hangup was reported as
+                    // "--duration elapsed", hiding the real reason for ten straight
+                    // calls. On cancellation, say nothing and let the task that
+                    // actually ended the session do the reporting.
+                    do {
+                        try await Task.sleep(for: duration)
+                    } catch {
+                        return
+                    }
                     await self.note("--duration elapsed")
                     await self.requestQuit()
                 }

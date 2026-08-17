@@ -323,3 +323,54 @@ carrying third-party traffic gets no automatic protection, and the hatch will
 only be applied if whoever files it reads the rule. That is why the rule is
 stated in three places — `experiment-data/README.md`, the workspace `CLAUDE.md`
 and `Tests/FIXTURES.md` — rather than only where it was first needed.
+
+## 2026-08-17 — Web Transceiver: the node's own dialplan was read (IAX-12/OQ-10)
+
+**What was consulted.** The `[allstar-public]` context of `extensions.conf` on
+the maintainer's own ASL3 node, pasted into the working session by the
+maintainer, plus `sudo asterisk -rx "iax2 show users"` and the `asterisk -rvvv`
+console from the same node. The dialplan is ASL3-shipped configuration, so it
+ships with a GPL distribution, and it does not merely show behaviour — it
+states the mechanism.
+
+**Why this is logged rather than waved through.** LP-2 bars consulting
+GPL implementations at source level, and the named list includes Asterisk. A
+shipped dialplan is a boundary case: it is configuration on a machine we own,
+of the same class as `iax.conf`, and it describes the interface a node offers
+to callers rather than the internals of a protocol implementation. The
+judgement taken was that reading one's own node's configuration is
+administration. That judgement is recorded here so a later reader can disagree
+with it knowingly rather than discover it by accident.
+
+**What it actually contributed, and what it did not.** Independently observed
+from the wire first, before the dialplan was seen:
+
+- the USERNAME is the literal `allstar-public` (a callsign there draws a bare
+  REJECT with no CAUSE and no challenge);
+- the account's secret is the static string `allstar` (from `iax2 show users`,
+  which is node configuration of the same class);
+- the CALLED NUMBER is `s`, found by sweeping candidate extensions;
+- the node performs a network authority check, seen as a one-second gap
+  between AUTHREP and REJECT long before any dialplan was read.
+
+What the dialplan contributed was the last mapping, which had been guessed
+wrong twice from the client side:
+
+    Set(RESP=${CURL(https://register.allstarlink.org/cgi-bin/authwebphone.pl?${CALLERID(name)})})
+    Set(NODENUM=${CALLERID(num)})
+
+— the WT token travels in CALLING NAME and the destination node number in
+CALLING NUMBER. Both are testable from the wire alone, and the confirming test
+was run afterwards: token in CALLING NAME and `44309` in CALLING NUMBER brings
+up a call that `Rpt` attaches to the node's bridge, held for 45 seconds.
+
+**Standing constraint, unchanged.** No third-party *client* was consulted at
+any point. `transceive.app`'s public-authentication page, the DVSwitch Mobile
+documentation and every other reverse-engineered write-up were deliberately not
+opened — see the OQ-10 row of `DEVELOPMENT-PLAN.md`, which records why they
+could not clear the OQ-9 candidate-(d) bar in the first place.
+
+**If this judgement is rejected**, the remedy is cheap and does not lose the
+result: the CALLING NAME / CALLING NUMBER split is recoverable from the wire by
+the same extension-sweep method that found `s`, against a node we own. The
+findings would then rest on observation alone.

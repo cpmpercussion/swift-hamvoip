@@ -1098,3 +1098,36 @@ which is what `notices` was built for.
 
 The list is deliberately **not** fetched during a normal `connect`: it is 433 kB
 and nothing on the path to a QSO needs it.
+
+## 10. `HAMVOIP_TRACE` — frame tracing
+
+Set `HAMVOIP_TRACE=1` and `IAX2Call` writes one line per received full frame to
+**stderr**, plus the reason any call leg terminates:
+
+```sh
+HAMVOIP_TRACE=1 hamvoip-cli connect --host … --node … --username … --no-audio
+```
+
+```
+RX type=IAX subclass=0x8 payload=31B      AUTHREQ
+RX type=IAX subclass=0x7 payload=17B      ACCEPT
+RX type=Control subclass=0x3 payload=0B   RINGING
+RX type=IAX subclass=0xb payload=0B       LAGRQ
+RX type=Control subclass=0x4 payload=0B   ANSWER
+TERMINATE remote HANGUP (Normal call clearing, cause code 16)
+```
+
+It is deliberately crude — no decoding, no IEs, stderr only, so it composes with
+`grep` and cannot disturb the TUI on stdout. For anything needing the octets,
+cut a capture and use `scripts/pcap-to-fixture.py --summary`, which decodes
+properly and leaves a provenance record.
+
+**Why it exists.** IAX-12 spent an afternoon chasing a Web Transceiver session
+that ended the instant it connected. Every client-side message was misleading:
+the session reported `--duration elapsed` (a `try?` swallowing the timer task's
+cancellation), the node's `Max retries exceeded` pointed at LAGRQ, and an
+Asterisk `Peer did not understand our iax command '255'` NOTICE looked like a
+protocol gap. All three were red herrings — the real cause was the CLI's own
+task group ending on the first completed loop, which under `--no-audio` is
+immediate. Tracing what actually arrived, and why the call ended, is what
+separated them. Reach for it before theorising.
