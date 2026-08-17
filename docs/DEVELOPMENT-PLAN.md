@@ -158,10 +158,10 @@ has merged and the code it describes exists.
 ```
 Phase 0  Bootstrap        BOOT-1             ✅ complete
 Phase 1  RadioCore        RC-1 … RC-11       RC-11 open (small, unblocked)
-Phase 2  IAX2Kit          IAX-1 … IAX-11     IAX-10, IAX-11 open
+Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11, IAX-13 open
 Phase 3  CLI harness      CLI-1              ✅ complete
-Phase 4  SwiftUI app      APP-1 … APP-11     APP-3, APP-11 open; APP-3 is the
-                                             only unmet safety req. (SF-4)
+Phase 4  SwiftUI app      APP-1 … APP-12     APP-3, APP-11, APP-12 open;
+                                             APP-3 the unmet safety req (SF-4)
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
 Phase 6  EchoLink         EL-1 … EL-12       ✅ complete; M3 2026-08-13, and
                                              since run from the app
@@ -179,9 +179,11 @@ Phase 8  Silent mode      SIL-1              🔬 spike first — nothing schedu
 | **RC-11** | Audio-session policy without an engine (the app's `BU-3`) | here | Small |
 | **IAX-10** | Pace transmitted frames instead of bursting them | here | Small |
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
+| **IAX-13** | Fetch the Web Transceiver token — the observed OQ-10 contract behind a seam, EL-12-style | here | Small |
 | **SIL-1** | Silent operating mode — design spike, on-device STT/TTS | `currawong` | Unscoped by design |
 | **OQ-6** | Codec2 LGPL relinking vs App Store signing | maintainer | Deferred until submission, deliberately |
 | **APP-11** | Expose Web Transceiver in the app — the library half landed 2026-08-17 (IAX-12), so an operator with only a portal account cannot yet use Currawong to reach a node | `currawong` | Small; the seam already carries it |
+| **APP-12** | Settings screen: portal login → WT token, EchoLink account, the PTT accessory pane | `currawong` | Medium; feeds APP-11 |
 
 **OQ-1b is not on that list on purpose.** It is settled as a *standing
 constraint* rather than an open decision: "EchoLink" is nominative use only,
@@ -951,6 +953,30 @@ deletes its duplicate and the comment explaining it — **but that deletion is
 the app's own change, made in its repository after this ships in a release it
 depends on.** This repository does not write to Currawong.
 
+### IAX-13 — Fetch the Web Transceiver token ⏳ OPEN
+**Depends on:** IAX-12 ✅ (OQ-10's observed contract). **Raised by:** the
+maintainer, 2026-08-17 — an app settings screen (APP-12) wants "log in, get
+the token" as one action, and today the fetch exists only as a curl in
+`docs/CLI.md` §11.1.
+
+Mirror the EL-12 shape (`EchoLinkPublicProxySource` / `EchoLinkProxyFinder`):
+a protocol seam in `IAX2Kit` plus one `URLSession` implementation against
+`https://allstarlink.org/api/v2/auth-wt-legacy` — POST, JSON body
+`{"username","password"}`, both key names exact, `username` the callsign.
+Success is `{"status":"OK","auth":1,"token":…}`: a 12-character lowercase-hex
+token, stable across calls — a credential with a lifetime, not a nonce. Map
+the three observed failures (`Invalid JSON payload`, `Invalid JSON fields`,
+`login failed`) to typed errors; "wrong password" and "the endpoint changed"
+are different operator problems and must be distinguishable. Tests run
+against canned responses in the same style EL-12's do — no test touches the
+network.
+
+Why a seam rather than a function: the endpoint is named `legacy`, and
+ASL3-Manual #229 sits under "WebTransceiver Login API Replacement" — the
+successor must be a substitution, not a rewrite (OQ-10, caveat 2). Small
+enough to also give `hamvoip-cli iax2` a portal-login convenience so §11.1
+stops requiring curl; include it if it stays small.
+
 ## Phase 3 — CLI harness
 
 ### CLI-1 — `hamvoip-cli` (macOS) ✅ DONE (build/run/CI; live-node sign-off tracked separately via OQ-5)
@@ -1290,7 +1316,33 @@ Scope:
   extension, token carried in CALLING NAME) is in `docs/CLI.md` §11. Decide
   what belongs in `NodeSettings` versus entered per session; the token is not
   a node secret and does not belong in the Keychain slot that holds one.
+  APP-12 is where the token is obtained and stored; this task consumes it.
 - The app README and `docs/BRINGUP.md` catch up as part of the task.
+
+### APP-12 — Settings: accounts and the PTT accessory ⏳ OPEN
+**Depends on:** IAX-13 (portal login), APP-5 ✅ (the accessory layer exists).
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-08-17.
+
+One app-level settings screen, three panes:
+
+1. **AllStarLink portal login → WT token.** Callsign and portal password in,
+   token out through IAX-13's seam, token into the Keychain — `SecretStore`
+   grows a slot, because the token is a stable credential (OQ-10), not a
+   nonce. The portal password need not persist: default to discarding it
+   after a successful fetch and re-prompting on `login failed`; retaining it
+   for silent re-fetch is a decision to make inside the task. Surface the
+   three typed failures distinctly.
+2. **EchoLink account.** The validated callsign/password pair moves from
+   per-connect entry to a stored account beside the app-wide operator
+   identity (`OperatorIdentity` is the anchor); Keychain for the password.
+   OQ-1b binds the copy: the pane says what the account is for and no more.
+3. **The PTT accessory.** `AccessoryView` (PT-2/3/4, BLE-3) mounts here —
+   connection state, learn mode, the mapping — so accessory setup stops
+   being something found mid-session.
+
+Sequencing against APP-11: APP-11's connect form is best fed by APP-12's
+stored token, so prefer IAX-13 → APP-12 → APP-11 — or land APP-11 first
+accepting a pasted token, and let APP-12 replace the paste.
 
 ## Phase 5 — BLE PTT (after APP-2)
 
