@@ -315,6 +315,85 @@ final class M17ClientTests: XCTestCase {
         await tearDown(harness)
     }
 
+    /// The reentrancy hazard plan rule 10 is about: `startTransmit()` suspends
+    /// once, arming the watchdog, before it commits anything, and an actor is
+    /// reentrant across an `await`, so a `stopTransmit()` can run to
+    /// completion on this same actor in that gap. A test that only exercises
+    /// key-then-unkey in that order — as `testTheWatchdogUnkeysAStuckPTT`
+    /// above does — would not find a regression here, so this one delivers
+    /// the `stopTransmit()` from inside `startTransmit()`'s own suspension,
+    /// via `reentrancyTestHook` — the same seam `IAX2Client` uses for its
+    /// equivalent hazard.
+    ///
+    /// Before the fix this raced `state` and lost: the interleaved
+    /// `stopTransmit()` read `state` before `startTransmit()` had set it,
+    /// concluded there was nothing to stop, and `startTransmit()` then
+    /// resumed and committed `.transmitting` anyway — with the watchdog it
+    /// had just armed now disarmed by the very `stopTransmit()` that "did
+    /// nothing". An unbounded open mic.
+    func testStopTransmitDuringStartTransmitSuspensionPreventsPhantomKey() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        await harness.client.setReentrancyTestHookForTesting { [client = harness.client] in
+            await client.stopTransmit()
+        }
+
+        do {
+            try await harness.client.startTransmit()
+            XCTFail("startTransmit must not succeed once a stopTransmit ran while it was suspended")
+        } catch {
+            XCTAssertEqual(error as? M17ClientError, .transmitCancelled)
+        }
+
+        if case .transmitting = harness.client.state {
+            XCTFail("state must not read .transmitting: PTT was never actually granted")
+        }
+        XCTAssertEqual(harness.client.state, .receiving)
+
+        let packet = try await harness.client.transmit(pcm: frame(0))
+        XCTAssertNil(packet, "not transmitting, so audio is dropped rather than keyed onto the air")
+
+        // Two live sleepers left — playout tick and the link's keepalive —
+        // not three: the watchdog this call armed did not survive the race.
+        let watchdogGone = await harness.clock.waitUntilSleepers(2)
+        XCTAssertTrue(watchdogGone, "the watchdog armed during the race must have been disarmed")
+
+        await tearDown(harness)
+    }
+
+    /// The same race, but the ordinary case it must not break: once the
+    /// interleaved `stopTransmit()` has finished superseding a suspended
+    /// `startTransmit()`, a fresh, sequential `startTransmit()` — a normal
+    /// re-key — still succeeds.
+    func testStartTransmitSucceedsAfterBeingSupersededByStopTransmit() async throws {
+        let harness = makeHarness()
+        try await connect(harness)
+
+        await harness.client.setReentrancyTestHookForTesting { [client = harness.client] in
+            await client.stopTransmit()
+        }
+        do {
+            try await harness.client.startTransmit()
+            XCTFail("startTransmit must not succeed once a stopTransmit ran while it was suspended")
+        } catch {
+            XCTAssertEqual(error as? M17ClientError, .transmitCancelled)
+        }
+        await harness.client.setReentrancyTestHookForTesting(nil)
+
+        try await harness.client.startTransmit()
+        guard case .transmitting = harness.client.state else {
+            return XCTFail("the re-key after the race did not move the state")
+        }
+        let armed = await harness.clock.waitUntilSleepers(3)
+        XCTAssertTrue(armed, "the re-key must arm its own watchdog")
+
+        await harness.client.stopTransmit()
+        XCTAssertEqual(harness.client.state, .receiving)
+
+        await tearDown(harness)
+    }
+
     // MARK: - Receiving
 
     func testAnInboundOverBecomesPlayableAudio() async throws {

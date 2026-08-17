@@ -36,10 +36,19 @@ public actor TransmitWatchdog {
     /// stack, and the previous `onExpiry` is guaranteed not to run.
     /// Otherwise `onExpiry` runs exactly once, `timeout` from now, unless
     /// `cancel()` (or another `start()`) happens first.
+    ///
+    /// - Returns: the generation token this call armed. A caller that itself
+    ///   suspends between calling `start()` and deciding whether to keep the
+    ///   deadline it armed — `IAX2Client.startTransmit()` is the case this
+    ///   exists for — can hand the token back to ``cancel(ifCurrent:)``
+    ///   rather than the unconditional ``cancel()``, so a second, later
+    ///   `start()` that raced it (and is still armed) is not torn down by a
+    ///   stale caller cleaning up after itself.
+    @discardableResult
     public func start(
         timeout: Duration = TransmitWatchdog.defaultTimeout,
         onExpiry: @escaping @Sendable () async -> Void
-    ) {
+    ) -> UInt64 {
         pendingTask?.cancel()
         generation &+= 1
         let thisGeneration = generation
@@ -57,6 +66,7 @@ public actor TransmitWatchdog {
             guard await self.fire(generation: thisGeneration) else { return }
             await onExpiry()
         }
+        return thisGeneration
     }
 
     /// Disarms the watchdog.
@@ -68,6 +78,23 @@ public actor TransmitWatchdog {
         pendingTask?.cancel()
         pendingTask = nil
         generation &+= 1
+    }
+
+    /// Disarms the watchdog, but only if `generation` — a token a caller got
+    /// back from ``start(timeout:onExpiry:)`` — is still the live one.
+    ///
+    /// A no-op, and one that does **not** bump the internal generation
+    /// counter, if a later `start()` has already superseded it: two
+    /// concurrent arms racing a single cleanup must not let the loser's
+    /// cleanup disarm the winner's timer just because it lands on this actor
+    /// second. Unlike ``cancel()``, this is the seam a caller uses when it
+    /// cannot tell, from its own state alone, whether the deadline it is
+    /// about to tear down is still the one it armed.
+    public func cancel(ifCurrent generation: UInt64) {
+        guard generation == self.generation else { return }
+        pendingTask?.cancel()
+        pendingTask = nil
+        self.generation &+= 1
     }
 
     /// Claims the right to fire `onExpiry` for `generation`, provided it
