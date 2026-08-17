@@ -80,8 +80,8 @@ remembered; if it disagrees with the repository, the repository is right.
   `CGSM` target, a test-only `TestSupport` target and five test targets. One
   Swift dependency, `swift-argument-parser`, authorised by CLI-1; `CGSM` is
   vendored C, not a dependency (EL-8, LP-4).
-- `swift build` and `swift test` are green: **911 tests, no failures**
-  (checked 2026-08-13, after RC-10). One of those is skipped unless
+- `swift build` and `swift test` are green: **962 tests, no failures**
+  (checked 2026-08-17, after the v0.5.0 pre-release review fixes). One of those is skipped unless
   `HAMVOIP_ECHOLINK_STATION_LIST` names a directory-list download — the EL-11
   conformance test, which cannot ship its data. CI runs the SPDX check on
   Ubuntu and build + test on macOS 14.
@@ -104,6 +104,13 @@ remembered; if it disagrees with the repository, the repository is right.
 - **Released as `v0.3.0`, 2026-08-13** — the release that carries Phase 6.
   `v0.2.0` predates `EchoLinkKit` entirely, so Currawong's `from: 0.2.0` pin
   resolves forward to it without a manifest change.
+- **Released as `v0.5.0`, 2026-08-17** — Web Transceiver (IAX-12) plus a
+  pre-release review's fixes, the largest being an SF-1 reentrancy race that
+  could key the transmitter with the watchdog disarmed, present in all three
+  clients and now fixed in all three (with `TransmitWatchdog` gaining a
+  token-scoped `cancel(ifCurrent:)` to make the fix race-proof against a
+  concurrent double key-up). This is the release Currawong's APP-11 pins.
+  962 tests green at the tag.
 - **Released as `v0.4.0`, 2026-08-13** — EL-12, public proxy discovery. Cut as
   its own release because the app needs it: FR-3.3 makes the proxy the default on
   cellular, so every EchoLink session Currawong opens needs a proxy host, and
@@ -154,8 +161,8 @@ Phase 4  SwiftUI app      APP-1 … APP-9      APP-3 open — the only unmet
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
 Phase 6  EchoLink         EL-1 … EL-12       ✅ complete; M3 2026-08-13, and
                                              since run from the app
-Phase 7  M17Kit           M17-1 … M17-6      RX proven on air 2026-08-16;
-                                             TX unconfirmed. M17-6 open
+Phase 7  M17Kit           M17-1 … M17-6      RX proven 2026-08-16; TX heard
+                                             2026-08-17. M17-6 re-scoped, open
 Phase 8  Silent mode      SIL-1              🔬 spike first — nothing scheduled
 ```
 
@@ -164,7 +171,7 @@ Phase 8  Silent mode      SIL-1              🔬 spike first — nothing schedu
 | | What | Where | Size |
 |---|---|---|---|
 | **APP-3** | Live Activity — SF-4, the only unmet safety requirement. Floor rises to iOS 16.1 | `currawong` | The largest of the tasks |
-| **M17-6** | A chosen destination, and the parrot route to confirming M17 transmit | here | Small library change; the *answer* needs air |
+| **M17-6** | A chosen destination — DST is still hard-coded `BROADCAST`. The parrot half of this task is no longer needed: transmit was confirmed heard 2026-08-17 (see the M17-5 row) | here | Small library change; no longer gates anything |
 | **RC-11** | Audio-session policy without an engine (the app's `BU-3`) | here | Small |
 | **IAX-10** | Pace transmitted frames instead of bursting them | here | Small |
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
@@ -177,12 +184,19 @@ constraint* rather than an open decision: "EchoLink" is nominative use only,
 never in the app's name, icon, launch screen or App Store metadata. It binds
 every future task and needs no further answer.
 
-⛔ **The one gap no code can close: nobody has confirmed hearing our M17
-transmit.** Everything else that was in this position has since fallen —
-EchoLink ran from the app on 2026-08-16 (`*ECHOTEST*` end to end, and VK1RBM
-heard live off-air on UHF), and M17 receive was proven the same evening against
-a net on M17-434. What is left is one claim: that a station we transmit to
-finds us readable. It needs a second operator, or the parrot M17-6 is about.
+✅ **The last claim gap closed on 2026-08-17: our M17 transmit has been
+confirmed heard.** The maintainer transmitted from Currawong to M17-434 module
+B and monitored the reflector with Mseven, an independent M17 client, on the
+same session — audio readable both ways. That is the "second receiver" the
+M17-5 row asked for: an implementation this project did not write found our
+transmission intelligible. Every mode now has both directions confirmed on air
+— EchoLink from the app on 2026-08-16 (`*ECHOTEST*` end to end, and VK1RBM
+heard live off-air on UHF), M17 receive the same evening against a net on
+M17-434, and re-verified 2026-08-17 alongside AllStarLink audio on a parrot
+node. Scope caveat, in the standing style: one reflector, one receiving
+implementation, one operator at both ends — a stronger claim (another
+*operator's* station and decoder) is still available cheaply and worth taking
+when it offers itself, but nothing is gated on it.
 App-side bring-up state lives in `currawong/docs/BRINGUP.md` (`BU-2`, `BU-4`,
 `BU-5`), which this file does not own and which is behind these findings.
 
@@ -2141,9 +2155,9 @@ filesystem the probe reads.
 was listened to at length through Currawong: intelligible audio throughout and
 transmitting stations' callsigns displayed. The decode path, the jitter buffer,
 stream receive and the base-40 reading all work against traffic this project
-did not generate. **The transmit half is still open**: sent and accepted by
-M17-432 and others, never confirmed heard. See the live-validation block at the
-end of this phase.
+did not generate. **The transmit half followed on 2026-08-17**: confirmed
+heard via an independent client. See the live-validation block in the M17-5
+entry.
 
 ✅ **OQ-7 is settled — 54 bytes, resolved 2026-08-11 against a live reflector**;
 see the open questions table for the evidence. The frame size is no longer an
@@ -2217,27 +2231,38 @@ listened to at length through Currawong (which uses this library by version):
 3. **M17-434 appears to be the more active VK1 net.** Worth observing over more
    sessions before drawing conclusions about reliability.
 
-⛔ **The transmit half is not, and this is the sharpest remaining claim gap.**
-Transmissions to M17-432 and other reflectors have been sent and accepted, and
-**nobody has confirmed hearing one**. "The reflector took it" and "a human
-found it readable" are different claims and only the first is evidenced. Still
-unvalidated at the far end:
+✅ **The transmit half is settled on the air — 2026-08-17.** The maintainer
+transmitted from Currawong (this library by version) to M17-434 module B while
+monitoring the same reflector through Mseven, an independent M17 client, and
+found the audio readable; the reverse direction was re-confirmed in the same
+session. What that validates, item by item, is exactly the list that was open:
 
-- **The encoder.** Codec2 3200 round-trips with its energy intact under test,
-  which is not the same as being intelligible to somebody else's decoder.
-- **The LSF fields and the SID**, reasoned from the specification and never
-  confirmed by a receiver.
-- **The DST we send** — `BROADCAST`, the module being chosen by `CONN` rather
-  than by DST. **M17-6 is the cheap way to settle all three at once**: a parrot
-  destination echoes our own transmission back, so one operator alone can hear
-  what they sound like.
+1. **The encoder.** Codec2 3200 output was intelligible to somebody else's
+   decoder, not only to our own round-trip test.
+2. **The LSF fields and the SID.** A receiver this project did not write
+   accepted and played the stream, so the field offsets and framing we reasoned
+   from the specification are what a real implementation expects.
+3. **The DST we send** — `BROADCAST`, the module chosen by `CONN` — was
+   sufficient for a reflector client to receive us.
 
-Until a second receiver or a parrot says otherwise, M17 transmit stays
-"believed working", and the CLI's banner says so in those words.
+Scope of the claim, in the standing style: one reflector, one receiving
+implementation, one operator at both ends. A different receiver disagreeing
+would be new information rather than a bug. The parrot route M17-6 proposed is
+no longer needed for *this* question; the CLI banner's "believed working"
+wording should be updated to cite this confirmation.
 
-### M17-6 — A chosen destination, and the parrot route to confirming transmit ⏳ OPEN
+### M17-6 — A chosen destination, and the parrot route to confirming transmit ⏳ OPEN (re-scoped 2026-08-17)
 **Depends on:** M17-5 ✅. **Raised by:** the maintainer, 2026-08-16, after M17
 receive was confirmed on air and transmit was not.
+
+ℹ️ **Re-scoped 2026-08-17: the confirmation half of this task is done without
+it.** Transmit was confirmed heard the same day via Mseven against M17-434 B
+(see M17-5), so the parrot is no longer the route to anything this plan needs.
+What survives is the library change below — DST is still hard-coded
+`BROADCAST`, which is a capability the mode has and we do not expose — and the
+parrot experiment remains worth a lazy afternoon for its own sake (readings 1–3
+below are still undistinguished, and `#ECHO` still does not encode). The
+original text stands as the design record:
 
 **The problem this solves.** Confirming our M17 transmit is *readable*
 currently needs a second operator with a receiver and the patience to report
