@@ -984,8 +984,8 @@ stops requiring curl; include it if it stays small.
 `AllStarLinkPortalTokenFetcher` in `IAX2Kit/WebTransceiverToken.swift`, with
 the three observed messages mapped to `.loginFailed`, `.invalidJSONPayload` and
 `.invalidJSONFields`, and anything else carried verbatim as
-`.rejected(message:)`. 15 tests against canned bodies; none makes a request.
-Two decisions worth recording:
+`.rejected(message:)`. 18 tests against canned bodies; none makes a request.
+Four decisions worth recording, the last two raised by review on PR #32:
 
 - **A token of an unfamiliar shape is accepted, not refused.** Only the node
   decides whether a token works, and the endpoint is expected to be replaced —
@@ -997,11 +997,11 @@ Two decisions worth recording:
 - **The endpoint must be `https://`, with no opt-out.** Substitutability is the
   point of the seam, and it is also how a portal password could reach the wire in
   clear — so `isPermittedEndpoint(_:)` gates the request and
-  `.insecureEndpoint(scheme:)` says nothing was sent. Raised by review on PR #32.
+  `.insecureEndpoint(scheme:)` says nothing was sent.
 - **`status: "ERR"` with no `msg` is `.malformedResponse`, not `.rejected("")`.**
   Every observed failure carried a message, so a missing one means the answer is
   not the documented shape — and `.rejected("")` would have shown an operator
-  "the portal refused the login:" followed by nothing. Also from review.
+  "the portal refused the login:" followed by nothing.
 
 The convenience landed as its own subcommand rather than a flag on `iax2`:
 `hamvoip-cli wt-token` prints only the token, which makes §11.1 a
