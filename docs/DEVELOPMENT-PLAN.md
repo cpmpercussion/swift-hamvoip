@@ -158,7 +158,7 @@ has merged and the code it describes exists.
 ```
 Phase 0  Bootstrap        BOOT-1             ✅ complete
 Phase 1  RadioCore        RC-1 … RC-11       RC-11 open (small, unblocked)
-Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11, IAX-13 open
+Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1              ✅ complete
 Phase 4  SwiftUI app      APP-1 … APP-12     APP-3, APP-11, APP-12 open;
                                              APP-3 the unmet safety req (SF-4)
@@ -179,11 +179,10 @@ Phase 8  Silent mode      SIL-1              🔬 spike first — nothing schedu
 | **RC-11** | Audio-session policy without an engine (the app's `BU-3`) | here | Small |
 | **IAX-10** | Pace transmitted frames instead of bursting them | here | Small |
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
-| **IAX-13** | Fetch the Web Transceiver token — the observed OQ-10 contract behind a seam, EL-12-style | here | Small |
 | **SIL-1** | Silent operating mode — design spike, on-device STT/TTS | `currawong` | Unscoped by design |
 | **OQ-6** | Codec2 LGPL relinking vs App Store signing | maintainer | Deferred until submission, deliberately |
 | **APP-11** | Expose Web Transceiver in the app — the library half landed 2026-08-17 (IAX-12), so an operator with only a portal account cannot yet use Currawong to reach a node | `currawong` | Small; the seam already carries it |
-| **APP-12** | Settings screen: portal login → WT token, EchoLink account, the PTT accessory pane | `currawong` | Medium; feeds APP-11 |
+| **APP-12** | Settings screen: portal login → WT token, EchoLink account, the PTT accessory pane | `currawong` | Medium; feeds APP-11. Its portal pane needs a release carrying IAX-13 |
 
 **OQ-1b is not on that list on purpose.** It is settled as a *standing
 constraint* rather than an open decision: "EchoLink" is nominative use only,
@@ -953,7 +952,7 @@ deletes its duplicate and the comment explaining it — **but that deletion is
 the app's own change, made in its repository after this ships in a release it
 depends on.** This repository does not write to Currawong.
 
-### IAX-13 — Fetch the Web Transceiver token ⏳ OPEN
+### IAX-13 — Fetch the Web Transceiver token ✅ DONE
 **Depends on:** IAX-12 ✅ (OQ-10's observed contract). **Raised by:** the
 maintainer, 2026-08-17 — an app settings screen (APP-12) wants "log in, get
 the token" as one action, and today the fetch exists only as a curl in
@@ -976,6 +975,28 @@ ASL3-Manual #229 sits under "WebTransceiver Login API Replacement" — the
 successor must be a substitution, not a rewrite (OQ-10, caveat 2). Small
 enough to also give `hamvoip-cli iax2` a portal-login convenience so §11.1
 stops requiring curl; include it if it stays small.
+
+**Delivered** (2026-08-17): `WebTransceiverTokenSource` and
+`AllStarLinkPortalTokenFetcher` in `IAX2Kit/WebTransceiverToken.swift`, with
+the three observed messages mapped to `.loginFailed`, `.invalidJSONPayload` and
+`.invalidJSONFields`, and anything else carried verbatim as
+`.rejected(message:)`. 15 tests against canned bodies; none makes a request.
+Two decisions worth recording:
+
+- **A token of an unfamiliar shape is accepted, not refused.** Only the node
+  decides whether a token works, and the endpoint is expected to be replaced —
+  so `isWellFormed` is advisory (12 lowercase hex), and the CLI says so on
+  stderr rather than failing.
+- **`WebTransceiverToken.description` is redacted.** The token resolves to the
+  operator's callsign on any WT-enabled node, so it is a credential; the string
+  is reachable only through `.value`, and a test pins that.
+
+The convenience landed as its own subcommand rather than a flag on `iax2`:
+`hamvoip-cli wt-token` prints only the token, which makes §11.1 a
+`TOKEN="$(…)"` and keeps the two steps as separable as the portal makes them.
+`--endpoint` points it at a successor without a rebuild. APP-12 consumes the
+seam; it needs a release carrying this to do so, since Currawong depends by
+version.
 
 ## Phase 3 — CLI harness
 

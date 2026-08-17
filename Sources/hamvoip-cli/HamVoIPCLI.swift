@@ -37,6 +37,9 @@ struct HamVoIPCLI: AsyncParsableCommand {
               m17        link an M17 reflector module and pass audio (Codec2 3200).
                          Both directions proven on air — receive 2026-08-16,
                          transmit 2026-08-17. Needs Codec2.xcframework; docs/CLI.md.
+              wt-token   exchange an allstarlink.org portal login for a Web
+                         Transceiver token, which `iax2` then presents as
+                         --calling-name. The first half of docs/CLI.md section 11.
               experiment the on-air probes that settled OQ-5 and OQ-7, kept for
                          re-checking those answers against further peers.
 
@@ -48,6 +51,6 @@ struct HamVoIPCLI: AsyncParsableCommand {
         version: "0.5.1",
         subcommands: [
             ConnectCommand.self, EchoLinkCommand.self, M17Command.self,
-            ExperimentCommand.self,
+            WebTransceiverTokenCommand.self, ExperimentCommand.self,
         ])
 }
