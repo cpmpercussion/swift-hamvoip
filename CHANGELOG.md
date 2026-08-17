@@ -8,6 +8,16 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-17
+
+Two things earn this release its number: **Web Transceiver** (IAX-12), which
+Currawong needs by version to build APP-11, and **a safety fix** — a
+reentrancy race that could key the transmitter with the SF-1 watchdog
+disarmed, found by a pre-release review and fixed in all three clients. It is
+also the first release in which **every mode has both directions confirmed on
+air**: M17 transmit, the last unproven claim, was heard readable on M17-434 B
+through an independent client on 2026-08-17.
+
 ### Added
 
 - **Web Transceiver: the half of FR-1.3 that was never built** (IAX-12, closing
@@ -29,13 +39,60 @@ major version is 0, the API may change in any release.
   separate client-side signals were misleading at once while IAX-12 was being
   worked out, and tracing what actually arrived is what separated them.
 
+- **`TransmitWatchdog.start` now returns a generation token, and
+  `cancel(ifCurrent:)` disarms only the deadline that token armed.** A caller
+  that suspends between arming the watchdog and deciding whether to keep it —
+  which is what every client's `startTransmit` does — can now clean up after
+  itself without tearing down a deadline a concurrent competitor has since
+  armed. The unconditional `cancel()` is unchanged and still always wins.
+- **`transmitCancelled` on all three client error enums.** Thrown by
+  `startTransmit` when a `stopTransmit` (or a competing `startTransmit`)
+  superseded it mid-arm — see the SF-1 fix below. Throwing rather than
+  returning is deliberate: a silent return is indistinguishable from success
+  to the caller, and SF-1 cannot tolerate a caller who believes they are
+  keyed when they are not (or the reverse).
+
 ### Fixed
 
+- **SF-1 could be bypassed by releasing PTT while key-up was still arming the
+  watchdog.** `startTransmit` suspends arming the watchdog before it commits
+  `.transmitting`, and an actor is reentrant across an `await` — so a
+  `stopTransmit` landing in that gap cancelled the watchdog, concluded from
+  `state` that nothing was transmitting, and returned; `startTransmit` then
+  resumed and keyed up anyway. Audio flowed, the operator believed they were
+  unkeyed, and the watchdog was disarmed — the unbounded open mic SF-1 exists
+  to prevent, produced by the exact reentrancy pattern plan rule 10 warns
+  about, in the one path it matters most. The same shape existed in all three
+  clients and is fixed in all three, with plan-rule-10's dedicated
+  generation-counter mechanism and tests that deliver the competing call from
+  *inside* the suspension (the plan's own prescription — the sequential
+  orderings the existing tests covered can never catch this). A concurrent
+  double key-up (screen PTT and a BLE accessory together) is covered too,
+  via the watchdog's new token cancel: exactly one call commits, the other
+  throws `transmitCancelled`, and the winner's deadline stays armed.
 - **`--no-audio` sessions ended the instant they connected.** The session's task
   group ended on the first completed child, and the media loops complete
   immediately when there are no audio devices — so `--duration` never applied,
   and a node-side hangup could never be observed. Signalling-only sessions now
-  run for as long as they are asked to.
+  run for as long as they are asked to. *Amended before release:* the first
+  fix reached only `connect`; the review for this release found `m17` and
+  `echolink` still had the bug, and they now share `connect`'s gated
+  task-group shape — including degrading to receive-only when audio capture
+  fails, rather than ending the session.
+- **`EchoLinkClient.connect` could report success on a torn-down session.**
+  The frame pump delivers directory data on a forked task, so the pump could
+  reach end-of-stream — releasing the session and emitting `.disconnected` —
+  while the directory login it was mid-way through still returned `OK`.
+  `connect` then emitted `.connected` *after* `.disconnected` and wedged the
+  client until `disconnect()`. It now re-checks the session phase in the same
+  synchronous region that commits it, the pattern `M17Client.connect` already
+  had.
+- **An EchoLink proxy `OPEN` timeout wedged the proxy state machine.** The
+  deadline failed the waiting continuation but left `state == .opening`, so
+  every retry threw `invalidTransition` instead of trying again. The timeout
+  now restores `.loggedIn` — logged in, no channel open, which is what is
+  actually true — and a `STATUS` arriving late for the timed-out attempt is
+  forwarded harmlessly instead of touching state.
 - **Every session end was reported as `--duration elapsed`.** The duration task
   used `try? await Task.sleep(...)`, which swallows the cancellation raised when
   another task ends the session, and then announced the timer regardless. A
@@ -607,7 +664,8 @@ DMR, System Fusion (YSF), D-STAR, P25 and NXDN. All require AMBE or AMBE+2,
 which is patent-encumbered (NG-1). No MMDVM or USB modem support (NG-2), no MFi
 (NG-3), and no RF layer (NG-4).
 
-[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.1.0...v0.2.0
