@@ -167,4 +167,74 @@ final class TransmitWatchdogTests: XCTestCase {
         isRunning = await watchdog.isRunning
         XCTAssertFalse(isRunning, "idle again once expiry has fired")
     }
+
+    // MARK: - Token-based cancel (`cancel(ifCurrent:)`)
+
+    /// The ordinary case: a token cancel disarms the very deadline `start()`
+    /// handed it back, exactly like the unconditional `cancel()`.
+    func testTokenCancelDisarmsTheDeadlineItArmed() async {
+        let clock = ManualTestClock()
+        let watchdog = TransmitWatchdog(clock: clock)
+        let recorder = ExpiryRecorder()
+
+        let armed = await watchdog.start(timeout: .seconds(5)) { await recorder.record() }
+        await watchdog.cancel(ifCurrent: armed)
+
+        let isRunning = await watchdog.isRunning
+        XCTAssertFalse(isRunning, "a token cancel for the live generation must disarm it")
+
+        clock.advance(by: .seconds(1000))
+        for _ in 0..<50 { await Task.yield() }
+        let count = await recorder.count
+        XCTAssertEqual(count, 0, "the cancelled deadline must never fire")
+    }
+
+    /// The race `IAX2Client.startTransmit()` needs this for: a caller holding
+    /// a stale token — because a second `start()` has already re-armed the
+    /// watchdog since — must not be able to tear down that newer deadline.
+    /// `cancel(ifCurrent:)` is a no-op here, and in particular must not bump
+    /// the internal generation counter, or a *third*, still-pending token
+    /// cancel for the current generation would then also wrongly no-op.
+    func testTokenCancelIsANoOpAfterANewerStart() async {
+        let clock = ManualTestClock()
+        let watchdog = TransmitWatchdog(clock: clock)
+        let recorder = ExpiryRecorder()
+
+        let stale = await watchdog.start(timeout: .seconds(5)) { await recorder.record() }
+        let current = await watchdog.start(timeout: .seconds(5)) { await recorder.record() }
+        XCTAssertNotEqual(stale, current, "the second start must mint a fresh generation")
+
+        // The stale token must not touch the watchdog the second start armed.
+        await watchdog.cancel(ifCurrent: stale)
+        var isRunning = await watchdog.isRunning
+        XCTAssertTrue(isRunning, "a stale token cancel must not disarm the current deadline")
+
+        // Nor must it have consumed the current generation: a cancel for the
+        // token the winner actually holds still works afterwards.
+        await watchdog.cancel(ifCurrent: current)
+        isRunning = await watchdog.isRunning
+        XCTAssertFalse(isRunning, "the current token must still be able to disarm its own deadline")
+    }
+
+    /// The unconditional `cancel()` is untouched by any of this: it always
+    /// wins, token or no token, because it is what a caller reaches for when
+    /// it *does* know — from its own state — that whatever is armed needs to
+    /// come down regardless of which generation armed it.
+    func testUnconditionalCancelStillWinsOverAnyGeneration() async {
+        let clock = ManualTestClock()
+        let watchdog = TransmitWatchdog(clock: clock)
+        let recorder = ExpiryRecorder()
+
+        _ = await watchdog.start(timeout: .seconds(5)) { await recorder.record() }
+        _ = await watchdog.start(timeout: .seconds(5)) { await recorder.record() }
+        await watchdog.cancel()
+
+        let isRunning = await watchdog.isRunning
+        XCTAssertFalse(isRunning, "unconditional cancel disarms the live deadline regardless of generation")
+
+        clock.advance(by: .seconds(1000))
+        for _ in 0..<50 { await Task.yield() }
+        let count = await recorder.count
+        XCTAssertEqual(count, 0)
+    }
 }

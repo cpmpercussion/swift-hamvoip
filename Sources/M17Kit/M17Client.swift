@@ -45,12 +45,21 @@ public enum M17ClientError: Error, Equatable, CustomStringConvertible {
     case alreadyConnected
     /// The destination's callsign or module is not encodable.
     case invalidDestination(String)
+    /// ``M17Client/stopTransmit()`` — or another, concurrent
+    /// ``M17Client/startTransmit()`` — ran while this call was suspended
+    /// arming the watchdog (the actor-reentrancy hazard plan rule 10 exists
+    /// for). The watchdog this call had just armed has already been disarmed
+    /// (or was never live to begin with, if a competing `startTransmit()`
+    /// won instead), and no audio went out as a result of this call.
+    case transmitCancelled
 
     public var description: String {
         switch self {
         case .notConnected: return "not linked to a reflector"
         case .alreadyConnected: return "already linked; disconnect first"
         case .invalidDestination(let why): return "invalid destination: \(why)"
+        case .transmitCancelled:
+            return "PTT was released before the watchdog could arm; transmit did not start"
         }
     }
 }
@@ -311,6 +320,29 @@ public actor M17Client: NetworkClient {
     /// than 25 times a second.
     private var lastReportedRejection: M17StreamReceiver.Rejection?
 
+    /// Bumped by every ``stopTransmit()`` (before its own `await`) and by
+    /// every ``startTransmit()`` (before its), so a call re-checking it after
+    /// its own suspension can tell whether it was superseded — by a
+    /// `stopTransmit()`, or by a second, concurrent `startTransmit()` — while
+    /// it was arming the watchdog. Plan rule 10's dedicated in-flight
+    /// mechanism; see `IAX2Client.transmitGeneration` for the sibling.
+    private var transmitGeneration: UInt64 = 0
+
+    /// Test-only reentrancy seam: module-internal, always `nil` in
+    /// production. Awaited right after the watchdog is armed, before
+    /// `startTransmit()` re-checks `transmitGeneration` — the same seam
+    /// `IAX2Client.reentrancyTestHook` is, for the same reason (neither
+    /// `TransmitWatchdog` nor the wider transmit path here is fakeable via a
+    /// protocol the way `DatagramTransport` is for `connect()`'s equivalent
+    /// hazard).
+    private var reentrancyTestHook: (@Sendable () async -> Void)?
+
+    /// Test-only setter for ``reentrancyTestHook`` (module-internal, via
+    /// `@testable import`).
+    internal func setReentrancyTestHookForTesting(_ hook: (@Sendable () async -> Void)?) {
+        reentrancyTestHook = hook
+    }
+
     private nonisolated let stateBox = TransmitStateBox()
     private nonisolated let audioContinuation: AsyncStream<[Int16]>.Continuation
     private nonisolated let eventContinuation: AsyncStream<M17ClientEvent>.Continuation
@@ -467,21 +499,53 @@ public actor M17Client: NetworkClient {
     /// Keys up: arms the watchdog (SF-1) and starts a new over.
     ///
     /// The watchdog is armed *before* ``state`` becomes `.transmitting`, so
-    /// there is no window in which audio goes out with no deadline attached.
-    /// Idempotent while already transmitting, and deliberately does not re-arm
-    /// — a caller that re-keyed per frame would push the deadline out forever.
+    /// there is no window in which `.transmitting` audio goes out with no
+    /// deadline attached. Idempotent while already transmitting, and
+    /// deliberately does not re-arm — a caller that re-keyed per frame would
+    /// push the deadline out forever.
+    ///
+    /// This method suspends arming the watchdog before it commits anything,
+    /// and an actor is reentrant across an `await`, so ``stopTransmit()`` —
+    /// or a second, concurrent `startTransmit()` — can run to completion on
+    /// this same actor in that gap (plan rule 10's hazard). Committing
+    /// `.transmitting` at that point, or leaving the wrong watchdog deadline
+    /// armed or disarmed, would open the unbounded-mic window SF-1 exists to
+    /// close. `transmitGeneration` is captured before the `await` and
+    /// re-checked after it, in the same actor-isolated synchronous stretch
+    /// that commits `state`, so there is no second `await` between the check
+    /// and the commit for a third call to slip into. A loser observed that
+    /// way throws ``M17ClientError/transmitCancelled`` instead of returning
+    /// normally, because a silent return here is indistinguishable from
+    /// success to the caller.
+    ///
+    /// Cleanup uses `watchdog.cancel(ifCurrent:)` rather than the
+    /// unconditional `cancel()`: if a `stopTransmit()` beat us to the actor,
+    /// the watchdog we just armed is still the live one and the token cancel
+    /// disarms it; if instead another `startTransmit()` beat us and re-armed
+    /// the watchdog for itself, our token is stale and the token cancel
+    /// correctly no-ops, leaving the winner's deadline alone.
     public func startTransmit() async throws {
         guard phase == .connected, transmitter != nil else { throw M17ClientError.notConnected }
         if case .transmitting = state { return }
 
+        transmitGeneration &+= 1
+        let generation = transmitGeneration
+
         let timeout = configuration.transmitTimeout
-        await watchdog.start(timeout: timeout) { [weak self] in
+        let armed = await watchdog.start(timeout: timeout) { [weak self] in
             await self?.transmitWatchdogExpired(after: timeout)
         }
+        await reentrancyTestHook?()
 
+        // Re-checked after the await: a teardown, a `stopTransmit()`, or
+        // another `startTransmit()` could have run while we were suspended.
         guard phase == .connected else {
-            await watchdog.cancel()
+            await watchdog.cancel(ifCurrent: armed)
             throw M17ClientError.notConnected
+        }
+        guard generation == transmitGeneration else {
+            await watchdog.cancel(ifCurrent: armed)
+            throw M17ClientError.transmitCancelled
         }
 
         // A fresh stream ID and frame counter per PTT, as the protocol
@@ -498,7 +562,17 @@ public actor M17Client: NetworkClient {
     ///
     /// Sends a final frame if the over produced any audio, so a receiver sees
     /// the end of the stream rather than inferring it from silence.
+    ///
+    /// Bumps ``transmitGeneration`` before its own `await`, unconditionally —
+    /// including when nothing is currently `.transmitting` — so a
+    /// concurrently-suspended ``startTransmit()`` always sees that a stop was
+    /// requested, regardless of which of the two calls the actor happened to
+    /// run first. The unconditional `watchdog.cancel()` below is unaffected
+    /// by any of this and still always wins: this call, unlike
+    /// `startTransmit()`, knows from its own state whether a live deadline
+    /// needs to come down.
     public func stopTransmit() async {
+        transmitGeneration &+= 1
         await watchdog.cancel()
         guard case .transmitting = state else { return }
 

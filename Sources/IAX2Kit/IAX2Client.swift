@@ -143,6 +143,14 @@ public enum IAX2ClientError: Error, Equatable, CustomStringConvertible {
     /// protocol violation, or the reliable channel exhausting its retries.
     case connectFailed(IAX2CallTermination)
 
+    /// ``IAX2Client/stopTransmit()`` ran while this ``IAX2Client/startTransmit()``
+    /// call was suspended arming the watchdog (the actor-reentrancy hazard
+    /// plan rule 10 exists for). The watchdog this call had just armed has
+    /// already been disarmed, and — SF-1 — no audio went out as a result of
+    /// this call: throwing here rather than returning normally is what keeps
+    /// that true for the caller as well as the client.
+    case transmitCancelled
+
     public var description: String {
         switch self {
         case .notConnected:
@@ -166,6 +174,8 @@ public enum IAX2ClientError: Error, Equatable, CustomStringConvertible {
             return "the node did not answer within \(timeout)"
         case .connectFailed(let reason):
             return "the call could not be set up: \(reason)"
+        case .transmitCancelled:
+            return "PTT was released before the watchdog could arm; transmit did not start"
         }
     }
 }
@@ -528,6 +538,36 @@ public actor IAX2Client: NetworkClient {
     private var transmitTimestampBase: UInt32 = 0
     private var transmitFrameIndex: UInt32 = 0
 
+    /// Bumped by every ``stopTransmit()`` (and reads its own value before any
+    /// `await`), so ``startTransmit()`` can tell, after it resumes from
+    /// suspension, whether a stop ran while it was arming the watchdog —
+    /// plan rule 10's dedicated in-flight mechanism, the same shape
+    /// `TransmitWatchdog` itself uses internally. Reading `state` for that
+    /// question instead is exactly the hazard rule 10 forbids, because
+    /// `startTransmit()`'s own completion path is what writes `state`.
+    private var transmitGeneration: UInt64 = 0
+
+    /// Test-only reentrancy seam: module-internal, always `nil` in
+    /// production. Plan rule 10 wants a test that delivers a competing call's
+    /// completion from *inside* the awaited call it races —
+    /// `ReplyDuringSendTransport` is that seam for `connect()`'s equivalent
+    /// hazard, calling back into the actor from inside a faked collaborator's
+    /// `send()`. Neither of `startTransmit()`'s two collaborators here
+    /// (`IAX2Call`, `TransmitWatchdog`) is behind a fakeable protocol, so this
+    /// closure stands in for one: it is awaited at the same point in the
+    /// method where a concurrently-scheduled `stopTransmit()` would actually
+    /// land — right after the watchdog is armed, before the generation
+    /// re-check that decides whether this call may commit `.transmitting`.
+    private var reentrancyTestHook: (@Sendable () async -> Void)?
+
+    /// Test-only setter for ``reentrancyTestHook`` (module-internal, via
+    /// `@testable import`). A plain assignment from outside the actor would
+    /// need its own `await`-worthy isolation anyway, so this just gives the
+    /// test suite one.
+    internal func setReentrancyTestHookForTesting(_ hook: (@Sendable () async -> Void)?) {
+        reentrancyTestHook = hook
+    }
+
     /// The last inbound-media rejection reported, so a stream that cannot be
     /// decoded produces one event rather than fifty a second.
     private var lastReportedRejection: IAX2VoiceReceiver.Rejection?
@@ -763,34 +803,82 @@ public actor IAX2Client: NetworkClient {
     /// Keys up: arms the transmit watchdog and starts a fresh media grid.
     ///
     /// **SF-1.** The watchdog is armed *before* ``state`` becomes
-    /// `.transmitting`, so there is no window in which audio can be sent
-    /// without a deadline attached to it. On expiry it calls
+    /// `.transmitting`, so there is no window in which `.transmitting` audio
+    /// can be sent without a deadline attached to it. On expiry it calls
     /// ``stopTransmit()`` itself and emits
     /// ``IAX2ClientEvent/transmitWatchdogExpired(_:)``. A stuck PTT cannot hold
     /// a repeater open.
+    ///
+    /// This method suspends twice before it commits anything — once on
+    /// `call.timestampMilliseconds`, once arming the watchdog — and an actor
+    /// is reentrant across an `await`, so ``stopTransmit()`` — or a *second*,
+    /// concurrent ``startTransmit()`` (screen PTT and a BLE accessory keying
+    /// together, say) — can run to completion on this same actor in either
+    /// gap (plan rule 10's hazard). Committing `.transmitting` at that point,
+    /// or leaving the wrong watchdog deadline armed or disarmed, would open
+    /// exactly the unbounded-mic window SF-1 exists to close.
+    /// `transmitGeneration` is the dedicated in-flight marker that makes the
+    /// gap detectable: it is captured before either `await`, and re-checked
+    /// after both, in the same actor-isolated synchronous stretch that
+    /// commits `state` — so there is no second `await` between the check and
+    /// the commit for a third call to slip into. A loser observed that way
+    /// throws ``IAX2ClientError/transmitCancelled`` instead of returning
+    /// normally, because a silent return here is indistinguishable from
+    /// success to the caller.
+    ///
+    /// Cleanup uses `watchdog.cancel(ifCurrent:)` rather than the
+    /// unconditional `cancel()`, and that distinction is what makes the
+    /// two-concurrent-callers case safe: if a *third* caller's `stopTransmit()`
+    /// beat us to the actor, the watchdog we just armed is still the live one,
+    /// so the token cancel disarms it, correctly. If instead another
+    /// `startTransmit()` beat us and re-armed the watchdog for itself, our
+    /// token is stale, so the token cancel no-ops and leaves the winner's
+    /// deadline alone — where the old unconditional `cancel()` would have
+    /// disarmed a live watchdog out from under a call that had already won
+    /// and was about to commit `.transmitting`.
     ///
     /// Idempotent while already transmitting — it does **not** re-arm the
     /// watchdog, because a caller that re-keys on every audio frame would
     /// otherwise push the deadline out forever and the watchdog would never
     /// fire at all.
     ///
-    /// - Throws: ``IAX2ClientError/notConnected`` without a live call.
+    /// - Throws: ``IAX2ClientError/notConnected`` without a live call, or one
+    ///   that was torn down while this call was suspended;
+    ///   ``IAX2ClientError/transmitCancelled`` if ``stopTransmit()`` or
+    ///   another `startTransmit()` ran first.
     public func startTransmit() async throws {
         guard phase == .connected, let call else { throw IAX2ClientError.notConnected }
         if case .transmitting = state { return }
 
+        transmitGeneration &+= 1
+        let generation = transmitGeneration
+
         let base = await call.timestampMilliseconds
         let timeout = configuration.transmitTimeout
-        await watchdog.start(timeout: timeout) { [weak self] in
+        let armed = await watchdog.start(timeout: timeout) { [weak self] in
             await self?.transmitWatchdogExpired(after: timeout)
         }
+        await reentrancyTestHook?()
 
         // Re-checked after the awaits, for the same reentrancy reason as
-        // `connect`: a teardown could have run while we were suspended, and
-        // transmitting on a released session would be a lie in the UI.
+        // `connect`: a teardown — or a `stopTransmit()`, or another
+        // `startTransmit()` — could have run while we were suspended above.
         guard phase == .connected else {
-            await watchdog.cancel()
+            await watchdog.cancel(ifCurrent: armed)
             throw IAX2ClientError.notConnected
+        }
+        guard generation == transmitGeneration else {
+            // Superseded, either by a `stopTransmit()` or by a concurrent
+            // `startTransmit()` that also raced us. `cancel(ifCurrent:)`
+            // rather than `cancel()` is load-bearing here: it disarms the
+            // watchdog we just armed only if it is still the live one. If a
+            // `stopTransmit()` beat us to the actor before `watchdog.start()`
+            // ran, ours is still current, and the token cancel tears it down.
+            // If instead another `startTransmit()` beat us and re-armed the
+            // watchdog for itself, our token is already stale, and the token
+            // cancel correctly no-ops rather than disarming its deadline.
+            await watchdog.cancel(ifCurrent: armed)
+            throw IAX2ClientError.transmitCancelled
         }
 
         transmitTimestampBase = base
@@ -803,7 +891,14 @@ public actor IAX2Client: NetworkClient {
     /// safe on a client that is not connected — SF-3 (audio interruption) and
     /// SF-2 (BLE accessory loss) both call this from paths that cannot know the
     /// current state.
+    ///
+    /// Bumps ``transmitGeneration`` before its own `await`, unconditionally —
+    /// including when nothing is currently `.transmitting` — so a
+    /// concurrently-suspended ``startTransmit()`` always sees that a stop was
+    /// requested, regardless of which of the two calls the actor happened to
+    /// run first.
     public func stopTransmit() async {
+        transmitGeneration &+= 1
         await watchdog.cancel()
         guard case .transmitting = state else { return }
         setState(phase == .connected ? .receiving : .idle)
