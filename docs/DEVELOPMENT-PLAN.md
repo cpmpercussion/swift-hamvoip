@@ -164,8 +164,8 @@ Phase 0  Bootstrap        BOOT-1             ✅ complete
 Phase 1  RadioCore        RC-1 … RC-11       RC-11 open (small, unblocked)
 Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1              ✅ complete
-Phase 4  SwiftUI app      APP-1 … APP-12     APP-3, APP-11, APP-12 open;
-                                             APP-3 the unmet safety req (SF-4)
+Phase 4  SwiftUI app      APP-1 … APP-13     APP-3, APP-13 open; APP-3 the
+                                             unmet safety req (SF-4)
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
 Phase 6  EchoLink         EL-1 … EL-12       ✅ complete; M3 2026-08-13, and
                                              since run from the app
@@ -174,7 +174,7 @@ Phase 7  M17Kit           M17-1 … M17-6      RX proven 2026-08-16; TX heard
 Phase 8  Silent mode      SIL-1              🔬 spike first — nothing scheduled
 ```
 
-**Everything still open, in one list**, as of 2026-08-17:
+**Everything still open, in one list**, as of 2026-08-19:
 
 | | What | Where | Size |
 |---|---|---|---|
@@ -185,8 +185,7 @@ Phase 8  Silent mode      SIL-1              🔬 spike first — nothing schedu
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
 | **SIL-1** | Silent operating mode — design spike, on-device STT/TTS | `currawong` | Unscoped by design |
 | **OQ-6** | Codec2 LGPL relinking vs App Store signing | maintainer | Deferred until submission, deliberately |
-| **APP-11** | Expose Web Transceiver in the app — the library half landed 2026-08-17 (IAX-12), so an operator with only a portal account cannot yet use Currawong to reach a node | `currawong` | Small; the seam already carries it |
-| **APP-12** | Settings screen: portal login → WT token, EchoLink account, the PTT accessory pane | `currawong` | Medium; feeds APP-11. Its portal pane needs a release carrying IAX-13 |
+| **APP-13** | The EchoLink proxy stops being a channel field — app-wide private proxy, ephemeral public one. Fixes a real fault: the first connect persists a stranger's public proxy into the channel forever | `currawong` | Medium; no library change |
 
 **OQ-1b is not on that list on purpose.** It is settled as a *standing
 constraint* rather than an open decision: "EchoLink" is nominative use only,
@@ -1082,7 +1081,14 @@ call, locally notable in VK1. Trademark checked clear in class 9.
   forms, EchoLink in the app, and Codec2 embedded for M17. ✅ **DONE** —
   written up below.
 - **APP-9** — Level meters and microphone gain. ✅ **DONE** — written up below.
-- **APP-11** — Web Transceiver in the app — IAX-12's app half.
+- **APP-11** — Web Transceiver in the app — IAX-12's app half. ✅ **DONE** —
+  `currawong` `8be0565`.
+- **APP-12** — Settings: the portal login, the two stored accounts and the PTT
+  accessory pane. ✅ **DONE** — `currawong` `a24f7f6`. The watchdog joined it
+  afterwards (`f46b9d2`), hoisted out of the per-channel settings the way the
+  operator identity was under APP-4.
+- **APP-13** — The EchoLink proxy stops being a channel field. ⏳ **OPEN** —
+  written up below.
 
 ℹ️ **APP-5 … APP-9 were written up after the fact**, on 2026-08-16, from the
 app's commit history. APP-5 and APP-6 were cited by `currawong` commits with no
@@ -1322,7 +1328,7 @@ Three decisions worth not re-making:
   phone rather than to any channel, and the form locks its fields while a link
   is up — which is the only time an operator can tell what to set it to.
 
-### APP-11 — Web Transceiver in the app ⏳ OPEN
+### APP-11 — Web Transceiver in the app ✅ DONE
 **Depends on:** IAX-12 ✅ (library `v0.5.0`), APP-8 ✅. **Where:** `currawong`.
 (There is no APP-10; the number was skipped when this task was opened in the
 2026-08-17 status table.)
@@ -1352,7 +1358,7 @@ Scope:
   APP-12 is where the token is obtained and stored; this task consumes it.
 - The app README and `docs/BRINGUP.md` catch up as part of the task.
 
-### APP-12 — Settings: accounts and the PTT accessory ⏳ OPEN
+### APP-12 — Settings: accounts and the PTT accessory ✅ DONE
 **Depends on:** IAX-13 (portal login), APP-5 ✅ (the accessory layer exists).
 **Where:** `currawong`. **Raised by:** the maintainer, 2026-08-17.
 
@@ -1376,6 +1382,102 @@ One app-level settings screen, three panes:
 Sequencing against APP-11: APP-11's connect form is best fed by APP-12's
 stored token, so prefer IAX-13 → APP-12 → APP-11 — or land APP-11 first
 accepting a pasted token, and let APP-12 replace the paste.
+
+### APP-13 — The EchoLink proxy stops being a channel field ⏳ OPEN
+**Depends on:** EL-12 ✅ (library `v0.4.0`), APP-8 ✅, APP-12 ✅.
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-08-19.
+
+A phone cannot reach an EchoLink node directly, so FR-3.3 makes a proxy
+mandatory — and Currawong currently models it as three fields of a *channel*:
+`NodeSettings.host`, `.port` and `.proxyPassword`. That is the wrong owner, and
+it has already produced a fault.
+
+**The fault.** `ProxyPicker.sourceProxyIfNeeded` fires only when `host` is
+empty, and `RadioSession.connect()` persists the validated channel. So the first
+EchoLink connect writes whichever stranger's machine happened to answer quickest
+*into the channel, permanently*. Every later connect goes back to that one
+proxy and never probes again — it is very likely taken by then, and the app is
+holding a single-user public resource by name. The connect form's own copy tells
+the operator to use public proxies briefly; the storage layer quietly does the
+opposite.
+
+**The other half.** A private proxy is the answer for sustained operating (see
+the EL-12 note and `docs/CLI.md` §12), and it is exactly the thing an operator
+sets up *once*, for their whole station. Asking for it per channel, inside a
+collapsed disclosure group on the connect screen, puts the one durable proxy
+setting in the least durable place in the app and repeats it per channel.
+
+Two facts already in the tree say `host` was never channel state for EchoLink:
+`NodeSettings.isSamePlace(as:)` compares `peer` and `node` for `.echoLink` and
+ignores the host, and `secretAccount(for:)` returns `echolink:<callsign>` with no
+host in it. The field is vestigial, and it is persisted anyway.
+
+So: **one app-wide private proxy, or an ephemeral public one, and neither of them
+lives in a channel.**
+
+| | Where it lives | Lifetime |
+|---|---|---|
+| Private proxy host and port | app-wide settings, `UserDefaults` | until the operator changes it |
+| Private proxy password | **Keychain** | as above |
+| Public proxy (found by probe) | in memory, on the picker | one sitting — released at teardown |
+| Nothing | the channel | — |
+
+Scope:
+
+- **`EchoLinkProxySettings`** — an app-wide value beside `OperatorIdentity` and
+  `TransmitTimeout`: host, port, and `isConfigured` meaning "a private proxy is
+  set". `SettingsStore` grows `loadEchoLinkProxy()` / `saveEchoLinkProxy(_:)`
+  under its own key.
+- **The private proxy's password goes in the Keychain**, not `UserDefaults`.
+  `NodeSettings.proxyPassword`'s own doc comment already flags the discomfort —
+  an operator running a private proxy would be storing its password less
+  carefully than their account password. Moving it is the chance to stop that.
+  `PUBLIC` is a protocol literal, not a secret, and is not stored at all.
+- **`EchoLinkProxyRoute`** — the app-vocabulary triple (host, port, password) a
+  session actually tunnels through, resolved at the point of use and passed to
+  the link factory and the station directory rather than read off the channel.
+  Resolution order: private if configured → the current public lease → probe.
+- **Delete `proxyPassword` from `NodeSettings`**, and clear `host`/`port` for
+  `.echoLink` in `validated()` and at decode, so the fault cannot recur through
+  a path that persists a draft. `host` and `port` stay in the type — the other
+  two modes dial them; EchoLink joins `node` and `module` as a field its mode
+  ignores, which is the union trade-off the type already documents.
+- **Migration, and it has to be right.** Existing channels have a proxy baked
+  in. `proxyPassword == "PUBLIC"` means it was a captured public proxy: drop it.
+  Anything else means the operator configured a private one: lift host, port and
+  password out of the stored blobs into the new app-wide setting and the
+  Keychain. Read as raw JSON, the way `loadIdentity()` and
+  `loadTransmitTimeout()` already harvest hoisted fields — the same reason
+  applies, `NodeSettings` no longer has the property.
+- **The public proxy becomes a lease.** `ProxyPicker` holds the one it found for
+  the sitting rather than writing it into the form, and releases it when the link
+  is torn down, so the next session probes again. Deliberately *not* released
+  between a directory refresh and the connect that follows: those are one sitting
+  and one proxy, and re-probing there would take a second stranger's machine to
+  do one operator's work. The library already tears the session itself down
+  correctly — `EchoLinkClient.releaseSession()` sends the RTCP farewell, then
+  `CLOSE`, then closes the transport — so this task adds no protocol work.
+- **UI, and it is the point of the task.** The private proxy moves to the
+  settings screen's EchoLink pane, beside the account it sits next to
+  conceptually. The connect form's proxy drawer stops being three editable
+  fields and becomes status — which proxy this session is using, why it was
+  picked, and a "find another" button for when it has gone away. Connecting and
+  refreshing the directory already source a proxy on their own (`RootView`,
+  `StationBrowserView`); after this there is no field to fill in and no step to
+  perform.
+- The app README and `docs/BRINGUP.md` catch up as part of the task.
+
+**Not in scope:** more than one private proxy. One is app-wide on the same
+reasoning that made the EchoLink account app-wide — the Keychain has filed it
+per callsign since EL-10 — and a club operator with access to two proxies is a
+case to answer when it appears, not to design for now.
+
+**Done when:** an operator with no proxy configured connects to `*ECHOTEST*`
+twice in one run and to a station on the next launch, and never sees a proxy
+field or presses a proxy button; a private proxy entered once in Settings is
+used by every EchoLink channel and its password is in the Keychain; a channel
+saved by the current build comes forward with its private proxy intact and its
+public one discarded; and no stored channel blob contains a proxy host.
 
 ## Phase 5 — BLE PTT (after APP-2)
 
