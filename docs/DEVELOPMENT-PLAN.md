@@ -1443,12 +1443,20 @@ Scope:
   two modes dial them; EchoLink joins `node` and `module` as a field its mode
   ignores, which is the union trade-off the type already documents.
 - **Migration, and it has to be right.** Existing channels have a proxy baked
-  in. `proxyPassword == "PUBLIC"` means it was a captured public proxy: drop it.
-  Anything else means the operator configured a private one: lift host, port and
-  password out of the stored blobs into the new app-wide setting and the
-  Keychain. Read as raw JSON, the way `loadIdentity()` and
-  `loadTransmitTimeout()` already harvest hoisted fields — the same reason
+  in. A `proxyPassword` other than `PUBLIC` means the operator configured a
+  private proxy — the old form defaulted to `PUBLIC`, so anything else was typed
+  — so lift host, port and password out of the stored blobs into the new app-wide
+  setting and the Keychain. Read as raw JSON, the way `loadIdentity()` and
+  `loadTransmitTimeout()` already harvest hoisted fields; the same reason
   applies, `NodeSettings` no longer has the property.
+
+  `PUBLIC` itself is weaker evidence than it looks, and the task should not
+  pretend otherwise: it is the *definition* of a public proxy rather than the
+  mark of a probe, so a private host whose owner left the password at the default
+  is indistinguishable from a captured one. Drop both. The two mistakes are
+  different sizes — a dropped private host costs one field re-typed in Settings,
+  where adopting a captured public proxy as the operator's own station
+  infrastructure would make this task's fault permanent and invisible.
 - **The public proxy becomes a lease.** `ProxyPicker` holds the one it found for
   the sitting rather than writing it into the form, and releases it when the link
   is torn down, so the next session probes again. Deliberately *not* released
