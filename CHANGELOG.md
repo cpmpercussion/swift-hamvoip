@@ -8,6 +8,28 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+### Changed
+
+- **The Web Transceiver login contract is confirmed by AllStarLink, not just
+  observed by us.** An AllStarLink administrator answered the maintainer's
+  question in [community thread
+  24925](https://community.allstarlink.org/t/documentation-for-the-web-transceiver-authentication-api-api-v2-auth-wt-legacy/24925)
+  with the docblock of `/api/v2/auth-wt-legacy.php` itself, and every field
+  `AllStarLinkPortalTokenFetcher` sends and reads is confirmed verbatim. Three
+  additions to `docs/CLI.md` §11.1: an optional `cookie` request field echoed
+  back in the response (deliberately not sent — nothing here has a browser
+  session to correlate), non-`POST` methods return HTTP 405, and the token
+  changes only when the operator changes their portal password. Documentation
+  only; no code changed. This retires OQ-10 caveat 1, which asked for exactly
+  this answer. Caveat 2 is now stated rather than inferred, and settles rather
+  than opens a question: the replacement API "isn't ready even for beta testing
+  yet", with no timeline and no description of what it will be, so the confirmed
+  behaviour of `auth-wt-legacy` is what to build against and
+  `WebTransceiverTokenSource` is all the preparation a successor of unknown shape
+  can be given. Recorded in `docs/reference/PROVENANCE.md`, including why an answer from the
+  service's own operator is a permitted source where a reverse-engineered
+  third-party write-up is not.
+
 ## [0.5.2] — 2026-08-17
 
 One task, cut as its own release because an app is waiting on it: Currawong's
