@@ -1,5 +1,13 @@
 name: CI
-on: [push, pull_request]
+# **Push is scoped to `main`.** `on: [push, pull_request]` fires both events for
+# every commit on a branch with an open PR, so both jobs ran twice per commit
+# for no extra coverage. This run is only about a minute, so nothing else here
+# needed cutting — see `currawong`'s workflow for the one that did.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 
 jobs:
   spdx:
