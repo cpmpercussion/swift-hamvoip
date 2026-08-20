@@ -19,6 +19,56 @@ public enum AudioPipelineError: Error, Equatable, CustomStringConvertible, Senda
     }
 }
 
+/// The audio-session policy a half-duplex radio needs (AU-2), in the one place
+/// it is written down.
+///
+/// **Raw values rather than `AVAudioSession.Category` and friends**, for two
+/// reasons that are both about this being the only copy:
+///
+/// 1. Those types exist only on iOS, so a typed constant could not be pinned by
+///    a test — and this package's tests run on macOS. The policy governs
+///    whether the microphone works at all, so it is worth a test that actually
+///    runs.
+/// 2. It sidesteps the `allowBluetooth` → `allowBluetoothHFP` rename in the
+///    iOS 26 SDK. Both spellings are the same option with the same raw value
+///    (`0x4`); only one of them compiles against any given SDK, so a typed
+///    constant needs a `#if compiler` shim and a raw one does not.
+///
+/// ``AudioPipeline/activateSession()`` is what applies it.
+public struct AudioSessionPolicy: Equatable, Sendable {
+    /// Raw value of `AVAudioSession.Category`.
+    public let category: String
+    /// Raw value of `AVAudioSession.Mode`.
+    public let mode: String
+    /// Raw value of `AVAudioSession.CategoryOptions`.
+    public let options: UInt
+
+    public init(category: String, mode: String, options: UInt) {
+        self.category = category
+        self.mode = mode
+        self.options = options
+    }
+
+    /// `.playAndRecord`, mode `.voiceChat`, `[.allowBluetooth, .defaultToSpeaker]`.
+    ///
+    /// `.playAndRecord` because transmit and receive share the session;
+    /// `.voiceChat` for the echo cancellation and the half-duplex-friendly
+    /// routing; `allowBluetooth` for the hands-free profile, which is the
+    /// Bluetooth profile that carries a *microphone* (A2DP is output only, and
+    /// PTT needs the input half); `defaultToSpeaker` so a phone held in the
+    /// hand is audible rather than routed to the earpiece.
+    public static let radio = AudioSessionPolicy(
+        category: "AVAudioSessionCategoryPlayAndRecord",
+        mode: "AVAudioSessionModeVoiceChat",
+        options: allowBluetooth | defaultToSpeaker)
+
+    /// `AVAudioSession.CategoryOptions.allowBluetooth`, a.k.a.
+    /// `.allowBluetoothHFP` under the iOS 26 SDK — same option, same value.
+    public static let allowBluetooth: UInt = 0x4
+    /// `AVAudioSession.CategoryOptions.defaultToSpeaker`.
+    public static let defaultToSpeaker: UInt = 0x8
+}
+
 /// SF-3 signal: audio session interruption or route change.
 ///
 /// `AudioPipeline` does not itself stop transmission — the caller (the call
@@ -1144,13 +1194,38 @@ public final class AudioPipeline: @unchecked Sendable {
         }
     }
 
-    /// Configures the shared `AVAudioSession` per AU-2: `.playAndRecord`,
-    /// mode `.voiceChat`. Call once, before ``startCapture(onFrame:)``.
-    /// iOS-only — `AVAudioSession` does not exist on macOS, where the app
-    /// (or CLI-1) is responsible for input/output device selection instead.
+    /// Configures the shared `AVAudioSession` per AU-2, then activates it.
+    /// Call once, before ``startCapture(onFrame:)``.
+    ///
+    /// Delegates to ``AudioPipeline/activateSession()``, which holds the policy
+    /// and needs no pipeline. Prefer the static form: reaching the policy
+    /// through an instance means having built an `AVAudioEngine` first, which
+    /// is the ordering RC-11 exists to break.
     public func configureSession() throws {
+        try Self.activateSession()
+    }
+
+    /// Applies ``AudioSessionPolicy/radio`` to the shared `AVAudioSession` and
+    /// activates it — **without constructing an `AudioPipeline` or an
+    /// `AVAudioEngine`** (RC-11).
+    ///
+    /// That order is the whole point. An engine whose input unit is
+    /// instantiated under the default `.soloAmbient` category reports a 0 Hz
+    /// input rate and never recovers, which is a converter failure on every
+    /// PTT press for the life of the process — the app's `BU-1`. Callers
+    /// therefore need to set the category *before* deciding to build anything,
+    /// and until this existed the only way to reach the policy was to violate
+    /// that order or to spell the policy out a second time.
+    ///
+    /// iOS-only. `AVAudioSession` does not exist on macOS, where input/output
+    /// device selection is the user's, via System Settings.
+    public static func activateSession() throws {
+        let policy = AudioSessionPolicy.radio
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .defaultToSpeaker])
+        try session.setCategory(
+            AVAudioSession.Category(rawValue: policy.category),
+            mode: AVAudioSession.Mode(rawValue: policy.mode),
+            options: AVAudioSession.CategoryOptions(rawValue: policy.options))
         try session.setActive(true)
     }
     #endif
