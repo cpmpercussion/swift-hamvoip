@@ -167,7 +167,7 @@ Phase 3  CLI harness      CLI-1, CLI-2       ✅ complete
 Phase 4  SwiftUI app      APP-1 … APP-13     APP-3, APP-13 open; APP-3 the
                                              unmet safety req (SF-4)
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
-Phase 6  EchoLink         EL-1 … EL-12       ✅ complete; M3 2026-08-13, and
+Phase 6  EchoLink         EL-1 … EL-15       ✅ complete; M3 2026-08-13, and
                                              since run from the app
 Phase 7  M17Kit           M17-1 … M17-6      RX proven 2026-08-16; TX heard
                                              2026-08-17. M17-6 re-scoped, open
@@ -2353,6 +2353,45 @@ in Currawong that makes it composition-root work.
 its awkward cases, selection and probing are tested without a socket or an HTTP
 request, and `--auto-proxy` picks a proxy on a live run. ✅ All three;
 34 tests, and the live run above.
+
+### EL-15 — The private proxy is one setting, not three ✅ DONE
+**Depends on:** EL-12 ✅. **Blocks:** nothing. Related: **APP-13**, which gives
+the app the same shape.
+**Files:** `Sources/hamvoip-cli/EchoLinkProxySettings.swift` (new),
+`Sources/hamvoip-cli/EchoLinkCommand.swift`,
+`Tests/HamVoIPCLITests/EchoLinkProxySettingsTests.swift`, `docs/CLI.md` §9.
+
+Added 2026-08-20, from a real state a config directory was found in: it held
+`ECHOLINK_PROXY_PASSWORD` and nothing else. **A proxy password with no proxy
+beside it is not a setting** — nothing could act on it, and no code ever read
+it, because `--proxy-password` was the one credential in the CLI that bypassed
+`SecretPrompt.resolve` entirely. It looked configured and did nothing.
+
+So host, port and password now resolve **together**, through the ordinary
+`ConfigFile` convention (`ECHOLINK_PROXY`, `ECHOLINK_PROXY_PORT`,
+`ECHOLINK_PROXY_PASSWORD`; command line → environment → file → default). That is
+deliberately the same shape APP-13 gives Currawong — host and port in
+`UserDefaults`, password in the Keychain, as one app-wide value — rather than a
+second arrangement for the same setting.
+
+**The rule worth the separate type: a configured password is only ever sent to
+the proxy it was configured for.** Dial another host, or `--auto-proxy`, and it
+falls back to `PUBLIC` with a note on stderr. The proxy login hashes the password
+into a digest, so a stranger's proxy handed a private one gets material to attack
+offline while we gain nothing — a public proxy accepts `PUBLIC` regardless.
+`--proxy-password` other than `PUBLIC` is refused outright with `--auto-proxy`,
+where the destination is a stranger by definition: a password typed on purpose
+deserves an error, not a silent substitution.
+
+A malformed `ECHOLINK_PROXY_PORT` is an error rather than a silent 8100, on the
+same reasoning as OQ-10's method note — a fallback that connects to *something*
+teaches the operator nothing.
+
+**Done when:** the three parts resolve from all four tiers, the password is
+withheld from any host but its own (including under `--auto-proxy` and when no
+host is configured at all), host matching is case-insensitive, and a malformed
+port fails loudly. ✅ All of it; 20 tests, none touching the real config
+directory.
 
 ## Phase 7 — M17Kit
 

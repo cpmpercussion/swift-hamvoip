@@ -66,8 +66,9 @@ struct EchoLinkCommand: AsyncParsableCommand {
 
     @Option(name: .long, help: ArgumentHelp(
         """
-        EchoLink proxy host name or address. Either this or --auto-proxy is \
-        required.
+        EchoLink proxy host name or address. Falls back to $ECHOLINK_PROXY and \
+        then ~/.config/swift-hamvoip/ECHOLINK_PROXY. One of those or \
+        --auto-proxy is required.
         """))
     var proxy: String?
 
@@ -87,11 +88,21 @@ struct EchoLinkCommand: AsyncParsableCommand {
         """))
     var proxyCandidates: Int = EchoLinkProxySelector.defaultBatchSize
 
-    @Option(name: .long, help: "EchoLink proxy TCP port. Ignored with --auto-proxy.")
-    var proxyPort: UInt16 = EchoLinkProxyClient.defaultPort
+    @Option(name: .long, help: ArgumentHelp(
+        """
+        EchoLink proxy TCP port. Falls back to $ECHOLINK_PROXY_PORT, then the \
+        config file, then 8100. Ignored with --auto-proxy.
+        """))
+    var proxyPort: UInt16?
 
-    @Option(name: .long, help: "Proxy password. 'PUBLIC' on a public proxy, and not a secret.")
-    var proxyPassword: String = EchoLinkProxyPassword.publicProxy.value
+    @Option(name: .long, help: ArgumentHelp(
+        """
+        Proxy password. 'PUBLIC' on a public proxy — the convention, not a \
+        secret. Falls back to $ECHOLINK_PROXY_PASSWORD and the config file, but \
+        ONLY for the proxy named there: a private password is never sent to a \
+        proxy it does not belong to.
+        """))
+    var proxyPassword: String?
 
     @Option(name: .long, help: ArgumentHelp(
         """
@@ -177,19 +188,39 @@ struct EchoLinkCommand: AsyncParsableCommand {
         guard transmitTimeout > 0 else {
             throw ValidationError("--transmit-timeout must be positive")
         }
-        switch (proxy, autoProxy) {
-        case (nil, false):
-            throw ValidationError(
-                "A proxy is required: pass --proxy <host>, or --auto-proxy to pick a "
-                    + "public one automatically. Direct mode is not implemented (FR-3.3 "
-                    + "makes the proxy the default, and CGNAT makes it the only option "
-                    + "on mobile data).")
-        case (.some, true):
+        // Host, port and password together — a private proxy is one setting,
+        // not three (`EchoLinkProxySettings`).
+        let proxySettings = try EchoLinkProxySettings.resolve(
+            commandLineHost: proxy,
+            commandLinePort: proxyPort,
+            commandLinePassword: proxyPassword,
+            autoProxy: autoProxy)
+
+        if proxy != nil && autoProxy {
             throw ValidationError(
                 "--proxy and --auto-proxy are alternatives: one names a proxy, the other "
                     + "finds one.")
-        default:
-            break
+        }
+        if !autoProxy && proxySettings.host == nil {
+            throw ValidationError(
+                "A proxy is required: pass --proxy <host>, set "
+                    + "$\(EchoLinkProxySettings.hostName) or "
+                    + "~/.config/swift-hamvoip/\(EchoLinkProxySettings.hostName), or pass "
+                    + "--auto-proxy to pick a public one automatically. Direct mode is not "
+                    + "implemented (FR-3.3 makes the proxy the default, and CGNAT makes it "
+                    + "the only option on mobile data).")
+        }
+        // A private password aimed at a stranger's machine, which is what
+        // --auto-proxy guarantees. Refused rather than quietly replaced,
+        // because the operator typed it on purpose.
+        if autoProxy, let proxyPassword,
+            proxyPassword != EchoLinkProxyPassword.publicProxy.value {
+            throw ValidationError(
+                "--proxy-password other than '\(EchoLinkProxyPassword.publicProxy.value)' "
+                    + "cannot be used with --auto-proxy: the proxy is chosen from a public "
+                    + "list, so the password would go to somebody else's machine. Public "
+                    + "proxies take '\(EchoLinkProxyPassword.publicProxy.value)' by "
+                    + "definition.")
         }
         guard proxyCandidates > 0 else {
             throw ValidationError("--proxy-candidates must be positive")
@@ -233,7 +264,17 @@ struct EchoLinkCommand: AsyncParsableCommand {
         // it is the window in which somebody else takes it — and the account
         // password prompt above can hold that window open for as long as it
         // takes a human to type.
-        let (proxyHost, resolvedProxyPort) = try await resolveProxy()
+        // Said before the connection rather than after it fails: a configured
+        // password that quietly stops applying is a confusing login failure.
+        if proxySettings.passwordWithheld {
+            Self.note(
+                "NOTE: \(EchoLinkProxySettings.passwordName) is set, but it belongs to "
+                    + "another proxy, so '\(EchoLinkProxyPassword.publicProxy.value)' is "
+                    + "being used instead. A private proxy password is only ever sent to "
+                    + "its own proxy.")
+        }
+
+        let (proxyHost, resolvedProxyPort) = try await resolveProxy(proxySettings)
 
         let session = try EchoLinkSession(
             destination: EchoLinkDestination(
@@ -242,7 +283,7 @@ struct EchoLinkCommand: AsyncParsableCommand {
                 route: .proxy(
                     host: proxyHost,
                     port: resolvedProxyPort,
-                    password: EchoLinkProxyPassword(proxyPassword)
+                    password: EchoLinkProxyPassword(proxySettings.password)
                 )
             ),
             callsign: try ConfigFile.requireCallsign(commandLineValue: callsign)
@@ -268,8 +309,10 @@ struct EchoLinkCommand: AsyncParsableCommand {
     /// Progress goes to **stderr**, not stdout: `--list` writes a station list
     /// that people pipe into `grep`, and narration in the middle of it would be
     /// a nuisance.
-    private func resolveProxy() async throws -> (host: String, port: UInt16) {
-        if let proxy { return (proxy, proxyPort) }
+    private func resolveProxy(
+        _ settings: EchoLinkProxySettings.Resolved
+    ) async throws -> (host: String, port: UInt16) {
+        if let host = settings.host { return (host, settings.port) }
 
         let selector = EchoLinkProxySelector(batchSize: proxyCandidates)
         Self.note("Fetching the public proxy list from echolink.org…")
