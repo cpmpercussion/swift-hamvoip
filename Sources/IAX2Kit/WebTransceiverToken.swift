@@ -12,8 +12,11 @@ import Foundation
 /// (see `docs/CLI.md` §11). Two consequences shape this type:
 ///
 /// - **It is a credential with a lifetime, not a nonce.** The portal returns the
-///   same 12 lowercase-hex characters on every call, which is why an app is
-///   expected to store it (Keychain) rather than fetch one per session.
+///   same 12 lowercase-hex characters on every call, and AllStarLink have since
+///   said why: the token changes only when the operator changes their portal
+///   password (community thread 24925, 2026-08-18). So storing it — Keychain —
+///   is right, and the event that invalidates one is an event the operator
+///   performed and can be asked about.
 /// - **It must not fall into a log.** ``description`` is redacted for that
 ///   reason; the string itself is only available through ``value``, so leaking
 ///   it takes a deliberate keystroke.
@@ -125,8 +128,12 @@ public enum WebTransceiverTokenError: Error, Equatable, CustomStringConvertible 
 /// implementation makes an HTTPS request and no unit test may touch the
 /// network. The second is specific — the endpoint behind it is named
 /// `auth-wt-legacy`, and AllStarLink's ASL3-Manual issue #229 sits under a
-/// project called "WebTransceiver Login API Replacement" (OQ-10, caveat 2). The
-/// successor should be a second conformance to this protocol, not a rewrite of
+/// project called "WebTransceiver Login API Replacement" (OQ-10, caveat 2). As
+/// of 2026-08-18 an AllStarLink administrator says that replacement "isn't ready
+/// even for beta testing yet", with no timeline and no description — so this
+/// endpoint is what there is to build against. The seam is not an attempt to
+/// anticipate the successor's shape, which is unknowable; it just means the
+/// successor can arrive as a second conformance rather than a rewrite of
 /// everything that wanted a token.
 public protocol WebTransceiverTokenSource: Sendable {
     /// Exchanges portal credentials for a token.
@@ -144,10 +151,16 @@ public protocol WebTransceiverTokenSource: Sendable {
 
 /// Fetches a token from allstarlink.org's Web Transceiver login endpoint.
 ///
-/// The observed contract, established against the live portal on 2026-08-17 and
+/// The contract, established against the live portal on 2026-08-17 and confirmed
+/// field-for-field by AllStarLink on 2026-08-18 (community thread 24925), is
 /// written up in `docs/CLI.md` §11.1: `POST` a JSON body of exactly
 /// `{"username":…,"password":…}`, and a success is
-/// `{"status":"OK","auth":1,"token":"1b59df18107e"}`.
+/// `{"status":"OK","auth":1,"token":"1b59df18107e"}`. Non-`POST` methods draw
+/// HTTP 405.
+///
+/// The request also takes an optional `cookie`, echoed back in the response.
+/// Deliberately not sent: it exists to correlate a login with a browser session,
+/// and nothing here has one.
 ///
 /// This is the only thing in `IAX2Kit` that speaks HTTP. It lives here rather
 /// than in the CLI because the app needs it too — the alternative was every

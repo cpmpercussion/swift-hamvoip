@@ -1161,8 +1161,15 @@ everything else — the prompt, where the password came from, any complaint —
 goes to stderr. The password is your **allstarlink.org portal** password, not a
 node secret and not the static `allstar` secret the call itself presents.
 
-The token is 12 lowercase hex characters and is **stable across calls**, so
-treat it as a credential with a real lifetime, not a nonce.
+The token is 12 lowercase hex characters and is **stable across calls** — it
+changes only when you change your portal password (AllStarLink, [community
+thread 24925](https://community.allstarlink.org/t/documentation-for-the-web-transceiver-authentication-api-api-v2-auth-wt-legacy/24925)).
+So it is a credential with a real lifetime, not a nonce — store it, and fetch
+another when the operator changes that password. (AllStarLink suggest logging in
+at app launch or per connection regardless, on the grounds that a future
+replacement API may rotate tokens more often. Cheap advice to take if you are
+already asking for a password; not a reason to hold one you would otherwise
+discard.)
 
 <details>
 <summary>The request underneath, for reference (IAX-13)</summary>
@@ -1184,6 +1191,18 @@ and `msg` distinguishes `Invalid JSON payload`, `Invalid JSON fields` and
 `login failed`; the three arrive as separate `WebTransceiverTokenError` cases,
 because a wrong password is fixed by retyping it and a changed endpoint is not.
 
+The rest of the contract, as AllStarLink document it in thread 24925 — this was
+confirmed against what we had observed, and it added three things observation of
+a successful login could not have found:
+
+| | |
+|---|---|
+| Path | `/api/v2/auth-wt-legacy.php`. The extensionless form used above works and is what the library sends. |
+| Request | `username`, `password`, and an optional **`cookie`** — an opaque value echoed back in the response. Currawong and this CLI send no cookie; nothing here needs to correlate a login with a browser session. |
+| Response | `status` (`OK`/`ERR`), `auth` (`1`/`0`), `token`, `cookie` if one was sent, and `msg` only when `status` is `ERR`. |
+| Other methods | HTTP 405. |
+| Token lifetime | Changes only when the operator changes their portal password. |
+
 The fetch lives in `IAX2Kit` behind `WebTransceiverTokenSource`
 (`AllStarLinkPortalTokenFetcher` is the one implementation) so the app can
 reach it too, and so the expected replacement for this `legacy` endpoint —
@@ -1195,8 +1214,12 @@ password is sent.
 </details>
 
 ⚠️ The endpoint is named `legacy`, and AllStarLink's ASL3-Manual issue #229 sits
-under a project called "WebTransceiver Login API Replacement". Expect a
-successor; keep the token fetch behind its own seam.
+under a project called "WebTransceiver Login API Replacement". As of 2026-08-18
+an AllStarLink administrator states the replacement "isn't ready even for beta
+testing yet" (thread 24925) — no timeline, and no description of what it will
+be. So this is the route, and what is documented above is what to build against.
+The token fetch sits behind its own seam anyway, which is all the preparation a
+replacement of unknown shape can usefully be given.
 
 ### 11.2 Place the call
 

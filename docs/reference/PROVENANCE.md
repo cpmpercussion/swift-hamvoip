@@ -369,3 +369,47 @@ point. `transceive.app`'s public-authentication page, the DVSwitch Mobile
 documentation and every other reverse-engineered write-up were deliberately not
 opened — see the OQ-10 row of `DEVELOPMENT-PLAN.md` for why they could not
 clear the OQ-9 candidate-(d) bar to begin with.
+
+## 2026-08-18 — the Web Transceiver login contract, from AllStarLink (OQ-10)
+
+**What was consulted.** AllStarLink community thread 24925, ["Documentation for
+the Web Transceiver authentication API
+(/api/v2/auth-wt-legacy)?"](https://community.allstarlink.org/t/documentation-for-the-web-transceiver-authentication-api-api-v2-auth-wt-legacy/24925),
+opened by the maintainer on 2026-08-17 and answered by **N8EI, an AllStarLink
+administrator**, on 2026-08-18. The answer is the docblock of AllStarLink's own
+`/api/v2/auth-wt-legacy.php`: the POST payload keys, the response keys, and the
+fact that other HTTP methods return 405. A follow-up answer gave the token's
+lifetime.
+
+**Why this is a permitted source, and not the thing OQ-10 spent a day avoiding.**
+The sources LP-1 names are *implementations of these protocols* — DroidStar,
+SvxLink, thebridge, iaxclient, Asterisk. This is neither an implementation nor a
+protocol: it is the operator of a web service documenting that service's request
+and response format, in answer to a direct question, on their own forum. It is
+the same class of knowledge as the call parameters in the entry above — what to
+send to the door and what comes back — and it is the *most* authoritative form
+of it, because it comes from the party that runs the door. The reverse-engineered
+third-party write-ups that could not clear the OQ-9 candidate-(d) bar are still
+unopened; this one clears it by not being one.
+
+**What it changed, which is less than it confirms.** Every field of the contract
+we had established by observation on 2026-08-17 is confirmed verbatim — `POST`,
+`{"username","password"}` with both key names exact, and
+`{"status","auth","token","msg"}` back with `msg` present only on error. Three
+things are new, and none of them could have been found by observing a successful
+login:
+
+1. **An optional `cookie` field**, echoed back in the response when supplied.
+   Opaque to us and unused — see `docs/CLI.md` §11.1.
+2. **Non-`POST` methods return HTTP 405.** We never sent one.
+3. **The token changes only when the operator changes their portal password** —
+   so it is stable, as observed, but for a stated reason rather than by luck.
+   The same answer recommends re-fetching at app launch or per connection
+   anyway, because the successor API will rotate more often.
+
+**The caveat this retires, and the one it does not.** OQ-10 caveat 1 said the
+contract was "observed behaviour, not a specification: one account, one host,
+one day", and that an official answer would supersede it. This is that answer.
+Caveat 2 stands and is now stated by AllStarLink rather than inferred from a
+project name: the replacement login API exists but "isn't ready even for beta
+testing yet", so the `WebTransceiverTokenSource` seam stays.
