@@ -47,7 +47,7 @@ struct WebTransceiverTokenCommand: AsyncParsableCommand {
             """)
 
     /// The environment variable checked before prompting. Deliberately not
-    /// `HAMVOIP_SECRET`: that holds a node secret, and the two are different
+    /// `IAX2_SECRET`: that holds a node secret, and the two are different
     /// credentials that a shared name would invite mixing up.
     static let passwordEnvironmentVariable = "ALLSTARLINK_PORTAL_PASSWORD"
 

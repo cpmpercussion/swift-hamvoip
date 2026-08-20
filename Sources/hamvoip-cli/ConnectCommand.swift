@@ -34,7 +34,7 @@ struct ConnectCommand: AsyncParsableCommand {
             THE SECRET
               Do not use --secret unless you are scripting. A secret in argv is
               visible in `ps` to every process on this machine, and is written to
-              your shell history. Set HAMVOIP_SECRET instead, or supply nothing and
+              your shell history. Set IAX2_SECRET instead, or supply nothing and
               type it at the prompt, where echo is disabled.
 
             WEB TRANSCEIVER

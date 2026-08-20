@@ -192,7 +192,7 @@ struct NodeOptions: ParsableArguments {
         """
         Shared secret. HAZARD: a secret passed this way is visible in `ps` to \
         every process on the machine and is written to your shell history. \
-        Prefer the HAMVOIP_SECRET environment variable, or omit this flag \
+        Prefer the IAX2_SECRET environment variable, or omit this flag \
         entirely and type the secret at the prompt (echo is disabled). This \
         flag exists only for scripting.
         """,

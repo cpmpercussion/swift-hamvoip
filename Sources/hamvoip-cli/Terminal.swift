@@ -202,8 +202,17 @@ struct RawTerminal {
 /// Reading a secret from a human without putting it anywhere it can be read
 /// back.
 enum SecretPrompt {
-    /// The environment variable checked before prompting.
-    static let environmentVariable = "HAMVOIP_SECRET"
+    /// The environment variable checked before prompting, and the name of the
+    /// config file that stands in for it.
+    ///
+    /// Named for the `iax2` subcommand that uses it, which is the convention
+    /// every other credential here already follows — `ECHOLINK_PASSWORD` and
+    /// `ECHOLINK_PROXY*` belong to `echolink`. This was `HAMVOIP_SECRET` until
+    /// 0.6.0, from when the CLI had only one protocol in it: EchoLink and M17
+    /// are equally "hamvoip", so the old name said which *project* the file
+    /// belonged to rather than which credential it was, and `docs/CLI.md` had
+    /// to gloss it as "the IAX2 node secret" every time it appeared.
+    static let environmentVariable = "IAX2_SECRET"
 
     /// Where a secret came from, so the session banner can say so. A user who
     /// can see that their password arrived from `argv` is a user who can go and

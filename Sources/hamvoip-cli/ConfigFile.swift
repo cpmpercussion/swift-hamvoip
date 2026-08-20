@@ -14,7 +14,7 @@ import Foundation
 ///
 ///     ~/.config/swift-hamvoip/CALLSIGN
 ///     ~/.config/swift-hamvoip/ECHOLINK_PASSWORD
-///     ~/.config/swift-hamvoip/HAMVOIP_SECRET
+///     ~/.config/swift-hamvoip/IAX2_SECRET
 ///
 /// The file names match the environment variables they stand in for, which is
 /// the whole convention: if you know the variable, you know the file.
