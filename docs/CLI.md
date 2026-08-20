@@ -54,7 +54,8 @@ The first run that opens the microphone triggers a TCC prompt attributed to
 your **terminal application**, not to `hamvoip-cli` — a command-line binary
 inherits its parent's TCC identity. If you never see a prompt and capture is
 silent, check System Settings → Privacy & Security → Microphone and confirm
-your terminal is allowed. `--no-audio` skips the microphone entirely.
+your terminal is allowed. `--no-audio` skips the microphone entirely and sends
+silence instead, so an unattended session can still key up (CLI-2).
 
 ---
 
@@ -76,7 +77,7 @@ hamvoip-cli iax2 --host <h> [--port 4569] --node <n> --username <u>
 | `--callsign` | Sent as CALLING NAME (§8.6.4). Upper-cased; `/P`, `-1` and similar suffixes are fine. |
 | `--secret` | **See §3 before using this.** |
 | `--transmit-timeout` | SF-1 watchdog, 5–3600 s, default 180. There is deliberately no way to disable it. |
-| `--no-audio` | Do not open the microphone or speaker. Signalling, auth and DTMF only. |
+| `--no-audio` | Do not open the microphone or speaker. PTT still transmits — `SilentCaptureSource` feeds the transmit path 20 ms of silence at a time — so an unattended run puts a real, properly framed stream on air without any hardware. Until CLI-2 this flag claimed to send silence and sent nothing at all. |
 | `--dtmf` | Send this sequence once the call is up, then carry on normally. |
 | `--duration` | Hang up automatically after this many seconds. |
 

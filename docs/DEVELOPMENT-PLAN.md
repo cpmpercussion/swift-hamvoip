@@ -163,7 +163,7 @@ has merged and the code it describes exists.
 Phase 0  Bootstrap        BOOT-1             ✅ complete
 Phase 1  RadioCore        RC-1 … RC-11       ✅ complete
 Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
-Phase 3  CLI harness      CLI-1              ✅ complete
+Phase 3  CLI harness      CLI-1, CLI-2       ✅ complete
 Phase 4  SwiftUI app      APP-1 … APP-13     APP-3, APP-13 open; APP-3 the
                                              unmet safety req (SF-4)
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
@@ -977,6 +977,43 @@ Two decisions worth knowing before touching it:
 
 The app's deletion of its copy is `BU-3` in `currawong/docs/BRINGUP.md`, and
 waits on a release.
+
+### CLI-2 — `--no-audio` sends the silence it promises ✅ DONE
+**Depends on:** CLI-1 ✅. **Raised by:** the app, 2026-08-20, while settling
+Currawong's `BU-8` with two CLI instances.
+
+`--no-audio` printed "PTT will send silence" and sent **nothing at all**. The
+only frame source was `AudioPipeline.startCapture(onFrame:)`, inside the branch
+the flag switches off, so a key-down changed the client's state and then
+offered it no PCM — `Datagrams transmitted: 0`, and a second client on the same
+reflector heard no stream. Two key-ups went on air as nothing before anyone
+noticed the flag was the reason.
+
+That matters more than a wrong banner, because `--no-audio` is the mode an
+*unattended* on-air test runs in: nobody is there to talk into a microphone, so
+its one job is to produce carrier without hardware.
+
+**Two faults, and the second is the one that hid the first.**
+`SilentCaptureSource` now feeds the same bridge the microphone tap feeds —
+`AudioPipeline.captureFrameSize` samples of zero every 20 ms, continuously, as
+capture does, because the client drops frames while unkeyed. But the transmit
+loop was only added to the task group when a pipeline existed, so at first the
+silence was produced and nothing consumed it. The loop is now added whenever
+*either* source is live; the receive and audio-signal loops stay
+pipeline-gated, since those are the ones whose streams finish instantly and end
+the session (the trap IAX-12 spent an afternoon on).
+
+Silence rather than a tone: this stands in for an operator not talking, and a
+tone left running by accident on a shared module is somebody else's problem to
+listen to. µ-law has an exact zero and Codec2 3200 encodes a silent frame like
+any other, so what goes on air is properly framed, last frame included.
+
+**Confirmed on air, 2026-08-20**, two instances against
+`m17-cbr.charlesmartin.au` module A with `--no-audio` on both: 69 datagrams for
+a three-second over, and the observer printed `RX VK1CPM ended — end of over`.
+Five unit tests cover the frame shape, the cadence, cancellation, and frames
+actually arriving at the bridge — that last being the one that would have
+caught this.
 
 ### IAX-13 — Fetch the Web Transceiver token ✅ DONE
 **Depends on:** IAX-12 ✅ (OQ-10's observed contract). **Raised by:** the
