@@ -176,8 +176,8 @@ Phase 0  Bootstrap        BOOT-1             ✅ complete
 Phase 1  RadioCore        RC-1 … RC-11       ✅ complete
 Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1 … CLI-3      ✅ complete
-Phase 4  SwiftUI app      APP-1 … APP-13     APP-3, APP-13 open; APP-3 the
-                                             unmet safety req (SF-4)
+Phase 4  SwiftUI app      APP-1 … APP-13     APP-13 open; APP-3 done
+                                             2026-08-20, so SF-4 is met
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
 Phase 6  EchoLink         EL-1 … EL-15       ✅ complete; M3 2026-08-13, and
                                              since run from the app
@@ -190,7 +190,6 @@ Phase 8  Silent mode      SIL-1              🔬 spike first — nothing schedu
 
 | | What | Where | Size |
 |---|---|---|---|
-| **APP-3** | Live Activity — SF-4, the only unmet safety requirement. Floor rises to iOS 16.1 | `currawong` | The largest of the tasks |
 | **M17-6** | A chosen destination — DST is still hard-coded `BROADCAST`. The parrot half of this task is no longer needed: transmit was confirmed heard 2026-08-17 (see the M17-5 row) | here | Small library change; no longer gates anything |
 | **IAX-10** | Pace transmitted frames instead of bursting them | here | Small |
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
@@ -1161,8 +1160,9 @@ call, locally notable in VK1. Trademark checked clear in class 9.
   disappearing, and on the gesture being cancelled or dragged off the button.
 - **APP-3** — TX visibility without unlock (SF-4): Live Activity showing
   TX/RX state, plus `MPRemoteCommandCenter` toggle-PTT fallback (PT-4).
-  ⏳ **OPEN — and it is the only unmet safety requirement.** Written up below.
-  The PT-4 half shipped early, under APP-5.
+  ✅ **DONE** — `currawong` `0f06adc` (PR #20), 2026-08-20; the app's
+  deployment floor rose to iOS 16.2 with it. Written up below. The PT-4 half
+  shipped early, under APP-5.
 - **APP-4** — Settings: node list CRUD, watchdog timeout, stored in
   `UserDefaults`; secrets in Keychain. ✅ **DONE** — `currawong` `54bf219`
   (saved channels: a name, a mode, and that mode's fields; reorderable,
@@ -1209,11 +1209,12 @@ app's call to make. **Read that file before planning app work** — it is where
 the live-validation state of all three modes actually lives, and one of its
 items (BU-3) is a task for *this* repository: see RC-11.
 
-### APP-3 — TX visibility without unlock (SF-4) ⏳ OPEN
-**Depends on:** APP-2 ✅. **The only unmet safety requirement**, and the only
-`APP-*` row with no code behind it.
+### APP-3 — TX visibility without unlock (SF-4) ✅ DONE
+**Delivered** in `currawong` `0f06adc` (PR #20), 2026-08-20. **Depends on:**
+APP-2 ✅. This was the last unmet safety requirement; the app README's safety
+table now says **Met** against SF-4.
 
-**What exists instead.** A full-bleed transmit banner (`TransmitBanner.swift`,
+**What was there before.** A full-bleed transmit banner (`TransmitBanner.swift`,
 `TransmitStatusPresentation.swift`) outside the pane container, naming the input
 that keyed and whether letting go will unkey. A stand-in, and the app README
 says so: it is visible only while the app is on screen, which is precisely the
@@ -1230,15 +1231,16 @@ makes it visible before the watchdog fires.
   `au.charlesmartin.currawong.liveactivity` — already reserved by the OQ-3b
   resolution, so no naming decision is outstanding.
 - **ActivityKit is iOS 16.1+, and the deployment target was iOS 16.0.**
-  ✅ **DECIDED 2026-08-16 — raise the floor.** The maintainer's call: the app's
-  minimum becomes **iOS 16.1** rather than scattering availability guards
-  through the call sites for a version nobody is on. Raise it in `project.yml`
-  and regenerate. **The library's own floor stays at iOS 16.0** — nothing in
+  ✅ **DECIDED 2026-08-16 — raise the floor.** The maintainer's call: raise the
+  app's minimum rather than scattering availability guards through the call
+  sites for versions nobody is on. **The floor the implementation settled on is
+  iOS 16.2, not 16.1** — `ActivityContent`, `update(_:)` taking an
+  `ActivityContent`, and `end(_:dismissalPolicy:)` are all 16.2, and those three
+  are exactly what keeps the activity from displaying a stale transmit state. So
+  the floor is what the code calls, not the framework's own minimum: 16.2, set
+  in `project.yml`. **The library's own floor stays at iOS 16.0** — nothing in
   `swift-hamvoip` needs ActivityKit, and an app-driven bump to a protocol
-  library would be the tail wagging the dog. Check what the widget extension
-  itself needs before settling on 16.1: some Live Activity presentation APIs
-  arrived in 16.2, and the floor should be whatever the implementation actually
-  calls, not whatever the framework's own minimum is.
+  library would be the tail wagging the dog.
 - **macOS has no Live Activities.** The macOS build must still compile and
   test; `make test-macos` is part of the definition of done, not an
   afterthought.
@@ -1259,6 +1261,14 @@ makes it visible before the watchdog fires.
 **Done when:** transmit state is visible on a locked iPhone, it ends on all
 six paths above, the macOS build and tests are unaffected, and the README's
 safety table can say **Met** against SF-4.
+
+⛔ **Never seen on a locked iPhone, and the case it exists for has never been
+staged** — a BLE accessory keying a backgrounded app. Apple documents
+`Activity.request` as a foreground operation, which that case is not. Tracked
+app-side as `currawong/docs/BRINGUP.md` `BU-10`, not here. If a device refuses
+the request, the fallback is that the activity becomes connection-scoped rather
+than transmit-scoped — a change confined to `RadioSession.desiredActivity` in
+the app.
 
 ### APP-5 — PTT input layer: BLE, learn mode, remote command ✅ DONE
 **Delivered** in `currawong` `cd2a7da` ("APP-5 (partial)") and completed in
@@ -2725,8 +2735,8 @@ the feature or change its shape entirely:
    feature that degrades silently is worse than one that says it cannot hear
    well enough.
 2. **Which API, at what deployment floor?** The most capable on-device speech
-   APIs are the newest, which collides with a floor about to become iOS 16.1
-   for APP-3. Availability-gating to recent OSes may well be right; decide it
+   APIs are the newest, which collides with the floor that became iOS 16.2
+   with APP-3. Availability-gating to recent OSes may well be right; decide it
    with (1)'s numbers in hand. Synthesis is the easier half — the older APIs
    are adequate.
 3. **Speaking onto the air is a regulatory act.** Station identification is the
