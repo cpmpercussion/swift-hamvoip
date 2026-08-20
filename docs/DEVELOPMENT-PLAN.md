@@ -163,7 +163,7 @@ has merged and the code it describes exists.
 Phase 0  Bootstrap        BOOT-1             ✅ complete
 Phase 1  RadioCore        RC-1 … RC-11       ✅ complete
 Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
-Phase 3  CLI harness      CLI-1, CLI-2       ✅ complete
+Phase 3  CLI harness      CLI-1 … CLI-3      ✅ complete
 Phase 4  SwiftUI app      APP-1 … APP-13     APP-3, APP-13 open; APP-3 the
                                              unmet safety req (SF-4)
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
@@ -1015,6 +1015,37 @@ Five unit tests cover the frame shape, the cadence, cancellation, and frames
 actually arriving at the bridge — that last being the one that would have
 caught this.
 
+### CLI-3 — `HAMVOIP_SECRET` becomes `IAX2_SECRET` ✅ DONE
+**Depends on:** nothing. **Blocks:** nothing. **Breaking**, and released as such.
+**Files:** `Sources/hamvoip-cli/Terminal.swift` (the one definition),
+`ConnectCommand.swift`, `NodeOptions.swift`, `WebTransceiverTokenCommand.swift`,
+`ConfigFile.swift`, both CLI test files, `docs/CLI.md`, `README.md`, `CHANGELOG.md`.
+
+Raised by the maintainer, 2026-08-20: **the name is out of date given the
+current library state.** It dates from when the CLI had one protocol in it, and
+`echolink` and `m17` are equally "hamvoip" — so `HAMVOIP_SECRET` named the
+*project* the file belonged to rather than the credential it held. The tell was
+in `docs/CLI.md`, which had to gloss it as "the IAX2 node secret" wherever it
+appeared; a name needing a gloss at every use is a name doing no work.
+
+Every other credential already followed the better convention — `ECHOLINK_PASSWORD`
+and the EL-15 `ECHOLINK_PROXY*` files are named for the `echolink` subcommand, so
+the file name says which command wants it. `IAX2_SECRET` puts the node secret on
+the same footing as the `iax2` subcommand that reads it.
+
+**Clean break, on the maintainer's call** — the old name is not read at all, not
+even with a deprecation warning. The reasoning: a fallback would keep a
+misleading name alive in scripts indefinitely, and the failure mode without one
+is loud in the common case (a prompt appears where none did before) and
+documented in the CHANGELOG with the one-line `mv` that fixes it. AllStarLink is
+the only protocol of the three that involves a node secret at all, so the
+population affected is small and knows exactly which file it holds.
+
+**Done when:** one definition changed, no reference to the old name outside a
+historical note, and the full suite green. ✅ 1008 tests, unchanged in number —
+this renames a constant, it does not alter behaviour, and the existing
+`SecretResolutionTests` cover the precedence chain either way.
+
 ### IAX-13 — Fetch the Web Transceiver token ✅ DONE
 **Depends on:** IAX-12 ✅ (OQ-10's observed contract). **Raised by:** the
 maintainer, 2026-08-17 — an app settings screen (APP-12) wants "log in, get
@@ -1714,7 +1745,7 @@ Three hazards, none of them optional:
 
 - **`echolink-oq9-2.pcap` contains the operator's account password in
   cleartext**, as an ASCII `0x02` frame in the client→proxy direction. Treat it
-  like `HAMVOIP_SECRET`. Only the **peer's half** may be checked in — which is
+  like `IAX2_SECRET`. Only the **peer's half** may be checked in — which is
   the standing `Tests/FIXTURES.md` rule, and here it is load-bearing rather
   than tidy.
 - **`echolink-oq9-3.pcap` contains the entire EchoLink directory** — 6548

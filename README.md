@@ -206,7 +206,7 @@ answer is a claim about the peers measured so far, and re-checking against a
 new peer is one command. See [`docs/CLI.md`](docs/CLI.md).
 
 ```sh
-export HAMVOIP_SECRET="$(cat path/to/secret)"   # never --secret: argv is visible in ps
+export IAX2_SECRET="$(cat path/to/secret)"   # never --secret: argv is visible in ps
 
 # AllStarLink, with your own credentials on the node (IAX direct / registered)
 swift run hamvoip-cli iax2 --host node.example.org --node 55553 \

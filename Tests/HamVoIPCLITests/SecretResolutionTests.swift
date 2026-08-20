@@ -30,7 +30,7 @@ final class SecretResolutionTests: XCTestCase {
     }
 
     func testAnEmptyEnvironmentVariableIsTreatedAsAbsent() throws {
-        // `HAMVOIP_SECRET=` in a script is much more likely to be a mistake
+        // `IAX2_SECRET=` in a script is much more likely to be a mistake
         // than a deliberate request to authenticate with an empty password.
         let resolved = try SecretPrompt.resolve(
             commandLineValue: nil,
@@ -60,7 +60,7 @@ final class SecretResolutionTests: XCTestCase {
         let sources: [SecretPrompt.Source] = [
             .commandLine(flag: "--secret"),
             .environment(SecretPrompt.environmentVariable),
-            .configFile("/somewhere/HAMVOIP_SECRET"),
+            .configFile("/somewhere/IAX2_SECRET"),
             .prompt,
             .none,
         ]
@@ -71,8 +71,8 @@ final class SecretResolutionTests: XCTestCase {
             SecretPrompt.Source.environment(SecretPrompt.environmentVariable)
                 .description.contains(SecretPrompt.environmentVariable))
         XCTAssertTrue(
-            SecretPrompt.Source.configFile("/somewhere/HAMVOIP_SECRET")
-                .description.contains("/somewhere/HAMVOIP_SECRET"),
+            SecretPrompt.Source.configFile("/somewhere/IAX2_SECRET")
+                .description.contains("/somewhere/IAX2_SECRET"),
             "the banner must name the file, so a stale value is findable")
     }
 }

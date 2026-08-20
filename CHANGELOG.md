@@ -53,6 +53,28 @@ major version is 0, the API may change in any release.
 - A malformed `ECHOLINK_PROXY_PORT` is an error rather than a silent fall back
   to 8100.
 
+### Removed — **breaking**
+
+- **`HAMVOIP_SECRET` is now `IAX2_SECRET` (CLI-3), with no fallback.** The old
+  environment variable and the old `~/.config/swift-hamvoip/HAMVOIP_SECRET` file
+  are no longer read at all. **If you have either, rename it**; otherwise
+  `hamvoip-cli iax2` will silently stop finding your secret and start prompting
+  (or, with no terminal, place the call unauthenticated).
+
+  ```sh
+  mv ~/.config/swift-hamvoip/HAMVOIP_SECRET ~/.config/swift-hamvoip/IAX2_SECRET
+  ```
+
+  The name dated from when the CLI had one protocol in it. `echolink` and `m17`
+  are equally "hamvoip", so `HAMVOIP_SECRET` said which *project* the file
+  belonged to rather than which credential it held — `docs/CLI.md` had to gloss
+  it as "the IAX2 node secret" wherever it appeared. Credentials are now named
+  for the subcommand that uses them, which is what `ECHOLINK_PASSWORD` and
+  `ECHOLINK_PROXY*` already did. Nothing else changes: same precedence
+  (`--secret` → environment → config file → prompt), same `--secret` flag, same
+  behaviour once found. Currawong is unaffected — it stores its secret in the
+  Keychain and never reads this variable.
+
 ## [0.5.2] — 2026-08-17
 
 One task, cut as its own release because an app is waiting on it: Currawong's

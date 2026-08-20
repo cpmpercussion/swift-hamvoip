@@ -176,10 +176,21 @@ The values that never change between runs live in a config directory, so they
 do not have to be typed or exported every time:
 
 ```
-~/.config/swift-hamvoip/CALLSIGN            your callsign
-~/.config/swift-hamvoip/ECHOLINK_PASSWORD   your EchoLink account password
-~/.config/swift-hamvoip/HAMVOIP_SECRET      the IAX2 node secret
+~/.config/swift-hamvoip/CALLSIGN                     every command
+~/.config/swift-hamvoip/IAX2_SECRET                  iax2      node secret
+~/.config/swift-hamvoip/ALLSTARLINK_PORTAL_PASSWORD  wt-token  portal password
+~/.config/swift-hamvoip/ECHOLINK_PASSWORD            echolink  account password
+~/.config/swift-hamvoip/ECHOLINK_PROXY               echolink  proxy host
+~/.config/swift-hamvoip/ECHOLINK_PROXY_PORT          echolink  proxy port
+~/.config/swift-hamvoip/ECHOLINK_PROXY_PASSWORD      echolink  proxy password
 ```
+
+**A credential is named for the subcommand that uses it**, so the file name
+tells you what it is for without a gloss. `IAX2_SECRET` was `HAMVOIP_SECRET`
+until 0.6.0, from when the CLI had only one protocol in it — `echolink` and
+`m17` are equally "hamvoip", so that name said which *project* the file belonged
+to rather than which credential it held. The old name no longer works; see the
+CHANGELOG.
 
 `$XDG_CONFIG_HOME` is honoured if it is set.
 
@@ -231,13 +242,13 @@ In order of preference:
 hamvoip-cli iax2 --host … --node … --username vk1xyz --callsign VK1XYZ
 
 # 2. Environment variable, for repeated use in one shell session.
-read -rs HAMVOIP_SECRET && export HAMVOIP_SECRET
+read -rs IAX2_SECRET && export IAX2_SECRET
 hamvoip-cli iax2 --host … --node … --username vk1xyz --callsign VK1XYZ
 
 # 2a. One-shot, from a file or the Keychain. Nothing persists, nothing
 #     reaches argv, and only the path reaches your shell history.
-HAMVOIP_SECRET="$(cat ~/.config/hamvoip/secret)" hamvoip-cli iax2 …
-HAMVOIP_SECRET="$(security find-generic-password -a hamvoip -s <account> -w)" \
+IAX2_SECRET="$(cat ~/.config/hamvoip/secret)" hamvoip-cli iax2 …
+IAX2_SECRET="$(security find-generic-password -a hamvoip -s <account> -w)" \
     hamvoip-cli iax2 …
 
 # 3. --secret. Scripting only, and it costs you the hazard above.
@@ -245,11 +256,11 @@ hamvoip-cli iax2 … --secret "$(cat ~/.config/hamvoip/secret)"
 ```
 
 **If it prompts when you expected it not to, the variable was not in the
-process environment** — the tool checks `HAMVOIP_SECRET` and treats an empty
+process environment** — the tool checks `IAX2_SECRET` and treats an empty
 value as absent, so a prompt means nothing was there to find. An `export`
 lives only in the shell that ran it: a new tab, a new terminal, a `sudo`, or a
 runner that starts a fresh shell per command all lose it. Confirm with
-`printenv HAMVOIP_SECRET | wc -c` in the *same* shell you are about to run
+`printenv IAX2_SECRET | wc -c` in the *same* shell you are about to run
 from, or sidestep the question entirely with the one-shot form above. Note
 also that `read` takes its input from stdin — paste a whole multi-line block
 at once and `read` will silently swallow the next line of the block as the
@@ -261,7 +272,7 @@ To put a secret in the Keychain rather than a plaintext file:
 security add-generic-password -a hamvoip -s <account> -w
 ```
 
-Precedence is `--secret` → `$HAMVOIP_SECRET` → prompt. The banner names the
+Precedence is `--secret` → `$IAX2_SECRET` → the config file → prompt. The banner names the
 source it used, and prints an explicit warning when the source was `--secret`,
 so a mistake is visible while you can still rotate the password. If there is no
 terminal to prompt on and no secret supplied, the call proceeds unauthenticated
@@ -322,7 +333,7 @@ changes.
 ### Running it
 
 ```sh
-export HAMVOIP_SECRET=…            # or let it prompt
+export IAX2_SECRET=…            # or let it prompt
 hamvoip-cli experiment oq5 --host node.example.org --node 55553 \
     --username vk1xyz --callsign VK1XYZ
 ```
@@ -1280,7 +1291,7 @@ hamvoip-cli iax2 \
     --calling-name "$TOKEN" \
     --calling-number "$NODE" \
     --callsign "$CALLSIGN"
-# HAMVOIP_SECRET=allstar
+# IAX2_SECRET=allstar
 ```
 
 Four of those are not what you would guess, and each was established by

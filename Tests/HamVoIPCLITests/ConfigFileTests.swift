@@ -212,7 +212,7 @@ final class ConfigFileTests: XCTestCase {
     func testTheIAX2SecretUsesTheSameMechanism() throws {
         // The file name matching the environment variable is the whole
         // convention; this asserts the default path also honours it.
-        try write("HAMVOIP_SECRET", "node-secret")
+        try write("IAX2_SECRET", "node-secret")
         let resolved = try SecretPrompt.resolve(
             commandLineValue: nil,
             environment: environment,
