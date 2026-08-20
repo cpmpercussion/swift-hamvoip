@@ -176,8 +176,9 @@ Phase 0  Bootstrap        BOOT-1             ✅ complete
 Phase 1  RadioCore        RC-1 … RC-11       ✅ complete
 Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1 … CLI-3      ✅ complete
-Phase 4  SwiftUI app      APP-1 … APP-13     APP-13 open; APP-3 done
-                                             2026-08-20, so SF-4 is met
+Phase 4  SwiftUI app      APP-1 … APP-14     APP-14 open; APP-13 done
+                                             2026-08-19, APP-3 2026-08-20,
+                                             so SF-4 is met
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
 Phase 6  EchoLink         EL-1 … EL-15       ✅ complete; M3 2026-08-13, and
                                              since run from the app
@@ -195,7 +196,7 @@ Phase 8  Silent mode      SIL-1              🔬 spike first — nothing schedu
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
 | **SIL-1** | Silent operating mode — design spike, on-device STT/TTS | `currawong` | Unscoped by design |
 | **OQ-6** | Codec2 LGPL relinking vs App Store signing | maintainer | Deferred until submission, deliberately |
-| **APP-13** | The EchoLink proxy stops being a channel field — app-wide private proxy, ephemeral public one. Fixes a real fault: the first connect persists a stranger's public proxy into the channel forever | `currawong` | Medium; no library change |
+| **APP-14** | M17 stops storing a secret it does not have — `connect()` writes an empty Keychain item for a mode whose own form says it has no account, and the alert it raises on failure is the one that once masked a real connection error | `currawong` | Small; no library change |
 
 **OQ-1b is not on that list on purpose.** It is settled as a *standing
 constraint* rather than an open decision: "EchoLink" is nominative use only,
@@ -1190,7 +1191,7 @@ call, locally notable in VK1. Trademark checked clear in class 9.
   accessory pane. ✅ **DONE** — `currawong` `a24f7f6`. The watchdog joined it
   afterwards (`f46b9d2`), hoisted out of the per-channel settings the way the
   operator identity was under APP-4.
-- **APP-13** — The EchoLink proxy stops being a channel field. ⏳ **OPEN** —
+- **APP-13** — The EchoLink proxy stops being a channel field. ✅ **DONE** —
   written up below.
 - **APP-14** — M17 stops storing a secret it does not have. ⏳ **OPEN** —
   written up below.
@@ -1498,7 +1499,7 @@ Sequencing against APP-11: APP-11's connect form is best fed by APP-12's
 stored token, so prefer IAX-13 → APP-12 → APP-11 — or land APP-11 first
 accepting a pasted token, and let APP-12 replace the paste.
 
-### APP-13 — The EchoLink proxy stops being a channel field ⏳ OPEN
+### APP-13 — The EchoLink proxy stops being a channel field ✅ DONE
 **Depends on:** EL-12 ✅ (library `v0.4.0`), APP-8 ✅, APP-12 ✅.
 **Where:** `currawong`. **Raised by:** the maintainer, 2026-08-19.
 
@@ -1601,6 +1602,15 @@ field or presses a proxy button; a private proxy entered once in Settings is
 used by every EchoLink channel and its password is in the Keychain; a channel
 saved by the current build comes forward with its private proxy intact and its
 public one discarded; and no stored channel blob contains a proxy host.
+
+✅ **Landed 2026-08-19/20** in `currawong` `19cc12b` and `58e5e2b`. The proxy is
+`EchoLinkProxySettings`, edited on the settings screen and filed in the Keychain
+under `EchoLinkProxySettings.passwordAccount`; `NodeSettings.host` is documented
+empty and unused for EchoLink and dropped on decode when `mode.usesProxy`, so a
+channel written by an older build cannot carry a proxy forward. Covered by
+`EchoLinkProxyTests` and `ProxyPickerTests`. **The status line above said OPEN
+until 2026-08-21** — the work had been done for two days, which is the sort of
+thing that makes an agent pick the task up a second time.
 
 ### APP-14 — M17 stops storing a secret it does not have ⏳ OPEN
 **Depends on:** APP-8 ✅, APP-12 ✅, BU-9 ✅.
