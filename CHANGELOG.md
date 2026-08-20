@@ -8,8 +8,51 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-08-20
+
+⚠️ **Two environment variables were renamed, neither with a fallback. Read
+*Removed* before upgrading** — `HAMVOIP_SECRET` is `IAX2_SECRET`, and the
+test-only `HAMVOIP_ECHOLINK_STATION_LIST` is `HAMVOIP_TEST_STATION_LIST`. The
+version number is a patch bump because **no library API changed**: all four
+products — `RadioCore`, `IAX2Kit`, `M17Kit`, `EchoLinkKit` — are
+source-compatible with v0.5.2, and the breaks are the CLI harness's and a test
+knob's. The header above still applies regardless: while the major version is 0,
+anything may change in any release.
+
+**The release Currawong's BU-3 was waiting for.** `AudioPipeline` can now hand
+out and activate the audio-session policy without an engine existing (RC-11), so
+the app can delete the copy it kept by hand on the path that decides whether the
+microphone works at all. That is why this is cut now rather than accumulating
+further.
+
+Also in: the private EchoLink proxy becomes one configured setting instead of
+three flags (EL-15), `--no-audio` sends the silence it always claimed to
+(CLI-2 — the flag unattended on-air tests depend on), and the Web Transceiver
+login contract is confirmed by AllStarLink rather than merely observed by us
+(OQ-10). **1016 tests, 2 skipped, 0 failures** at the tag.
+
 ### Added
 
+- **The audio-session policy no longer needs an engine (RC-11).** New
+  `AudioSessionPolicy`, plus `AudioPipeline.activateSession()` which applies and
+  activates it with no engine in the call; the existing instance method
+  delegates. `configureSession()` used to be an instance method, so reaching the
+  category, mode and options meant owning a pipeline — and owning one meant
+  having built an `AVAudioEngine`, which is the ordering that produces the fault
+  Currawong tracks as BU-1: an engine whose input unit is instantiated under
+  `.soloAmbient` reports a 0 Hz input rate and never recovers, so every PTT press
+  for the life of the process fails to build a converter. **Consumers who spelled
+  the policy out by hand to avoid that can now stop.** Currawong is the known
+  case and will delete its copy against this release (its BU-3).
+
+  The policy is raw values rather than `AVAudioSession.Category` and friends,
+  which buys two things: those types are iOS-only and this package's tests run on
+  macOS, so a typed constant could not be pinned by a test that actually runs;
+  and the `allowBluetooth` → `allowBluetoothHFP` rename in the iOS 26 SDK stops
+  mattering, since both spellings are the same option with the same raw value and
+  only one of them compiles against any given SDK. The round trip from the raws
+  back to the symbols is tested, but that test is iOS-gated and so does not run
+  on CI's macOS runner.
 - **`hamvoip-cli echolink` reads its proxy from the config directory (EL-15).**
   `ECHOLINK_PROXY`, `ECHOLINK_PROXY_PORT` and `ECHOLINK_PROXY_PASSWORD` join
   `CALLSIGN` and `ECHOLINK_PASSWORD` under the existing convention — a file
@@ -52,6 +95,46 @@ major version is 0, the API may change in any release.
   anyone passing them: the defaults are still 8100 and `PUBLIC`.
 - A malformed `ECHOLINK_PROXY_PORT` is an error rather than a silent fall back
   to 8100.
+- **The station-list conformance test's variable is `HAMVOIP_TEST_STATION_LIST`,
+  was `HAMVOIP_ECHOLINK_STATION_LIST`.** Test-only and opt-in; no library or CLI
+  behaviour depends on it. Deliberately *not* renamed to
+  `ECHOLINK_STATION_LIST`, which is what CLI-3's "name it after the subcommand"
+  rule would suggest: the CLI's config-file convention is a file named for the
+  environment variable it stands in for, so that name would look like it belonged
+  in `~/.config/swift-hamvoip/` beside `ECHOLINK_PASSWORD`, where nothing would
+  read it — the exact fault EL-15 was opened for. `TEST_` keeps it out of the
+  credential namespace, and the `HAMVOIP_` prefix CLI-3 stripped from
+  `HAMVOIP_SECRET` is right here for the reason it was wrong there: this knob
+  belongs to the package rather than to a subcommand. If the old variable is set
+  and the new one is not, the test now says so in its skip message instead of
+  quietly running nothing.
+
+### Fixed
+
+- **`--no-audio` sends the silence it promises (CLI-2).** The flag printed "PTT
+  will send silence" and sent nothing at all: the only frame source was
+  `AudioPipeline.startCapture(onFrame:)`, inside the branch the flag switches
+  off, so a key-down changed the client's state and was then offered no PCM —
+  `Datagrams transmitted: 0`, and a second client on the same reflector heard no
+  stream. Found while settling Currawong's BU-8 with two CLI instances, which
+  keyed up twice and put nothing on the air.
+
+  This matters more than a wrong banner would, because `--no-audio` is the mode
+  an **unattended on-air test** runs in: nobody is there to talk into a
+  microphone, so producing carrier without hardware is the flag's whole job.
+  Affects `iax2`, `m17` and `echolink` alike.
+
+  There were two faults and the second hid the first. `SilentCaptureSource` now
+  feeds the same bridge the microphone tap feeds — 160 samples of zero every
+  20 ms, continuously, because the client drops frames while unkeyed. But the
+  transmit loop was only added to the task group when a pipeline existed, so the
+  silence was produced and nothing consumed it; it is now added whenever either
+  source is live, while the receive and audio-signal loops stay pipeline-gated
+  because those are the ones whose empty streams end a session instantly.
+
+  Confirmed on air against `m17-cbr.charlesmartin.au` module A with `--no-audio`
+  at both ends: 69 datagrams for a three-second over, and the observer read
+  `ended — end of over`.
 
 ### Removed — **breaking**
 

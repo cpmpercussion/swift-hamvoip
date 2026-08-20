@@ -23,10 +23,11 @@ which is patented.
 
 ## Status
 
-**v0.5.2.** 981 tests, green on `main` — a few more with the Codec2 framework
+**v0.5.3.** 1016 tests, green on `main` — a few more with the Codec2 framework
 present, and one that skips unless it is given a station-list download. This is
-a 0.x release — the API will change. As of v0.5.0 **every mode has both audio
-directions confirmed on the air.**
+a 0.x release — the API will change, and v0.5.3 renamed the CLI's
+`HAMVOIP_SECRET` to `IAX2_SECRET` with no fallback. As of v0.5.0 **every mode has
+both audio directions confirmed on the air.**
 
 | Module | State |
 |---|---|

@@ -95,7 +95,7 @@ rather than loud:
   capture is 6444 other operators' entries, and a hand-picked subset of it is
   the same data with the provenance filed off. What stands in for a fixture is
   a measurement recorded in the EL-11 plan entry plus an opt-in conformance
-  test (`HAMVOIP_ECHOLINK_STATION_LIST`) that anyone holding the capture can
+  test (`HAMVOIP_TEST_STATION_LIST`) that anyone holding the capture can
   run. If a truncated-list capture is ever taken, a fixture becomes possible
   and would be welcome — but nothing is waiting on it.
 

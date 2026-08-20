@@ -82,9 +82,9 @@ remembered; if it disagrees with the repository, the repository is right.
   `CGSM` target, a test-only `TestSupport` target and five test targets. One
   Swift dependency, `swift-argument-parser`, authorised by CLI-1; `CGSM` is
   vendored C, not a dependency (EL-8, LP-4).
-- `swift build` and `swift test` are green: **981 tests, no failures**
-  (checked 2026-08-17, at the v0.5.2 tag). One of those is skipped unless
-  `HAMVOIP_ECHOLINK_STATION_LIST` names a directory-list download — the EL-11
+- `swift build` and `swift test` are green: **1016 tests, no failures**
+  (checked 2026-08-20, at the v0.5.3 tag). One of those is skipped unless
+  `HAMVOIP_TEST_STATION_LIST` names a directory-list download — the EL-11
   conformance test, which cannot ship its data. CI runs the SPDX check on
   Ubuntu and build + test on macOS 14.
 - **`EchoLinkKit` is complete, and Phase 6 is done.** Proxy framing, proxy
@@ -117,6 +117,16 @@ remembered; if it disagrees with the repository, the repository is right.
   behaviour change: one command per protocol (`iax2` with `connect` kept as an
   alias, `echolink`, `m17`), the OQ probes moved under `experiment`, and
   `--version` now reports the package version instead of a stale `0.1.0`.
+- **Released as `v0.5.3`, 2026-08-20** — RC-11, EL-15, CLI-2, CLI-3 and OQ-10.
+  Cut because Currawong's BU-3 needs a tag carrying RC-11's
+  `AudioPipeline.activateSession()` before it can delete the app's hand-kept copy
+  of the audio-session policy. **A patch bump carrying two renames**, both
+  without a fallback: `HAMVOIP_SECRET` → `IAX2_SECRET` (CLI-3) and the test-only
+  `HAMVOIP_ECHOLINK_STATION_LIST` → `HAMVOIP_TEST_STATION_LIST`. Patch rather
+  than minor is the maintainer's call, on the grounds that no library API
+  changed — all four products are source-compatible with v0.5.2 — and the breaks
+  belong to the CLI harness and a test knob. 1016 tests green at the tag, 2
+  skipped.
 - **Released as `v0.5.2`, 2026-08-17** — IAX-13, the Web Transceiver token
   fetch, plus `hamvoip-cli wt-token`. Cut on its own because Currawong's APP-12
   settings screen has the portal-login pane written and disabled until a tag
@@ -2186,7 +2196,7 @@ Evidence takes two other forms, both of which keep the data out of the tree:
 1. **A measurement over the real list, recorded below.** Every rule in the
    parser is a counted fact about 6444 real entries, not a reading of three.
 2. **A conformance test that runs against the real download** —
-   `testTheRealListParses`. Skipped unless `HAMVOIP_ECHOLINK_STATION_LIST`
+   `testTheRealListParses`. Skipped unless `HAMVOIP_TEST_STATION_LIST`
    points at a copy, which is not committed and cannot be. CI never runs it;
    anyone holding the capture can, and it asserts the tally below.
 

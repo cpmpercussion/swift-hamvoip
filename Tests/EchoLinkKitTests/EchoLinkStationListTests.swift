@@ -24,7 +24,7 @@ import XCTest
 ///    with its tally.
 /// 2. **`testTheRealListParses`, below** — the conformance test proper. It runs
 ///    the parser over that same real list and asserts the tally. It is skipped
-///    unless `HAMVOIP_ECHOLINK_STATION_LIST` points at a copy, because the copy
+///    unless `HAMVOIP_TEST_STATION_LIST` points at a copy, because the copy
 ///    may not be committed. Anyone holding the capture can re-run it; CI never
 ///    does.
 ///
@@ -306,16 +306,46 @@ final class EchoLinkStationListTests: XCTestCase {
     ///
     /// **This is the evidence.** Everything above tests the parser against
     /// rules; this tests the rules against the wire. It is skipped unless
-    /// `HAMVOIP_ECHOLINK_STATION_LIST` names a file holding the concatenated
-    /// `0x02` payloads of a directory list download, because that file contains
+    /// `HAMVOIP_TEST_STATION_LIST` names a file holding the concatenated `0x02`
+    /// payloads of a directory list download, because that file contains
     /// thousands of other operators' details and cannot be committed.
+    ///
+    /// ## Why the name is not `ECHOLINK_STATION_LIST`
+    ///
+    /// CLI-3 renamed credentials after the subcommand that uses them, and the
+    /// obvious application of that rule here would collide with something worse.
+    /// The CLI's config-file convention is *a file named for the environment
+    /// variable it stands in for*, so an `ECHOLINK_STATION_LIST` would look like
+    /// it belonged in `~/.config/swift-hamvoip/` beside `ECHOLINK_PASSWORD` —
+    /// where nothing would read it. That is precisely the fault EL-15 was opened
+    /// for: a config directory holding a setting that looked configured and did
+    /// nothing.
+    ///
+    /// So `TEST_` keeps it out of the credential namespace, and the `HAMVOIP_`
+    /// prefix that CLI-3 removed from `HAMVOIP_SECRET` is *right* here for the
+    /// reason it was wrong there — this knob belongs to the package as a whole
+    /// rather than to any one subcommand, so saying which project it is for is
+    /// the useful thing to say.
     ///
     /// The expected numbers are the measurement recorded in the EL-11 entry of
     /// `docs/DEVELOPMENT-PLAN.md`. A different capture will have different
     /// totals, so those are only asserted for the reference file's exact size.
     func testTheRealListParses() throws {
-        let variable = "HAMVOIP_ECHOLINK_STATION_LIST"
-        guard let path = ProcessInfo.processInfo.environment[variable], !path.isEmpty else {
+        let variable = "HAMVOIP_TEST_STATION_LIST"
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment[variable], !path.isEmpty else {
+            // **Name the rename in the skip.** This test's failure mode is a
+            // silent skip, so somebody still exporting the old variable would
+            // see the suite go green having run nothing — the same shape of
+            // quiet nothing-happened that CLI-3's rename produced for the node
+            // secret, and worth one branch to avoid.
+            if let stale = environment["HAMVOIP_ECHOLINK_STATION_LIST"], !stale.isEmpty {
+                throw XCTSkip("""
+                    HAMVOIP_ECHOLINK_STATION_LIST is set but is no longer read: it was renamed \
+                    to \(variable) in v0.5.3. Export \(variable) instead — the path itself is \
+                    unchanged, and this test would otherwise have skipped silently.
+                    """)
+            }
             throw XCTSkip("""
                 set \(variable) to a directory-list download to run the conformance test. \
                 The reference file is not committed: it holds thousands of other operators' \
