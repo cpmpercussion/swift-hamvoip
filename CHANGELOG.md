@@ -8,6 +8,18 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- **`hamvoip-cli echolink` reads its proxy from the config directory (EL-15).**
+  `ECHOLINK_PROXY`, `ECHOLINK_PROXY_PORT` and `ECHOLINK_PROXY_PASSWORD` join
+  `CALLSIGN` and `ECHOLINK_PASSWORD` under the existing convention — a file
+  named for the environment variable it stands in for, resolved command line →
+  environment → file → default. With a private proxy configured, `--proxy` and
+  its companions become optional. Prompted by a config directory found holding
+  the password alone: nothing read it, because `--proxy-password` was the one
+  credential in the CLI that bypassed the resolution chain, so it looked
+  configured and did nothing.
+
 ### Changed
 
 - **The Web Transceiver login contract is confirmed by AllStarLink, not just
@@ -29,6 +41,17 @@ major version is 0, the API may change in any release.
   can be given. Recorded in `docs/reference/PROVENANCE.md`, including why an answer from the
   service's own operator is a permitted source where a reverse-engineered
   third-party write-up is not.
+- **A configured proxy password is only ever sent to its own proxy (EL-15).**
+  Dial any other host, or `--auto-proxy`, and it falls back to `PUBLIC` with a
+  note on stderr. The proxy login hashes the password into a digest, so a
+  stranger's proxy handed a private one gets material to attack offline while we
+  gain nothing — a public proxy accepts `PUBLIC` regardless. `--proxy-password`
+  other than `PUBLIC` is now **refused** with `--auto-proxy`.
+- `--proxy-port` and `--proxy-password` became optional rather than defaulted,
+  so "not given" is distinguishable from "given the default". No change for
+  anyone passing them: the defaults are still 8100 and `PUBLIC`.
+- A malformed `ECHOLINK_PROXY_PORT` is an error rather than a silent fall back
+  to 8100.
 
 ## [0.5.2] — 2026-08-17
 

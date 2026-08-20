@@ -881,6 +881,55 @@ briefly, which the command says on every auto-selected run. For sustained use �
 which is what an app on cellular is — run a **private proxy**: echolink.org
 distributes `EchoLinkProxy.jar`, and `--proxy` is how you point at it.
 
+### A private proxy is one setting, not three (EL-15)
+
+Host, port and password are one setting with three parts, and they resolve
+together (`EchoLinkProxySettings`). The config directory takes all three, under
+the usual convention that a file is named for the environment variable it stands
+in for:
+
+```sh
+echo 'proxy.example.org'  > ~/.config/swift-hamvoip/ECHOLINK_PROXY
+echo '8100'               > ~/.config/swift-hamvoip/ECHOLINK_PROXY_PORT
+printf '%s' 'the password' > ~/.config/swift-hamvoip/ECHOLINK_PROXY_PASSWORD
+chmod 600 ~/.config/swift-hamvoip/ECHOLINK_PROXY_PASSWORD
+```
+
+after which `--proxy` and its companions are optional:
+
+```sh
+swift run hamvoip-cli echolink --directory-server <IPv4> --peer <IPv4> --node '*ECHOTEST*'
+```
+
+Precedence is the usual command line → environment → config file → default, so a
+one-off against a different proxy needs no edit. A malformed
+`ECHOLINK_PROXY_PORT` is an error rather than a silent fall back to 8100: the
+fallback would connect to *something*, and the operator would never learn the
+file was wrong.
+
+**They resolve together because resolving them apart is what went wrong.** A
+config directory can end up holding `ECHOLINK_PROXY_PASSWORD` and nothing else —
+a password with no proxy beside it, which no code can act on, and which reads
+like a working setting because it is named like one.
+
+#### The password only ever reaches its own proxy
+
+A configured proxy password is used **only when the proxy being dialled is the
+configured one**. Dial anything else — `--proxy someone-else`, or `--auto-proxy`,
+where the host comes off a public list — and it falls back to `PUBLIC`, with a
+note on stderr saying so.
+
+This is a safety rule, not tidiness. The proxy login hashes the password into a
+digest, so a stranger's proxy handed a private one gets material to attack
+offline, and we gain nothing by sending it: a public proxy accepts `PUBLIC`
+regardless. `--proxy-password` with a value other than `PUBLIC` is refused
+outright alongside `--auto-proxy`, because there the destination is a stranger by
+definition, and a password typed on purpose deserves an error rather than a
+silent substitution.
+
+An explicit `--proxy-password` otherwise wins: naming a host and a password
+together is a deliberate act.
+
 ### Two passwords, and only one of them is secret
 
 A proxied EchoLink session carries two different secrets a few bytes apart on
@@ -888,7 +937,7 @@ the same TCP connection, and confusing them is the easiest mistake here:
 
 | | What it is | Secret? |
 |---|---|---|
-| **Proxy password** | `--proxy-password`. `PUBLIC` on a public proxy — the literal string, and the only value ever observed. Hashed into the login digest, never sent in clear. | No |
+| **Proxy password** | `--proxy-password`, `$ECHOLINK_PROXY_PASSWORD`, or the config file. `PUBLIC` on a public proxy — the literal string, the public-proxy password *by definition*, and the only value ever observed in the wild. Hashed into the login digest, never sent in clear. | Only on a private proxy — see EL-15 above |
 | **Account password** | Your own EchoLink account password. Relayed *in cleartext* to the directory server. | **Yes** |
 
 They are separate Swift types (`EchoLinkProxyPassword`,
