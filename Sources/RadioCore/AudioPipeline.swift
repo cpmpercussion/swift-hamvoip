@@ -34,7 +34,8 @@ public enum AudioPipelineError: Error, Equatable, CustomStringConvertible, Senda
 ///    (`0x4`); only one of them compiles against any given SDK, so a typed
 ///    constant needs a `#if compiler` shim and a raw one does not.
 ///
-/// ``AudioPipeline/activateSession()`` is what applies it.
+/// `AudioPipeline.activateSession()` — iOS-only, so it is not a symbol link
+/// here — is what applies it.
 public struct AudioSessionPolicy: Equatable, Sendable {
     /// Raw value of `AVAudioSession.Category`.
     public let category: String
