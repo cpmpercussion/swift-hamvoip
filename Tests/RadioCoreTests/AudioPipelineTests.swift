@@ -1060,3 +1060,37 @@ final class CaptureDrainTaskTests: XCTestCase {
         XCTAssertEqual(collector.frames.first, frame(7))
     }
 }
+
+
+// MARK: - Audio-session policy (RC-11)
+
+/// The policy is the one thing in this file that can be asserted on any
+/// platform, and it is worth asserting: it decides whether the microphone
+/// works at all, and it used to exist twice — here and, spelled out by hand,
+/// in Currawong's `AudioIO` (the app's `BU-3`).
+final class AudioSessionPolicyTests: XCTestCase {
+    func testRadioPolicyPinsCategoryModeAndOptions() {
+        let policy = AudioSessionPolicy.radio
+        XCTAssertEqual(policy.category, "AVAudioSessionCategoryPlayAndRecord")
+        XCTAssertEqual(policy.mode, "AVAudioSessionModeVoiceChat")
+        XCTAssertEqual(policy.options, 0xC, "allowBluetooth (0x4) | defaultToSpeaker (0x8)")
+    }
+
+    /// The raw values above are only correct if they still round-trip to the
+    /// symbols they name. This is the test that would catch Apple changing one
+    /// — and it runs only on an iOS destination, which CI is not, so it is a
+    /// backstop for whoever runs the suite on a simulator rather than a guard
+    /// that fires on every push.
+    func testRawValuesRoundTripToTheAVFoundationSymbols() throws {
+        #if os(iOS)
+        let policy = AudioSessionPolicy.radio
+        XCTAssertEqual(AVAudioSession.Category(rawValue: policy.category), .playAndRecord)
+        XCTAssertEqual(AVAudioSession.Mode(rawValue: policy.mode), .voiceChat)
+        XCTAssertEqual(
+            AVAudioSession.CategoryOptions(rawValue: policy.options),
+            [AVAudioSession.CategoryOptions(rawValue: AudioSessionPolicy.allowBluetooth), .defaultToSpeaker])
+        #else
+        throw XCTSkip("AVAudioSession is iOS-only")
+        #endif
+    }
+}

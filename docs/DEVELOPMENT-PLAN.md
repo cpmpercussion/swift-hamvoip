@@ -161,7 +161,7 @@ has merged and the code it describes exists.
 
 ```
 Phase 0  Bootstrap        BOOT-1             ✅ complete
-Phase 1  RadioCore        RC-1 … RC-11       RC-11 open (small, unblocked)
+Phase 1  RadioCore        RC-1 … RC-11       ✅ complete
 Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1              ✅ complete
 Phase 4  SwiftUI app      APP-1 … APP-13     APP-3, APP-13 open; APP-3 the
@@ -174,13 +174,12 @@ Phase 7  M17Kit           M17-1 … M17-6      RX proven 2026-08-16; TX heard
 Phase 8  Silent mode      SIL-1              🔬 spike first — nothing scheduled
 ```
 
-**Everything still open, in one list**, as of 2026-08-19:
+**Everything still open, in one list**, as of 2026-08-20:
 
 | | What | Where | Size |
 |---|---|---|---|
 | **APP-3** | Live Activity — SF-4, the only unmet safety requirement. Floor rises to iOS 16.1 | `currawong` | The largest of the tasks |
 | **M17-6** | A chosen destination — DST is still hard-coded `BROADCAST`. The parrot half of this task is no longer needed: transmit was confirmed heard 2026-08-17 (see the M17-5 row) | here | Small library change; no longer gates anything |
-| **RC-11** | Audio-session policy without an engine (the app's `BU-3`) | here | Small |
 | **IAX-10** | Pace transmitted frames instead of bursting them | here | Small |
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
 | **SIL-1** | Silent operating mode — design spike, on-device STT/TTS | `currawong` | Unscoped by design |
@@ -926,7 +925,7 @@ in `RadioCoreTests` that is a plain `final class` rather than an actor; every
 mode's mapping table is asserted case by case; and a live IAX2 session shows
 `radioEvents` is exactly `events.compactMap(\.radioEvent)`, in order.
 
-### RC-11 — Audio-session policy without an engine ⏳ OPEN
+### RC-11 — Audio-session policy without an engine ✅ DONE
 **Depends on:** RC-7 ✅. **Files:** `Sources/RadioCore/AudioPipeline.swift` +
 tests. **Raised by:** the app, as `BU-3` in `currawong/docs/BRINGUP.md`. Small,
 and unblocked.
@@ -954,6 +953,30 @@ the two cannot drift, and a test pins the category/mode/options. Then the app
 deletes its duplicate and the comment explaining it — **but that deletion is
 the app's own change, made in its repository after this ships in a release it
 depends on.** This repository does not write to Currawong.
+
+**Delivered.** `AudioSessionPolicy` holds the policy; `AudioPipeline
+.activateSession()` is a static, iOS-only method that applies and activates it
+with no engine anywhere in the call; `configureSession()` delegates to it and
+is now three words long.
+
+Two decisions worth knowing before touching it:
+
+- **The policy is raw values, not `AVAudioSession.Category` and friends.**
+  Those types are iOS-only, and this package's tests run on macOS, so a typed
+  constant could not be pinned by a test that actually runs. It also disposes
+  of the `allowBluetooth` → `allowBluetoothHFP` rename in the iOS 26 SDK: same
+  option, same raw value (`0x4`), and only one spelling compiles against any
+  given SDK — the app carries a `#if compiler` shim for exactly this, and does
+  not need to any more.
+- **Two tests, and only one of them runs in CI.** The raw values are pinned on
+  any platform; the round-trip from those raws back to `.playAndRecord` /
+  `.voiceChat` / the options is `#if os(iOS)` and therefore skipped on the
+  macOS runner. That second one is the test that would catch Apple changing a
+  raw string, so it is a backstop for whoever runs the suite on a simulator,
+  not a guard that fires on every push.
+
+The app's deletion of its copy is `BU-3` in `currawong/docs/BRINGUP.md`, and
+waits on a release.
 
 ### IAX-13 — Fetch the Web Transceiver token ✅ DONE
 **Depends on:** IAX-12 ✅ (OQ-10's observed contract). **Raised by:** the
