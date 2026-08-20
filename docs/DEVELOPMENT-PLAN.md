@@ -176,9 +176,9 @@ Phase 0  Bootstrap        BOOT-1             ✅ complete
 Phase 1  RadioCore        RC-1 … RC-11       ✅ complete
 Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1 … CLI-3      ✅ complete
-Phase 4  SwiftUI app      APP-1 … APP-14     APP-14 open; APP-13 done
-                                             2026-08-19, APP-3 2026-08-20,
-                                             so SF-4 is met
+Phase 4  SwiftUI app      APP-1 … APP-15     APP-14, APP-15 open; APP-13
+                                             done 2026-08-19, APP-3
+                                             2026-08-20, so SF-4 is met
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
 Phase 6  EchoLink         EL-1 … EL-15       ✅ complete; M3 2026-08-13, and
                                              since run from the app
@@ -196,6 +196,7 @@ Phase 8  Silent mode      SIL-1              🔬 spike first — nothing schedu
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
 | **SIL-1** | Silent operating mode — design spike, on-device STT/TTS | `currawong` | Unscoped by design |
 | **OQ-6** | Codec2 LGPL relinking vs App Store signing | maintainer | Deferred until submission, deliberately |
+| **APP-15** | The pane picker can be laid out off the top of a short window, stranding an operator on a pane with no way back. Fixed twice inside the column and regressed twice; the switcher moves to the toolbar | `currawong` | Small; no library change |
 | **APP-14** | M17 stops storing a secret it does not have — `connect()` writes an empty Keychain item for a mode whose own form says it has no account, and the alert it raises on failure is the one that once masked a real connection error | `currawong` | Small; no library change |
 
 **OQ-1b is not on that list on purpose.** It is settled as a *standing
@@ -1195,6 +1196,8 @@ call, locally notable in VK1. Trademark checked clear in class 9.
   written up below.
 - **APP-14** — M17 stops storing a secret it does not have. ⏳ **OPEN** —
   written up below.
+- **APP-15** — The pane picker cannot be laid out off-screen. ⏳ **OPEN** —
+  written up below.
 
 ℹ️ **APP-5 … APP-9 were written up after the fact**, on 2026-08-16, from the
 app's commit history. APP-5 and APP-6 were cited by `currawong` commits with no
@@ -1664,6 +1667,48 @@ no alert; an AllStarLink channel still stores its node secret and a Web
 Transceiver channel still stores only its token; the EchoLink question above is
 answered in the PR with a test behind whichever answer it has; and `make test`
 and `make test-macos` are green.
+
+### APP-15 — The pane picker cannot be laid out off-screen ⏳ OPEN
+**Depends on:** nothing. **Where:** `currawong`. **Raised by:** the maintainer,
+2026-08-21, driving the app.
+
+The split layout's detail column is rigid — status panel, level meters, a PTT
+button with a `minHeight`, and since `be3e1e4` a link button — so a window
+shorter than the column overflows. A `VStack` does not shrink a rigid child: it
+**centres** what it could not fit, so the column spills off *both* edges and
+whatever is first in the stack goes off the top. That was the pane picker, which
+is the only way off the Reflectors pane. Reported twice, both times as some
+version of "no way out of this situation".
+
+**It had already been fixed twice, and regressed twice.** Both fixes were a
+number or an alignment holding a rigid column against a window that can be any
+height: first moving the picker to the top of the stack, then `alignment: .top`
+plus `minHeight: 620`. The second held until `SessionLinkControl` added a button
+row to the session pane on 2026-08-17 and nobody re-measured the 620, which had
+been chosen on 2026-08-16. **The button renders only when there is a
+`lastConnectedName`**, so a fresh launch fit and a launch that had connected to
+anything did not — the bug was invisible until the app had been used, which is
+why it survived a release and two rounds of driving.
+
+**The fix is to stop measuring.** A toolbar item cannot be laid out off-screen by
+the column's overflow, at any window height, with any future session-pane
+content. macOS is also where a view switcher belongs. iPad keeps the inline
+picker: it shares this layout but its windows do not get short enough to
+overflow, and `.principal` competes with the navigation title there.
+
+**Not in scope:** making the detail column scroll. The status panel and the
+button that ends a transmission must not be scrollable away while a transmission
+is running, which is why the column is not a scroll view — that reasoning is
+unchanged and is recorded on `detailColumn`.
+
+**Still open underneath this:** `.reflectors`, `.stations` and `.setup` have no
+`ScrollView` of their own, where `.connect` and `.keypad` do, so their content
+is still clipped by a short window. Nothing load-bearing is in the clipped
+region now, but a pane cut off mid-list reads as a rendering fault.
+
+**Done when:** the switcher is reachable at every window height the OS permits,
+including one shorter than the session pane; a test drives the app at a short
+window size and finds it; and `make test` and `make test-macos` are green.
 
 ## Phase 5 — BLE PTT (after APP-2)
 
