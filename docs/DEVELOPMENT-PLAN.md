@@ -37,7 +37,9 @@ do not improvise a different design.
    section. If plan and spec disagree, the spec wins; note the discrepancy in
    the PR description.
 7. **Don't expand scope.** No extra codecs, no encryption UI (FR-2.5), no
-   CallKit (PD-4), no volume-button PTT (PT-6), no AMBE modes ever (NG-1).
+   CallKit (PD-4), no volume-button PTT (PT-6), no AMBE modes ever (NG-1), no
+   `voip` background mode (PD-2 — it is PD-4 by another route; the reasoning is
+   written out there now rather than left implicit).
 8. **Style:** Swift 5.9, `async/await`, actors for stateful components,
    value types for frames/parsers, XCTest. No third-party Swift dependencies
    without a task that says so.

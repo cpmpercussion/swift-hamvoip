@@ -139,7 +139,25 @@ failure mode for software clients. These requirements are not negotiable.
 - **PD-1.** Networking via `Network.framework` (`NWConnection`), not BSD
   sockets. Required for IPv6/NAT64 and cellular handoff behaviour.
 - **PD-2.** Background modes: `audio`, `bluetooth-central`. Neither requires
-  Apple approval.
+  Apple approval. `audio` is what keeps a connection — and so a *received*
+  signal — alive with the screen locked; `bluetooth-central` is what keeps the
+  PTT accessory's link up while it is (PT-2).
+  **`voip` MUST NOT be added, and the reason is PD-4 reaching one step
+  further.** On its own the mode buys nothing: its historical job was keeping a
+  socket alive between wakeups, through an API deprecated years ago, and what
+  declaring it actually unlocks today is registration for PushKit VoIP pushes.
+  Those are chained to CallKit — since iOS 13 an app that takes a VoIP push must
+  report an incoming call to CallKit almost immediately or the system kills it,
+  and repeat offences stop push delivery altogether. So `voip` is a door whose
+  only exit is the framework PD-4 already rules out. It is also a mode this app
+  has no use for: its purpose is waking a suspended app for an *incoming* call,
+  and nothing here has one — the operator initiates every connection, and
+  half-duplex PTT has no event that needs to reach a suspended process. The
+  practical consequence worth knowing in advance is that **ActivityKit's
+  push-to-start is therefore unavailable too** (same door), which is why SF-4's
+  Live Activity is requested by the app itself and why the app being in the
+  background when it does so is an open risk rather than a solved problem — see
+  `currawong/docs/BRINGUP.md` `BU-10`.
 - **PD-3.** `com.apple.developer.networking.multicast` is NOT required for
   reflector modes. If local hotspot discovery is ever added, the request must
   begin early — Apple approval takes weeks.
