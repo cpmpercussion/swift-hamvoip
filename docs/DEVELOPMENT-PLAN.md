@@ -1192,6 +1192,8 @@ call, locally notable in VK1. Trademark checked clear in class 9.
   operator identity was under APP-4.
 - **APP-13** — The EchoLink proxy stops being a channel field. ⏳ **OPEN** —
   written up below.
+- **APP-14** — M17 stops storing a secret it does not have. ⏳ **OPEN** —
+  written up below.
 
 ℹ️ **APP-5 … APP-9 were written up after the fact**, on 2026-08-16, from the
 app's commit history. APP-5 and APP-6 were cited by `currawong` commits with no
@@ -1599,6 +1601,59 @@ field or presses a proxy button; a private proxy entered once in Settings is
 used by every EchoLink channel and its password is in the Keychain; a channel
 saved by the current build comes forward with its private proxy intact and its
 public one discarded; and no stored channel blob contains a proxy host.
+
+### APP-14 — M17 stops storing a secret it does not have ⏳ OPEN
+**Depends on:** APP-8 ✅, APP-12 ✅, BU-9 ✅.
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-08-21.
+
+`RadioSession.connect()` branches on `usesWebTransceiver` and nothing else. The
+Web Transceiver arm deliberately leaves the node-secret slot alone — its comment
+explains that writing an empty secret would *delete* the secret of every channel
+sharing that account string. The `else` arm then does exactly that for every
+other channel, M17 included.
+
+M17 has no secret. `ConnectFormView` says so on screen — "M17 reflectors are
+unauthenticated. Your callsign identifies you." — and its code comment says
+there is "no account and nothing to put in the Keychain". So the form and the
+storage layer disagree, and the storage layer is the one that runs: connecting
+to a reflector writes an empty string to `m17:<callsign>@<host>:<port>/<module>`,
+a slot nothing ever reads.
+
+**Why a harmless write is worth a task.** It is a write that exists only to
+fail. It failed for the whole of 2026-08-21's session against `M17-CBR`, and the
+alert it raised — "the secret was not stored" — is the *same* alert whose
+queue-rather-than-assign fix is documented on `RadioSession.present(title:message:)`:
+it once swallowed the real connection error behind a cosmetic one. A cosmetic
+alert on the happy path of a mode that has no secrets is that hazard rebuilt.
+The keychain failure that surfaced it was a stale unsigned build, not a defect —
+but a correct build hides the write rather than making it right.
+
+**Check EchoLink while in here, and decide rather than assume.**
+`secretAccount(for:)` returns `echolink:<callsign>` for `.echoLink`, which is the
+same app-wide account APP-12 moved the password to. `connect()` therefore writes
+the form's in-memory `secret` back over the settings screen's password, and
+`RadioSession` holds two separate copies of that one item — `secret`, loaded via
+`secretAccount(for:)`, and `echoLinkPassword`, loaded via
+`NodeSettings.echoLinkAccount(for:)`. They round-trip today. Whether they can be
+made to disagree — by changing the callsign, or by a failed read defaulting to
+`""` and then being written back — is the thing to establish. If they can, that
+is a lost password, not a cosmetic alert.
+
+**Shape of the fix.** The question the branch asks is not "is this Web
+Transceiver?" but "does this channel have a secret, and whose is it?" — which is
+a property of the mode, and belongs next to `secretAccount(for:)` in
+`NodeSettings` rather than inline in `connect()`. AllStarLink owns a per-channel
+node secret; EchoLink owns an app-wide password that the *settings* screen
+writes; M17 and Web Transceiver own nothing.
+
+**Not in scope:** removing the M17 case from `secretAccount(for:)`. It costs
+nothing, and a mode that never writes has no migration to perform.
+
+**Done when:** connecting an M17 channel performs no Keychain write and raises
+no alert; an AllStarLink channel still stores its node secret and a Web
+Transceiver channel still stores only its token; the EchoLink question above is
+answered in the PR with a test behind whichever answer it has; and `make test`
+and `make test-macos` are green.
 
 ## Phase 5 — BLE PTT (after APP-2)
 
