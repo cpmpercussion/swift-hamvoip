@@ -351,6 +351,7 @@ private final class EchoLinkSession: @unchecked Sendable {
     private let bridge = AudioFrameBridge()
 
     private var pipeline: AudioPipeline?
+    private var silentSource: Task<Void, Never>?
     private var rxMeter = LevelMeter()
     private var txMeter = LevelMeter()
     private var transmittedPackets = 0
@@ -450,7 +451,9 @@ private final class EchoLinkSession: @unchecked Sendable {
         if useAudioDevices {
             await startAudioDevices()
         } else {
-            await console.log("Audio devices not opened (--no-audio): PTT will send silence.")
+            startSilentSource()
+            await console.log(
+                "Audio devices not opened (--no-audio): PTT sends silence, 20 ms at a time.")
         }
 
         var terminal: RawTerminal?
@@ -482,8 +485,17 @@ private final class EchoLinkSession: @unchecked Sendable {
             // where this was found while working IAX-12.
             if pipeline != nil {
                 group.addTask { await self.runReceiveLoop() }
-                group.addTask { await self.runTransmitLoop() }
                 group.addTask { await self.runAudioSignalLoop() }
+            }
+            // The transmit loop also runs under `--no-audio`, where its frames
+            // come from `SilentCaptureSource` instead of a microphone. That is
+            // what makes the flag's promise true: without this the silence is
+            // produced and nothing consumes it, and PTT still puts nothing on
+            // air. The loop is safe to add here for the same reason the comment
+            // above gives — `AudioFrameBridge.frames` no longer finishes at
+            // once, because something is now feeding it.
+            if pipeline != nil || silentSource != nil {
+                group.addTask { await self.runTransmitLoop() }
             }
             if let keyReader {
                 group.addTask { await self.runKeyLoop(keyReader) }
@@ -518,6 +530,7 @@ private final class EchoLinkSession: @unchecked Sendable {
         guard !finished else { return }
         finished = true
         await client.stopTransmit()
+        silentSource?.cancel()
         pipeline?.stop()
         bridge.finish()
         await client.disconnect()
@@ -529,6 +542,13 @@ private final class EchoLinkSession: @unchecked Sendable {
     }
 
     // MARK: Audio devices
+
+    /// `--no-audio`'s stand-in for the microphone tap. Continuous, like the
+    /// tap, because the client drops frames while unkeyed.
+    private func startSilentSource() {
+        let bridge = self.bridge
+        silentSource = SilentCaptureSource.start { frame in bridge.submit(frame) }
+    }
 
     private func startAudioDevices() async {
         let pipeline = AudioPipeline()
