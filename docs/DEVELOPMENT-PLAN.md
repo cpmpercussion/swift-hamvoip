@@ -1900,21 +1900,55 @@ no channel that BU-9 resolved to keep — and whatever seeds `settings` when a
 stored selection does not resolve. The reproduction is cheap, so start there
 rather than from the code.
 
-**Two facts from the operator's own defaults, read 2026-08-21 while APP-18 was
-being driven.** They narrow it, and neither needed the app to be running:
+**Diagnosed 2026-08-21, and the title is wrong: launch does not invent
+anything.** Measured, with the app not running, then launched and left alone:
+three channels before, three after, and `selectedChannel` unchanged. Nothing on
+the launch path can append — `RadioSession.init` reads the list and the drafts
+and writes neither, and all three paths that reach `ChannelSet.add` are behind a
+button:
 
-* The invented channel is **written to the stored list**, not merely selected in
-  memory: `au.charlesmartin.currawong.channels` holds a third entry with a fresh
-  UUID, `mode: allStarLink`, and every string empty. So whatever mints it also
-  saves it, which is why these accumulate across launches.
-  `au.charlesmartin.currawong.channelDrafts` was `[]` at the time, so the draft
-  path is not holding it.
-* `au.charlesmartin.currawong.selectedChannel` was **set to the invented
-  channel's id** while `nodeSettings` — the working copy — still described
-  `M17-432 H`, a different channel with a different id. Launch is therefore
-  choosing the new row over the stored selection, not falling back to it. Setting
-  `selectedChannel` by hand to a real channel and relaunching came up on the
-  unnamed row again, which is the same fact from the other direction.
+* `connect()` adds the **validated** channel, which cannot be blank —
+  `validated()` throws on a missing host or node.
+* `saveDraft()` adds only when Save is pressed, and Save is disabled on a
+  pristine form (`isDraftDirty` is false).
+* `addChannel(_ channel: NodeSettings = NodeSettings())` — **the `+` button** —
+  adds exactly the observed row: fresh UUID, `mode: allStarLink`, every string
+  empty, `port: 4569`, and `ChannelSet.add` selects what it adds. It is the only
+  fresh `NodeSettings` in the tree that ever reaches the list.
+
+**Where the taps came from: the UI tests.** `ChannelLifecycleUITests`,
+`ChannelDeleteAfterConnectUITests` and `M17EndOfOverUITests` all click
+`Add channel` against the operator's **real** defaults, then name and delete what
+they added. A run that dies between the click and the naming leaves precisely
+this row behind — blank, `allStarLink`, selected — and the 2026-08-20 handoff
+records four of them after five runs of which four died. That is the same
+mechanism the delete test was already fixed for (it clears its own names first);
+the blank row has no name to clear.
+
+So what is left of APP-19 is not a launch bug. It is that **`+` commits an empty
+channel to storage immediately, selects it, and nothing says it is unsaved** —
+`isDraftAnUnsavedChannel` is false for it, because it *is* in the list — so a
+single tap is permanent and only Delete removes it.
+
+⚠️ **That makes the fix a design question rather than a bug fix**, and it is the
+maintainer's, because it is BU-9's rule applied one step further: if a channel is
+a working copy and Save is the only thing that writes one, then `+` should hand
+over an unsaved draft and the row should appear when it is saved or connected —
+which is what `isDraftAnUnsavedChannel` exists to describe. The alternative is to
+keep committing on `+` and prune blank channels at launch, which is a rule about
+what a stored channel may look like rather than about when one is stored.
+
+**Two facts from the defaults, worth keeping either way:** the row is in
+`au.charlesmartin.currawong.channels`, so whatever adds it also saves it; and
+`channelDrafts` was `[]` at the time, so the BU-9 draft path is not holding it.
+
+⚠️ **A correction to this entry as first written.** It said launch chooses the
+invented row over the stored selection, on the evidence that setting
+`selectedChannel` by hand and relaunching came up on the unnamed row anyway.
+That was `cfprefsd` caching a `defaults write` made moments after the app had
+been killed, not the app overriding anything: the hand-set selection was in force
+on the following launches, and `ChannelSet.init` keeps a stored id whenever the
+list still contains it, falling back to `channels.first` only when it does not.
 
 **Done when:** launching with any stored channel list adds nothing to it; the
 existing unnamed rows can be removed; and a test covers the launch path that
