@@ -176,8 +176,8 @@ Phase 0  Bootstrap        BOOT-1             ✅ complete
 Phase 1  RadioCore        RC-1 … RC-11       ✅ complete
 Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1 … CLI-3      ✅ complete
-Phase 4  SwiftUI app      APP-1 … APP-19     APP-14, APP-18, APP-19 open;
-                                             APP-15/16/17 done 2026-08-21,
+Phase 4  SwiftUI app      APP-1 … APP-19     APP-14, APP-19 open;
+                                             APP-15/16/17/18 done 2026-08-21,
                                              APP-3 2026-08-20, SF-4 met
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
 Phase 6  EchoLink         EL-1 … EL-15       ✅ complete; M3 2026-08-13, and
@@ -187,7 +187,7 @@ Phase 7  M17Kit           M17-1 … M17-6      RX proven 2026-08-16; TX heard
 Phase 8  Silent mode      SIL-1              🔬 spike first — nothing scheduled
 ```
 
-**Everything still open, in one list**, as of 2026-08-20:
+**Everything still open, in one list**, as of 2026-08-21:
 
 | | What | Where | Size |
 |---|---|---|---|
@@ -196,7 +196,6 @@ Phase 8  Silent mode      SIL-1              🔬 spike first — nothing schedu
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
 | **SIL-1** | Silent operating mode — design spike, on-device STT/TTS | `currawong` | Unscoped by design |
 | **OQ-6** | Codec2 LGPL relinking vs App Store signing | maintainer | Deferred until submission, deliberately |
-| **APP-18** | The session pane shows every control for every state, so the meters and PTT are dead space before a link exists and the connect form is a read-only wall after one. Retires APP-15's root cause | `currawong` | Medium; no library change |
 | **APP-19** | Launching the app adds an empty unnamed channel to the list, which is where the "leftover" orphan rows come from | `currawong` | Small; not yet diagnosed |
 | **APP-14** | M17 stops storing a secret it does not have — `connect()` writes an empty Keychain item for a mode whose own form says it has no account, and the alert it raises on failure is the one that once masked a real connection error | `currawong` | Small; no library change |
 
@@ -1203,8 +1202,8 @@ call, locally notable in VK1. Trademark checked clear in class 9.
   **DONE** — written up below.
 - **APP-17** — The link button dials what the panel is showing. ✅ **DONE** —
   written up below.
-- **APP-18** — The session pane shows the controls the state actually has. ⏳
-  **OPEN** — written up below.
+- **APP-18** — The session pane shows the controls the state actually has. ✅
+  **DONE** — written up below.
 - **APP-19** — Launching the app invents a channel. ⏳ **OPEN** — written up
   below.
 
@@ -1784,7 +1783,7 @@ fix**: `close()` starts an `_NSWindowTransformAnimation` that over-releases once
 the hosting view goes away, crashing the bundle with a SIGSEGV attributed to
 whichever unrelated test held the run loop.
 
-### APP-18 — The session pane shows the controls the state actually has ⏳ OPEN
+### APP-18 — The session pane shows the controls the state actually has ✅ DONE
 **Depends on:** APP-15 ✅, APP-16 ✅, APP-17 ✅.
 **Where:** `currawong`. **Raised by:** the maintainer, 2026-08-21, driving the app.
 
@@ -1842,6 +1841,46 @@ distinguishes its three states and its configuration is on the settings screen; 
 link dropped while keyed still releases, under test; and `make test` and
 `make test-macos` are green.
 
+✅ **Landed** in `currawong` PR #27, 2026-08-21. `make test-macos` is 600 tests,
+1 skipped, 0 failures; `make test` is green; and the disconnected pane was driven
+on screen — status panel, then the form, with the accessory light reading
+`No accessory` on the panel's link-state line.
+
+Three things are worth knowing beyond the entry above.
+
+**The decision is a value, not a comparison written twice.** The two halves are
+made in different files — `SessionPane` owns the meters and the PTT button,
+`RootView` owns the connect form and the pane picker — and they are complements,
+so they are both read off one `SessionPaneLayout`. A test asserts that exactly
+one of the two shows in every connection state, which is the way they would
+otherwise drift: a state showing both, or neither.
+
+**The picker drops `Connect` while a link is up**, rather than keeping a pane
+that would render greyed fields. The existing resolve-on-read selection made this
+nearly free — the stored choice comes back when its pane does, so connecting
+moves the picker on and disconnecting brings it back to where the operator left
+it. This is *not* the excluded item: the form is still not behind a click while
+disconnected, which is what "not in scope" ruled out.
+
+**The accessory sheet is gone with the row.** `AccessoryView` — a
+`NavigationStack`, a title and a Done button around `AccessoryPane` — existed
+only for the row to present on iPhone, and APP-12 had already put the
+configuration on the settings screen. It had no caller left, and it took with it
+the `isTransmitting` flag both it and `SettingsView` carried, which was always
+`false` at every remaining call site.
+
+**On the hazard:** the model gets there first. A peer hang-up runs
+`handleLinkLoss(reason:)`, which ends transmission with `.disconnecting` *before*
+the connection state reaches `.disconnected` and the button leaves the screen —
+so `onDisappear` fires into an already-idle session, and `endTransmit(reason:)`
+records a stop reason only when something was actually transmitting. That
+ordering is what keeps `.viewDisappeared` — an *unexpected* reason, which the
+status panel shows to the operator — from turning every dropped link into an
+accusation that the app lost its own screen. `SessionPaneStateTests` pins the
+ordering, and pins the `onDisappear` line separately by hosting a bare
+`PushToTalkButton` and removing it from the hierarchy: deleting that line fails
+that test and nothing else, which was checked by deleting it.
+
 ### APP-19 — Launching the app invents a channel ⏳ OPEN
 **Where:** `currawong`. **Raised by:** the maintainer, 2026-08-21; reproduced
 while driving.
@@ -1860,6 +1899,22 @@ on `scenePhase != .active`, and the launch-time pruning of a draft belonging to
 no channel that BU-9 resolved to keep — and whatever seeds `settings` when a
 stored selection does not resolve. The reproduction is cheap, so start there
 rather than from the code.
+
+**Two facts from the operator's own defaults, read 2026-08-21 while APP-18 was
+being driven.** They narrow it, and neither needed the app to be running:
+
+* The invented channel is **written to the stored list**, not merely selected in
+  memory: `au.charlesmartin.currawong.channels` holds a third entry with a fresh
+  UUID, `mode: allStarLink`, and every string empty. So whatever mints it also
+  saves it, which is why these accumulate across launches.
+  `au.charlesmartin.currawong.channelDrafts` was `[]` at the time, so the draft
+  path is not holding it.
+* `au.charlesmartin.currawong.selectedChannel` was **set to the invented
+  channel's id** while `nodeSettings` — the working copy — still described
+  `M17-432 H`, a different channel with a different id. Launch is therefore
+  choosing the new row over the stored selection, not falling back to it. Setting
+  `selectedChannel` by hand to a real channel and relaunching came up on the
+  unnamed row again, which is the same fact from the other direction.
 
 **Done when:** launching with any stored channel list adds nothing to it; the
 existing unnamed rows can be removed; and a test covers the launch path that
