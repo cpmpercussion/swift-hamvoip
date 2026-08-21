@@ -176,8 +176,8 @@ Phase 0  Bootstrap        BOOT-1             ✅ complete
 Phase 1  RadioCore        RC-1 … RC-11       ✅ complete
 Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1 … CLI-3      ✅ complete
-Phase 4  SwiftUI app      APP-1 … APP-19     APP-14, APP-19 open;
-                                             APP-15/16/17/18 done 2026-08-21,
+Phase 4  SwiftUI app      APP-1 … APP-19     APP-14 open; APP-15/16/17/18/19
+                                             done 2026-08-21,
                                              APP-3 2026-08-20, SF-4 met
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
 Phase 6  EchoLink         EL-1 … EL-15       ✅ complete; M3 2026-08-13, and
@@ -196,7 +196,6 @@ Phase 8  Silent mode      SIL-1              🔬 spike first — nothing schedu
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
 | **SIL-1** | Silent operating mode — design spike, on-device STT/TTS | `currawong` | Unscoped by design |
 | **OQ-6** | Codec2 LGPL relinking vs App Store signing | maintainer | Deferred until submission, deliberately |
-| **APP-19** | Launching the app adds an empty unnamed channel to the list, which is where the "leftover" orphan rows come from | `currawong` | Small; not yet diagnosed |
 | **APP-14** | M17 stops storing a secret it does not have — `connect()` writes an empty Keychain item for a mode whose own form says it has no account, and the alert it raises on failure is the one that once masked a real connection error | `currawong` | Small; no library change |
 
 **OQ-1b is not on that list on purpose.** It is settled as a *standing
@@ -1204,8 +1203,9 @@ call, locally notable in VK1. Trademark checked clear in class 9.
   written up below.
 - **APP-18** — The session pane shows the controls the state actually has. ✅
   **DONE** — written up below.
-- **APP-19** — Launching the app invents a channel. ⏳ **OPEN** — written up
-  below.
+- **APP-19** — `Add channel` stops writing a blank channel to the list. ✅
+  **DONE** — written up below, including why the title it was opened under was
+  wrong.
 
 ℹ️ **APP-5 … APP-9 were written up after the fact**, on 2026-08-16, from the
 app's commit history. APP-5 and APP-6 were cited by `currawong` commits with no
@@ -1881,7 +1881,7 @@ ordering, and pins the `onDisappear` line separately by hosting a bare
 `PushToTalkButton` and removing it from the hierarchy: deleting that line fails
 that test and nothing else, which was checked by deleting it.
 
-### APP-19 — Launching the app invents a channel ⏳ OPEN
+### APP-19 — `Add channel` stops writing a blank channel ✅ DONE
 **Where:** `currawong`. **Raised by:** the maintainer, 2026-08-21; reproduced
 while driving.
 
@@ -1930,13 +1930,13 @@ channel to storage immediately, selects it, and nothing says it is unsaved** —
 `isDraftAnUnsavedChannel` is false for it, because it *is* in the list — so a
 single tap is permanent and only Delete removes it.
 
-⚠️ **That makes the fix a design question rather than a bug fix**, and it is the
-maintainer's, because it is BU-9's rule applied one step further: if a channel is
-a working copy and Save is the only thing that writes one, then `+` should hand
-over an unsaved draft and the row should appear when it is saved or connected —
-which is what `isDraftAnUnsavedChannel` exists to describe. The alternative is to
-keep committing on `+` and prune blank channels at launch, which is a rule about
-what a stored channel may look like rather than about when one is stored.
+**That made the fix a design question rather than a bug fix**, and it was
+answered the way BU-9's rule points: if a channel is a working copy and Save is
+the only thing that writes one, then `+` hands over an unsaved draft and the row
+appears when it is saved or connected — which is what `isDraftAnUnsavedChannel`
+exists to describe. The alternative considered and not taken was to keep
+committing on `+` and prune blank channels at launch, which is a rule about what
+a stored channel may look like rather than about when one is stored.
 
 **Two facts from the defaults, worth keeping either way:** the row is in
 `au.charlesmartin.currawong.channels`, so whatever adds it also saves it; and
@@ -1953,6 +1953,54 @@ list still contains it, falling back to `channels.first` only when it does not.
 **Done when:** launching with any stored channel list adds nothing to it; the
 existing unnamed rows can be removed; and a test covers the launch path that
 produced this.
+
+✅ **Landed** in `currawong` PR #29, 2026-08-21 — and the first of those three
+was already true, which is the finding. Launch adds nothing; `+` did.
+
+`addChannel()` is `newChannel()` now and writes nothing: it points the form at a
+new channel, and **Save or Connect is what puts it in the list**, which is BU-9's
+rule with nothing carved out of it. Two consequences worth having written down:
+
+* **A new channel typed into and neither saved nor connected does not survive a
+  quit**, exactly as a reflector picked out of the directory does not. That is
+  the trade BU-9 accepted for browsing, and the form says so on screen — "Not
+  saved. Connecting will add this to your channels" — from the moment there is
+  anything to lose.
+* **The channel list's highlight follows the form**, not the stored selection.
+  When the two differ no row is highlighted, which is the honest answer and also
+  the feedback `+` needs: the row it used to create was the only sign it had done
+  anything.
+
+**The existing unnamed row is still the operator's to delete** — Delete works on
+it, and nothing prunes blank channels at launch. A prune would be a rule about
+what a stored channel may look like, which is a different decision from when one
+gets stored, and nothing now creates them.
+
+**Three UI tests moved with it, and two of them were lying.**
+`ChannelLifecycleUITests` asserted on the *existence* of a row of its own name,
+which a previous dead run had already left behind, and so reported "Delete did
+nothing"; it also asserted `app.menus.count > 0` as "a context menu opened",
+which is thirteen menu-bar menus, and then read `app.menus.firstMatch` — the
+Apple menu. **It was green only because this machine's automation grant had
+lapsed**, and failed the moment it could really right-click. Both it and
+`M17EndOfOverUITests` now count rows, clear their own leftovers first, and scope
+the menu query by its contents.
+
+`M17EndOfOverUITests` deliberately does **not** press Save: the button is at the
+bottom of the form, clicking it scrolls, and the fields typed into afterwards
+then report frames outside the visible scroll area — so the clicks land on the
+pane above and the field never takes focus. That reads like a broken text field
+and is a scrolled one. Its connect is what adds the channel.
+
+**Verified against the real app, not only in unit tests.**
+`ChannelLifecycleUITests` passes on macOS — `+` writes nothing, Save adds the
+row, Delete removes it — and it swept the leftover row a dead run had left in the
+operator's list on the way through. On a branch carrying APP-18 as well,
+`M17EndOfOverUITests` passed on air: connected to `m17-cbr.charlesmartin.au`
+module A, keyed, unkeyed, disconnected, deleted its channel. ⚠️ **The observer
+heard no stream**, which is the microphone-grant case that test's own header
+documents — an app launched by a test runner cannot answer a TCC prompt — and not
+a fault in either task. It wants a hand-keyed over to settle.
 
 ## Phase 5 — BLE PTT (after APP-2)
 
