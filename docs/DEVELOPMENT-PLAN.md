@@ -1842,9 +1842,22 @@ link dropped while keyed still releases, under test; and `make test` and
 `make test-macos` are green.
 
 ✅ **Landed** in `currawong` PR #27, 2026-08-21. `make test-macos` is 600 tests,
-1 skipped, 0 failures; `make test` is green; and the disconnected pane was driven
-on screen — status panel, then the form, with the accessory light reading
-`No accessory` on the panel's link-state line.
+1 skipped, 0 failures; `make test` is green.
+
+**Both states were driven on screen, and the connected one on air.**
+Disconnected: the status panel, a prominent `Connect to M17-CBR A` above the
+fold, then the form — no meters, no PTT slab, no scrolling to reach the mode
+chooser. Connected to `m17-cbr.charlesmartin.au` module A and keyed by hand:
+the status panel (destination, `module A · Codec2 3200`, `Audio in`, and the
+accessory light reading `No accessory`), the two meters with their gains, the
+PTT slab, Disconnect — **and no form anywhere**, with the pane picker down to
+`Reflectors | Settings`. An observer linked to the same module as a second
+callsign printed `RX VK1CPM (stream 0x0745)` and `RX VK1CPM ended — end of
+over`, so the over that pane keyed was heard and its *end* was seen.
+
+An incidental benefit: BU-11's empty AutoFill panel is a popup anchored to the
+first text field of the form, so while connected there is no form and no panel.
+Counted at zero level-101 windows on the connected screen.
 
 Three things are worth knowing beyond the entry above.
 
@@ -1997,10 +2010,17 @@ and is a scrolled one. Its connect is what adds the channel.
 row, Delete removes it — and it swept the leftover row a dead run had left in the
 operator's list on the way through. On a branch carrying APP-18 as well,
 `M17EndOfOverUITests` passed on air: connected to `m17-cbr.charlesmartin.au`
-module A, keyed, unkeyed, disconnected, deleted its channel. ⚠️ **The observer
-heard no stream**, which is the microphone-grant case that test's own header
-documents — an app launched by a test runner cannot answer a TCC prompt — and not
-a fault in either task. It wants a hand-keyed over to settle.
+module A, keyed, unkeyed, disconnected, deleted its channel.
+
+**The observer heard nothing during that automated run, and the hand-keyed over
+that followed settles why.** Same app, same channel, same observer: keying the
+PTT slab by hand produced `RX VK1CPM (stream 0x0745)` and `RX VK1CPM ended — end
+of over`. So the transmit path is intact and the automated run's silence is the
+microphone-grant case that test's own header documents — **an app launched by a
+test runner cannot answer a TCC prompt, so every over it keys carries no frames
+at all.** Worth knowing before anyone reads a silent `M17EndOfOverUITests` run as
+a transmit fault: its app-side assertions are the half it can see, and the
+observer is the other half only when a human has granted the microphone.
 
 ## Phase 5 — BLE PTT (after APP-2)
 
