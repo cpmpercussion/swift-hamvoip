@@ -176,8 +176,8 @@ Phase 0  Bootstrap        BOOT-1             ✅ complete
 Phase 1  RadioCore        RC-1 … RC-11       ✅ complete
 Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1 … CLI-3      ✅ complete
-Phase 4  SwiftUI app      APP-1 … APP-19     APP-14 open; APP-15/16/17/18/19
-                                             done 2026-08-21,
+Phase 4  SwiftUI app      APP-1 … APP-22     ✅ all closed. APP-14 and
+                                             APP-15 … APP-22 done 2026-08-21,
                                              APP-3 2026-08-20, SF-4 met
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
 Phase 6  EchoLink         EL-1 … EL-15       ✅ complete; M3 2026-08-13, and
@@ -196,7 +196,15 @@ Phase 8  Silent mode      SIL-1              🔬 spike first — nothing schedu
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
 | **SIL-1** | Silent operating mode — design spike, on-device STT/TTS | `currawong` | Unscoped by design |
 | **OQ-6** | Codec2 LGPL relinking vs App Store signing | maintainer | Deferred until submission, deliberately |
-| **APP-14** | M17 stops storing a secret it does not have — `connect()` writes an empty Keychain item for a mode whose own form says it has no account, and the alert it raises on failure is the one that once masked a real connection error | `currawong` | Small; no library change |
+
+**Phase 4 has no open rows left**, and that is not the same as the app being
+finished: what remains for it is in `currawong/docs/BRINGUP.md`, which is the
+app's fault list rather than its task list. As of 2026-08-21 that is **BU-7** (the
+watchdog and a phone call dropping transmit, neither ever *observed*), **BU-10**
+(the Live Activity, never seen on a locked iPhone), **BU-11** (AppKit's empty
+one-time-code AutoFill panel — diagnosed, nothing to fix in the app, a decision
+about whether to report it to Apple) and **BU-12** (on a short display the app is
+taller than its window and macOS centres the overflow — measured, not diagnosed).
 
 **OQ-1b is not on that list on purpose.** It is settled as a *standing
 constraint* rather than an open decision: "EchoLink" is nominative use only,
@@ -1131,7 +1139,7 @@ records a successful live connection (**Milestone M2**). CI only builds it.
 
 ---
 
-## Phase 4 — Currawong, the SwiftUI app ✅ UNBLOCKED
+## Phase 4 — Currawong, the SwiftUI app ✅ TASK LIST CLOSED 2026-08-21
 
 **The app is called Currawong** — a bird with a distinctive, far-carrying
 call, locally notable in VK1. Trademark checked clear in class 9.
@@ -1193,8 +1201,9 @@ call, locally notable in VK1. Trademark checked clear in class 9.
   operator identity was under APP-4.
 - **APP-13** — The EchoLink proxy stops being a channel field. ✅ **DONE** —
   written up below.
-- **APP-14** — M17 stops storing a secret it does not have. ⏳ **OPEN** —
-  written up below.
+- **APP-14** — One EchoLink password, and no write from a mode that has none.
+  ✅ **DONE** — written up below. The open question in it had an answer, and it
+  was the fault the maintainer was reporting from the other end.
 - **APP-15** — The pane picker cannot be laid out off-screen. ✅ **DONE** —
   written up below.
 - **APP-16** — The status panel leads with where the radio is pointed. ✅
@@ -1206,6 +1215,12 @@ call, locally notable in VK1. Trademark checked clear in class 9.
 - **APP-19** — `Add channel` stops writing a blank channel to the list. ✅
   **DONE** — written up below, including why the title it was opened under was
   wrong.
+- **APP-20** — Every pane gets the same column, and the sidebar its insets. ✅
+  **DONE** — written up below.
+- **APP-21** — The view layer is tested on both platforms, and the UI tests stop
+  editing the operator's app. ✅ **DONE** — written up below.
+- **APP-22** — `Add channel` puts a row in the list, provisionally. ✅ **DONE** —
+  written up below. APP-19's rule with the feedback it was missing.
 
 ℹ️ **APP-5 … APP-9 were written up after the fact**, on 2026-08-16, from the
 app's commit history. APP-5 and APP-6 were cited by `currawong` commits with no
@@ -1623,7 +1638,7 @@ channel written by an older build cannot carry a proxy forward. Covered by
 until 2026-08-21** — the work had been done for two days, which is the sort of
 thing that makes an agent pick the task up a second time.
 
-### APP-14 — M17 stops storing a secret it does not have ⏳ OPEN
+### APP-14 — One EchoLink password, and no write from a mode that has none ✅ DONE
 **Depends on:** APP-8 ✅, APP-12 ✅, BU-9 ✅.
 **Where:** `currawong`. **Raised by:** the maintainer, 2026-08-21.
 
@@ -1675,6 +1690,54 @@ no alert; an AllStarLink channel still stores its node secret and a Web
 Transceiver channel still stores only its token; the EchoLink question above is
 answered in the PR with a test behind whichever answer it has; and `make test`
 and `make test-macos` are green.
+
+✅ **Landed** in `currawong` PR #32, 2026-08-21, with the shape this entry
+prescribed: `NodeSettings.SecretOwnership` — `channel`, `appWide`, `none` — beside
+the account strings.
+
+**The EchoLink question had an answer, and it was worse than the lost password
+this entry braced for.** The two copies could be made to disagree three ways, and
+the third was the fault the maintainer was reporting from the other end the same
+day: *"I don't think the EchoLink password adding to the directory list is
+working."*
+
+`StationBrowserView` asked for `session.secret` — the *channel's* secret — while
+the settings screen wrote `echoLinkAccountPassword` and mirrored it into `secret`
+only `if settings.mode == .echoLink`. So the ordinary path (type the password in
+Settings, where the default selected channel is AllStarLink; open Stations; press
+Refresh) sent the directory server an **empty string**, and the pane said "Enter
+your EchoLink account password" while Settings said "Stored in the Keychain". A
+relaunch appeared to fix it, which is the intermittency that shape produces. With
+a draft switched to EchoLink, `secret` held the *node secret*, which went to the
+directory server as an account password and came back `login rejected` — which
+reads as "my password is wrong".
+
+The mirror is gone. `echoLinkAccountPassword` is the only copy, connecting reads
+it and never writes it, and which password the browser sends is now
+`RadioSession.directoryRequest` so a view has nothing to pick wrongly.
+
+**Three smaller faults in the same path**, each fixed here: the directory login
+sent the callsign **as typed** while the QSO path uppercases through
+`identity.validated()`, so a lower-case callsign authenticated for a call and
+could be rejected for a browse; the password was stored untrimmed, so a pasted
+trailing newline passed every "Stored" indicator and then failed the digest at
+the server; and the empty-state copy sent the operator to the connect form for a
+field APP-12 had moved to Settings.
+
+**On the M17 half:** the test asserts on the fake store's *write log*, not its
+contents. An empty write is a removal, so writing `""` to an empty slot left the
+contents unchanged — which is exactly why a suite that only read them never saw
+this.
+
+⚠️ **Left open, and not a fault of this branch:** editing the callsign moves the
+account string with no migration, so a password saved as `VK1XYZ` is orphaned by
+adding `/P`. That is a decision about migration.
+
+⚠️ **Also found, and not the app's:** the maintainer's private EchoLink proxy
+closes the stream on OPEN — identically for the right proxy password, a wrong one
+and `PUBLIC` — so the Stations pane fails while the app is pointed at it whatever
+this task does. The account password itself is good: `hamvoip-cli echolink
+--list --auto-proxy` fetched **6305 stations** with it through a public proxy.
 
 ### APP-15 — The pane picker cannot be laid out off-screen ✅ DONE
 **Depends on:** nothing. **Where:** `currawong`. **Raised by:** the maintainer,
@@ -2021,6 +2084,114 @@ test runner cannot answer a TCC prompt, so every over it keys carries no frames
 at all.** Worth knowing before anyone reads a silent `M17EndOfOverUITests` run as
 a transmit fault: its app-side assertions are the half it can see, and the
 observer is the other half only when a human has granted the microphone.
+
+### APP-20 — Every pane gets the same column, and the sidebar its insets ✅ DONE
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-08-21, from
+screenshots. ✅ **Landed** in PR #30.
+
+Two spacing faults with one cause each, both of them a pane that had been left
+out of a rule the other panes followed.
+
+**The channel list's header sat flush against both edges of the macOS sidebar.**
+The horizontal inset was applied at the *call site*, and only the tab layout
+applied it — the split layout put `ChannelListView` in the sidebar bare. The rows
+looked right either way, because a `List` insets its own rows; that is precisely
+why the header, which is outside the `List`, did not. The view owns its insets
+now. Padding the whole view instead would inset the rows *twice* and leave the
+header hanging left of the names it labels.
+
+**The Stations and Reflectors panes ran into both edges of the detail column,
+with the Refresh button clipped off the right.** They were the only two panes
+inserted into `detailContent` raw; the connect form, the keypad and the settings
+screen all sit in a padded, width-capped `paneColumn()`. Unbounded, the reflector
+rows' module chips — a dozen on a busy reflector, wrapped over three lines —
+pushed the list wider than the column and took the header row with them. Both
+panes use `paneColumn()` now, so the app has **one column width** rather than a
+number chosen per pane, and the iOS directory tabs get it for the same reason.
+
+Driven on both platforms rather than reasoned about. It also turned up **BU-12**,
+which is in `currawong/docs/BRINGUP.md` rather than here: on a short display the
+whole app is taller than its window and macOS centres the overflow, which puts
+the status panel above the top edge with an empty channel list. Measured, four
+theories ruled out, not fixed — and the sidebar's missing *top* alignment is held
+back with it, because under that overflow it moves the header off-screen rather
+than merely down the column.
+
+### APP-21 — The view layer is tested on both platforms, and the UI tests stop editing the operator's app ✅ DONE
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-08-21, asking whether
+the macOS-only UI testing was a compromise. It was, in two separable ways.
+✅ **Landed** in PR #31.
+
+**The hosted-view tests only ran on macOS**, and the case they cover is *iOS's*:
+`PushToTalkButton`'s `onDisappear` release exists because leaving the Session tab
+while keyed must unkey, and tabs are a compact-layout case. The one platform
+covered was the one without the problem. `ViewHost` owns the difference —
+`NSHostingView` in an off-screen `NSWindow`, or `UIHostingController` in a
+`UIWindow` attached to the test host's scene — including the *never close the
+window* rule that cost an afternoon under APP-18. The four pane tests now run in
+`make test` as well as `make test-macos`, and deleting the `onDisappear` fails
+the isolation test on **both**; checked by deleting it on both, so neither run is
+vacuous. `ChannelListContextMenuTests` still reads an `NSMenu` and so stays
+macOS-only in substance, but it no longer carries its own window.
+
+**The UI tests wrote to the operator's real defaults**, which cost twice: a run
+that died before its cleanup left a row behind, and the next run found two rows of
+one name, deleted one, and reported that Delete did nothing — read as a live bug
+for a morning under BU-9 and again under APP-19. The blank rows APP-19 was opened
+for were made this way too. `DefaultsSuite` reads two launch arguments out of
+`UserDefaults`' own argument domain, so only a launcher can set them, and it is
+`#if DEBUG` so the hook cannot exist in a shipped binary. The **app** performs the
+reset, not the runner, because on iOS a suite that is not an app group lives in the
+app's container where the runner cannot reach it — one rule, both platforms. The
+three mutating tests now assert they *started* from an empty list instead of
+sweeping up after themselves, which makes a broken isolation visible rather than
+silent.
+
+One consequence has teeth: the on-air test's identity comes up empty now, and **a
+test that transmits must not invent a callsign.** It reads the operator's own out
+of the app's real defaults and fails with an explanation if there is none, rather
+than putting a made-up callsign on a reflector. The delete test still types one
+and says why that is safe there: it dials TEST-NET-1 and nothing leaves the
+machine.
+
+**Still a compromise, and named as one:** no XCUITest drives the *iOS* app.
+`CurrawongOnAirUITests` is `supportedDestinations: [macOS]` and its 28 call sites
+use `click()`, `rightClick()` and `typeKey(_:modifierFlags:)`, none of which exist
+on iOS. Making it multiplatform means those behind `tap()`/`click()` helpers plus
+the interactions that genuinely differ — swipe-to-delete versus a context menu,
+and a SwiftUI `alert` being a *sheet* on macOS — and splitting the target so the
+non-transmitting half can run in CI. Not done; the hosted-view layer was the
+cheaper and more trustworthy half, and it is the one that catches APP-18-class
+faults.
+
+### APP-22 — `Add channel` puts a row in the list, provisionally ✅ DONE
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-08-21. ✅ **Landed**
+in PR #33.
+
+APP-19 stopped `+` writing a blank channel to storage, which was right about
+storage and left the button with no visible effect: the row it used to create was
+the only feedback it had.
+
+So the draft appears in the list, at the bottom, marked **Not saved**, and **Save
+or Connect is still the only thing that stores it.** Quit without either and it is
+gone, exactly as a reflector picked out of the directory is, so nothing can leave
+a permanent hostless row behind.
+
+**The maintainer chose this over two alternatives**, and the rejected ones are
+worth keeping: saving the row immediately is the fault APP-19 was opened for (one
+stray tap, a hostless row only Delete removes), and saving it but pruning blank
+rows at launch means the app silently deleting a stored channel, including one
+half-filled on purpose.
+
+A browsed reflector gets the same row, because it is the same state — the form
+pointed somewhere that is not in the list — which makes it a rule rather than a
+special case for one button. Three details: the row says **"New channel"** rather
+than "Unnamed channel", which is the wording the connect form's own placeholder
+already uses and reads as an invitation rather than a fault; the row is outside
+the `ForEach`, because `onDelete` and `onMove` work in offsets into the *stored*
+array; and its menu offers **Discard**, not Delete, because there is nothing
+stored to delete — `discardDraftChannel()` refuses when the draft *is* a stored
+channel, so it cannot become a second, quieter way of losing one.
 
 ## Phase 5 — BLE PTT (after APP-2)
 
