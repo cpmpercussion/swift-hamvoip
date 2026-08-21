@@ -176,9 +176,9 @@ Phase 0  Bootstrap        BOOT-1             ✅ complete
 Phase 1  RadioCore        RC-1 … RC-11       ✅ complete
 Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1 … CLI-3      ✅ complete
-Phase 4  SwiftUI app      APP-1 … APP-15     APP-14, APP-15 open; APP-13
-                                             done 2026-08-19, APP-3
-                                             2026-08-20, so SF-4 is met
+Phase 4  SwiftUI app      APP-1 … APP-19     APP-14, APP-18, APP-19 open;
+                                             APP-15/16/17 done 2026-08-21,
+                                             APP-3 2026-08-20, SF-4 met
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ delivered in the app as APP-5
 Phase 6  EchoLink         EL-1 … EL-15       ✅ complete; M3 2026-08-13, and
                                              since run from the app
@@ -196,7 +196,8 @@ Phase 8  Silent mode      SIL-1              🔬 spike first — nothing schedu
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
 | **SIL-1** | Silent operating mode — design spike, on-device STT/TTS | `currawong` | Unscoped by design |
 | **OQ-6** | Codec2 LGPL relinking vs App Store signing | maintainer | Deferred until submission, deliberately |
-| **APP-15** | The pane picker can be laid out off the top of a short window, stranding an operator on a pane with no way back. Fixed twice inside the column and regressed twice; the switcher moves to the toolbar | `currawong` | Small; no library change |
+| **APP-18** | The session pane shows every control for every state, so the meters and PTT are dead space before a link exists and the connect form is a read-only wall after one. Retires APP-15's root cause | `currawong` | Medium; no library change |
+| **APP-19** | Launching the app adds an empty unnamed channel to the list, which is where the "leftover" orphan rows come from | `currawong` | Small; not yet diagnosed |
 | **APP-14** | M17 stops storing a secret it does not have — `connect()` writes an empty Keychain item for a mode whose own form says it has no account, and the alert it raises on failure is the one that once masked a real connection error | `currawong` | Small; no library change |
 
 **OQ-1b is not on that list on purpose.** It is settled as a *standing
@@ -1196,8 +1197,16 @@ call, locally notable in VK1. Trademark checked clear in class 9.
   written up below.
 - **APP-14** — M17 stops storing a secret it does not have. ⏳ **OPEN** —
   written up below.
-- **APP-15** — The pane picker cannot be laid out off-screen. ⏳ **OPEN** —
+- **APP-15** — The pane picker cannot be laid out off-screen. ✅ **DONE** —
   written up below.
+- **APP-16** — The status panel leads with where the radio is pointed. ✅
+  **DONE** — written up below.
+- **APP-17** — The link button dials what the panel is showing. ✅ **DONE** —
+  written up below.
+- **APP-18** — The session pane shows the controls the state actually has. ⏳
+  **OPEN** — written up below.
+- **APP-19** — Launching the app invents a channel. ⏳ **OPEN** — written up
+  below.
 
 ℹ️ **APP-5 … APP-9 were written up after the fact**, on 2026-08-16, from the
 app's commit history. APP-5 and APP-6 were cited by `currawong` commits with no
@@ -1668,7 +1677,7 @@ Transceiver channel still stores only its token; the EchoLink question above is
 answered in the PR with a test behind whichever answer it has; and `make test`
 and `make test-macos` are green.
 
-### APP-15 — The pane picker cannot be laid out off-screen ⏳ OPEN
+### APP-15 — The pane picker cannot be laid out off-screen ✅ DONE
 **Depends on:** nothing. **Where:** `currawong`. **Raised by:** the maintainer,
 2026-08-21, driving the app.
 
@@ -1709,6 +1718,152 @@ region now, but a pane cut off mid-list reads as a rendering fault.
 **Done when:** the switcher is reachable at every window height the OS permits,
 including one shorter than the session pane; a test drives the app at a short
 window size and finds it; and `make test` and `make test-macos` are green.
+
+### APP-16 — The status panel leads with where the radio is pointed ✅ DONE
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-08-21, driving the app.
+
+The panel led with the *connection state*, so it said "Connected" in bold without
+ever saying connected to what. The answer was in the channel list beside it —
+and in the compact layout the channel list is a different tab, so the answer was
+nowhere.
+
+Laid out like a rig's front panel: the destination is the headline the way a VFO
+frequency is, with the mode in a small box beside it ([M17] where a rig shows
+[FM] / [SSB] / [DMR]), reusing the channel list's capsule so a channel reads the
+same in both places. A new `NodeSettings.addressDescription` supplies the line
+under it and deliberately ignores the operator's name — a channel called "Sunday
+net" still has to say where it goes, and an unsaved edit stays visible because
+the name holds still while the address changes.
+
+Two lines stopped earning their space. **The transmit watchdog** is a setting,
+not a state: APP-12 moved it to the settings screen and the panel only restated
+a number that cannot change while it is being read. **The codec** is worth
+knowing once, on first contact with an unfamiliar node, and is stale the moment
+the link drops — it now rides on the address line while connected. The two
+*events* stayed, because "why did the link just go away" is asked at the moment
+it appears and is invisible from anywhere else.
+
+The PTT button's 190-point floor was chosen for a thumb; macOS takes 120.
+
+✅ **Landed** in `currawong` `37e039f`.
+
+### APP-17 — The link button dials what the panel is showing ✅ DONE
+**Depends on:** APP-16 ✅. **Where:** `currawong`. **Raised by:** the maintainer,
+2026-08-21, driving the app.
+
+The session pane's link button was built from `lastConnectedChannel` and
+restored it before dialling. So selecting a channel moved the status panel and
+left the button naming the previous one: the pane showed `M17-432 H` above a
+button reading `Reconnect to M17-CBR A`, and pressing it dialled the second. **A
+control that keys a transmitter must not disagree with the thing above it about
+where.**
+
+It follows the selection now. The word still distinguishes the two cases — the
+same channel says "Reconnect", a different one says "Connect" — and both dial
+what the panel shows. The affirmative action is prominent; Disconnect stays
+bordered, because a second filled slab under the PTT would compete for the
+glance SF-3 wants spent on transmit state.
+
+**This reversed a documented decision, and the premise is what changed.** The
+old wording existed because a plain Connect here would have been a second entry
+point to fields the operator could not see from this pane. APP-16 put the
+destination, its address and its mode directly above the button.
+
+`RadioSession.restoreLastConnectedChannel()` is now unused in `Sources/`. Its
+tests are kept with a note; delete both when the next task passes through.
+
+✅ **Landed** in `currawong` `04209e8`, together with a test-hygiene fix:
+`ChannelListContextMenuTests` hosted a real `NSWindow` and called
+`orderFrontRegardless()` without ever closing it, so every `make test-macos` run
+threw a 480×480 panel showing a channel list and the word "detail" over whatever
+was in front. It was reported twice as a bug in the *app* before being
+recognised as the test — the window belongs to the test host, which is also
+called Currawong. It is positioned off the display now, which is what the class
+comment already claimed by saying it runs headless. **Closing it is not the
+fix**: `close()` starts an `_NSWindowTransformAnimation` that over-releases once
+the hosting view goes away, crashing the bundle with a SIGSEGV attributed to
+whichever unrelated test held the run loop.
+
+### APP-18 — The session pane shows the controls the state actually has ⏳ OPEN
+**Depends on:** APP-15 ✅, APP-16 ✅, APP-17 ✅.
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-08-21, driving the app.
+
+The pane shows every control for every state, so most of it is dead at any given
+moment. That is also the root cause APP-15 worked around rather than removed:
+the detail column is rigid and tall because it is the *union* of two modes rather
+than either one.
+
+**The organising idea is a rig's display.** One region is always there and
+always current; the controls around it change with what you are doing. So: the
+status panel never hides, and everything else earns its place by state.
+
+1. **Disconnected** — no level meters and no PTT button. A large PTT slab
+   reading "Connect to a node first" is a control that advertises itself and then
+   refuses, and it pushes the mode chooser and the connect form off the bottom,
+   which are the only things an operator can act on before a link exists. The
+   form becomes the pane, not a thing to scroll to.
+2. **Connected** — no connect form. It is already `isEditable: connection ==
+   .disconnected`, so it is a read-only wall of fields, and APP-16 moved the one
+   useful thing in it (where we are pointed) into the status panel.
+3. **The accessory row moves into the status panel as an indicator**, and its
+   *configuration* moves to the settings screen. The row's own rationale — "is
+   my PTT fob still connected?" is asked from the screen you are looking at while
+   transmitting — is better served by the panel than by a row, and it is the
+   configuration that never belonged here.
+
+**The accessory indicator needs three states, not two.** Nothing configured
+(dim); configured and connected (solid); **configured and lost (loud)**. The
+third is SF-2 — BLE link loss must drop transmit — and an operator whose fob has
+just dropped needs to know why their PTT stopped working. A greyed icon cannot
+carry that, and carrying it is the whole reason the row exists.
+
+**Switch on `.connecting`, not `.connected`**, or the layout changes twice for
+one action and the second change lands while the operator is watching for the
+link to come up. Animate it, and keep the status panel anchored at the top: if
+the display stays put and the region below it changes, it reads as a mode
+change; if everything shifts, it reads as a glitch.
+
+**The hazard to test, because it stops being belt-and-braces.** A link that
+drops mid-transmission now removes the PTT button from the hierarchy under a
+held finger. `PushToTalkButton` already ends with
+`.onDisappear { onRelease(.viewDisappeared) }` for exactly this, but under this
+task that path becomes load-bearing rather than a backstop, and needs a test that
+drops the link while keyed and asserts the release.
+
+**Not in scope:** putting the connect form behind the pane picker while
+disconnected. Adding a click to reach the thing most needed is the problem, not
+the fix. APP-15's toolbar picker stays either way — a view switcher belongs in
+the toolbar regardless of whether the column still overflows.
+
+**Done when:** a disconnected pane shows the status panel, the connect button and
+the form with no scrolling at the default window size; a connected pane shows the
+status panel, the meters and the PTT with no form; the accessory indicator
+distinguishes its three states and its configuration is on the settings screen; a
+link dropped while keyed still releases, under test; and `make test` and
+`make test-macos` are green.
+
+### APP-19 — Launching the app invents a channel ⏳ OPEN
+**Where:** `currawong`. **Raised by:** the maintainer, 2026-08-21; reproduced
+while driving.
+
+A clean quit and relaunch — no interaction at all — came up with a third row in
+the channel list: **"Unnamed channel", AllStarLink, no host**, selected, with the
+connect form showing placeholder values. The two real channels were untouched.
+
+This is almost certainly the source of the orphan rows the 2026-08-20 handoff
+recorded as "four `allStarLink` channels with no name and no host, which cannot
+be connected to… probably leftovers of an older run". They are not leftovers.
+Something is minting them, and it appears to be launch itself.
+
+**Not diagnosed.** The obvious suspects are the BU-9 draft path — `stashDraft()`
+on `scenePhase != .active`, and the launch-time pruning of a draft belonging to
+no channel that BU-9 resolved to keep — and whatever seeds `settings` when a
+stored selection does not resolve. The reproduction is cheap, so start there
+rather than from the code.
+
+**Done when:** launching with any stored channel list adds nothing to it; the
+existing unnamed rows can be removed; and a test covers the launch path that
+produced this.
 
 ## Phase 5 — BLE PTT (after APP-2)
 
