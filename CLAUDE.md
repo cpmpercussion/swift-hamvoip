@@ -5,7 +5,13 @@ M17, later EchoLink). Apache-2.0, clean-room.
 
 **Start here:** `docs/DEVELOPMENT-PLAN.md` is the task list. Pick the lowest
 unblocked task, read its full entry plus §1 "How to work", and do exactly
-that task. Requirements background: `docs/DESIGN-REQUIREMENTS.md`.
+that task. Requirements background: `docs/DESIGN-REQUIREMENTS.md`, which is
+authoritative for **both** repos' requirement IDs.
+
+**The app's task list is not here.** `APP-*` and `BLE-*` moved to
+`currawong/docs/DEVELOPMENT-PLAN.md` on 2026-08-21; §1 and the requirements
+still govern them. An app task that needs a library change gets a library task
+here, on its own branch and PR, cited from the app's plan by ID.
 
 ## Hard rules (violations get the PR closed)
 
