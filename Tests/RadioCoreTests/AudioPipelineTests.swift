@@ -1076,6 +1076,66 @@ final class AudioSessionPolicyTests: XCTestCase {
         XCTAssertEqual(policy.options, 0xC, "allowBluetooth (0x4) | defaultToSpeaker (0x8)")
     }
 
+    // MARK: - The listening policy (RC-12)
+
+    /// The idle half of the pair. `.playback` with no options, because that is
+    /// what routes a Bluetooth accessory to **A2DP** — and not asking for an
+    /// input is the only way to stop iOS selecting HFP and holding SCO up for
+    /// the whole call.
+    func testListeningPolicyPinsCategoryModeAndOptions() {
+        let policy = AudioSessionPolicy.listening
+        XCTAssertEqual(policy.category, "AVAudioSessionCategoryPlayback")
+        XCTAssertEqual(policy.mode, "AVAudioSessionModeDefault")
+        XCTAssertEqual(policy.options, 0, "no options: asking for nothing is the point")
+    }
+
+    /// **The distinction the whole of RC-12 rests on.** Two policies that
+    /// differed only in options would not fix anything: the app's `BU-17` showed
+    /// that a `.playAndRecord` session keeps *returning* to HFP, because the
+    /// category requires an input and HFP is the only Bluetooth one on offer. The
+    /// categories must differ.
+    func testTheTwoPoliciesDifferInCategoryNotJustOptions() {
+        XCTAssertNotEqual(
+            AudioSessionPolicy.listening.category, AudioSessionPolicy.radio.category,
+            "a policy that still requires an input will still be given HFP")
+        XCTAssertNotEqual(AudioSessionPolicy.listening, AudioSessionPolicy.radio)
+    }
+
+    /// Only ``AudioSessionPolicy/radio`` may ask for the hands-free profile.
+    /// Listening asking for it would defeat the point, and a future edit that
+    /// "tidies" the options together is exactly what this catches.
+    func testOnlyTheRadioPolicyAsksForHandsFree() {
+        XCTAssertEqual(
+            AudioSessionPolicy.radio.options & AudioSessionPolicy.allowBluetooth,
+            AudioSessionPolicy.allowBluetooth)
+        XCTAssertEqual(
+            AudioSessionPolicy.listening.options & AudioSessionPolicy.allowBluetooth, 0)
+    }
+
+    /// A2DP's option is named but deliberately unused: `.playback` reaches A2DP
+    /// without it, and adding it to a recording category does not stop HFP being
+    /// chosen. Pinned so the number is right if anyone ever does reach for it.
+    func testTheA2DPOptionIsPinnedAndUnused() {
+        XCTAssertEqual(AudioSessionPolicy.allowBluetoothA2DP, 0x20)
+        XCTAssertEqual(
+            AudioSessionPolicy.radio.options & AudioSessionPolicy.allowBluetoothA2DP, 0)
+        XCTAssertEqual(
+            AudioSessionPolicy.listening.options & AudioSessionPolicy.allowBluetoothA2DP, 0)
+    }
+
+    /// The listening raw values, against the symbols they name. iOS-only, for
+    /// the same reason as the radio version above.
+    func testListeningRawValuesRoundTripToTheAVFoundationSymbols() throws {
+        #if os(iOS)
+        let policy = AudioSessionPolicy.listening
+        XCTAssertEqual(AVAudioSession.Category(rawValue: policy.category), .playback)
+        XCTAssertEqual(AVAudioSession.Mode(rawValue: policy.mode), .default)
+        XCTAssertEqual(AVAudioSession.CategoryOptions(rawValue: policy.options), [])
+        #else
+        throw XCTSkip("AVAudioSession is iOS-only")
+        #endif
+    }
+
     /// The raw values above are only correct if they still round-trip to the
     /// symbols they name. This is the test that would catch Apple changing one
     /// — and it runs only on an iOS destination, which CI is not, so it is a
