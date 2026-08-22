@@ -1309,7 +1309,7 @@ public final class AudioPipeline: @unchecked Sendable {
             forName: AVAudioSession.routeChangeNotification,
             object: session,
             queue: nil
-        ) { note in
+        ) { [weak self] note in
             let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
             self?.signalContinuation.yield(
                 .routeChanged(AudioRouteChangeCause(rawReason: raw ?? 0)))
