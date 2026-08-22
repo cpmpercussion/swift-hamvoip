@@ -63,11 +63,57 @@ public struct AudioSessionPolicy: Equatable, Sendable {
         mode: "AVAudioSessionModeVoiceChat",
         options: allowBluetooth | defaultToSpeaker)
 
+    /// **The policy for when nothing is being transmitted (RC-12).**
+    ///
+    /// `.playback`, mode `.default`, no options — which on a Bluetooth accessory
+    /// means **A2DP**, and that is the entire point.
+    ///
+    /// ## Why a second policy exists
+    ///
+    /// HFP is the only Bluetooth profile that carries a microphone, so
+    /// ``radio`` must ask for it. But an *active* session holding HFP keeps the
+    /// SCO link up for the whole call, not only while a tap is installed, and
+    /// that has three measured costs on the app side (its `BU-17`):
+    ///
+    /// 1. Received audio is 16 kHz mono for the entire QSO rather than 44.1 kHz
+    ///    stereo — audible, and reported by an operator before it was diagnosed.
+    /// 2. A speaker-mic's "in a call" indicator is lit permanently, so it cannot
+    ///    serve as a transmit indicator.
+    /// 3. Accessory battery, for a voice channel carrying silence.
+    ///
+    /// macOS does none of this: CoreAudio raises HFP when a client opens the
+    /// input and drops it about two seconds after the last one closes, so
+    /// listening happens on A2DP and only transmitting is narrowband. **That is
+    /// the behaviour this policy exists to reproduce on iOS**, and it is the
+    /// right one for a simplex radio, where nobody listens and talks at once.
+    ///
+    /// ## The hazard a caller must respect
+    ///
+    /// `AVAudioEngine` never revisits its input format, so an engine whose input
+    /// unit is instantiated under a non-recording category reports 0 Hz for the
+    /// life of the process — the app's `BU-1`, and the reason
+    /// ``activateSession()`` exists at all. A caller that switches to this policy
+    /// **must** be able to discard and rebuild its engine when it switches back,
+    /// or the first transmit after any receive will fail with a converter error
+    /// and every one after it too.
+    public static let listening = AudioSessionPolicy(
+        category: "AVAudioSessionCategoryPlayback",
+        mode: "AVAudioSessionModeDefault",
+        options: 0)
+
     /// `AVAudioSession.CategoryOptions.allowBluetooth`, a.k.a.
     /// `.allowBluetoothHFP` under the iOS 26 SDK — same option, same value.
     public static let allowBluetooth: UInt = 0x4
     /// `AVAudioSession.CategoryOptions.defaultToSpeaker`.
     public static let defaultToSpeaker: UInt = 0x8
+    /// `AVAudioSession.CategoryOptions.allowBluetoothA2DP`.
+    ///
+    /// Not used by either policy above — `.playback` routes to A2DP without it,
+    /// and adding it to a `.playAndRecord` policy does *not* stop HFP being
+    /// selected when an input is required. Named here because that is a natural
+    /// wrong turn and worth closing off: the fix for holding HFP open is a
+    /// category that needs no input, not an extra option on one that does.
+    public static let allowBluetoothA2DP: UInt = 0x20
 }
 
 /// SF-3 signal: audio session interruption or route change.
@@ -1221,7 +1267,21 @@ public final class AudioPipeline: @unchecked Sendable {
     /// iOS-only. `AVAudioSession` does not exist on macOS, where input/output
     /// device selection is the user's, via System Settings.
     public static func activateSession() throws {
-        let policy = AudioSessionPolicy.radio
+        try activateSession(AudioSessionPolicy.radio)
+    }
+
+    /// Apply `policy` and activate the session (RC-12).
+    ///
+    /// The same operation as ``activateSession()``, with the policy as an
+    /// argument so a caller can hold ``AudioSessionPolicy/listening`` while idle
+    /// and ``AudioSessionPolicy/radio`` only while transmitting. See the note on
+    /// `listening` for why that matters and for the engine-rebuild obligation it
+    /// carries.
+    ///
+    /// Activating rather than deactivating between the two: received audio still
+    /// has to play while idle, so the session stays up and only the *category*
+    /// changes. A deactivated session cannot play anything.
+    public static func activateSession(_ policy: AudioSessionPolicy) throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(
             AVAudioSession.Category(rawValue: policy.category),

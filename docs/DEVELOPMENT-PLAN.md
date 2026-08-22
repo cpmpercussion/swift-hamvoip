@@ -184,7 +184,7 @@ has merged and the code it describes exists.
 
 ```
 Phase 0  Bootstrap        BOOT-1             ✅ complete
-Phase 1  RadioCore        RC-1 … RC-11       ✅ complete
+Phase 1  RadioCore        RC-1 … RC-12       ✅ complete
 Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1 … CLI-3      ✅ complete
 Phase 4  SwiftUI app      APP-1 … APP-22     ✅ all closed → the app's own plan
@@ -960,6 +960,55 @@ disconnect — runs against nothing but `NetworkClient`, proven by a fake client
 in `RadioCoreTests` that is a plain `final class` rather than an actor; every
 mode's mapping table is asserted case by case; and a live IAX2 session shows
 `radioEvents` is exactly `events.compactMap(\.radioEvent)`, in order.
+
+### RC-12 — A listening policy, so HFP is held only while transmitting ✅ DONE
+
+**Why.** `AudioSessionPolicy.radio` asks for `allowBluetooth`, which is the
+hands-free profile, which is the only Bluetooth profile carrying a microphone —
+so it has to. But an *active* session holding HFP keeps the SCO link up for the
+whole call rather than only while a tap is installed, and Currawong measured
+three costs for that on a phone (its `BU-17`, 2026-08-22):
+
+1. **Received audio is 16 kHz mono for an entire QSO** instead of 44.1 kHz
+   stereo. Audible — the operator reported it by ear before it was diagnosed.
+2. A speaker-mic's "in a call" LED is lit permanently, so it cannot serve as a
+   transmit indicator, which is what an operator naturally reads it as.
+3. Accessory battery, for a voice channel carrying silence.
+
+macOS does none of this: CoreAudio raises HFP when a client opens the input and
+drops it ~2 s after the last one closes, so listening is on A2DP and only
+transmitting is narrowband. That is the right behaviour for a simplex radio —
+nobody listens and talks at once — and this task is what lets iOS reproduce it.
+
+**What shipped.**
+
+- `AudioSessionPolicy.listening` — `.playback`, `.default`, no options. The
+  **category** differs from `radio`, not just the options, and that is the whole
+  point: `BU-17` showed a `.playAndRecord` session keeps *returning* to HFP
+  because the category requires an input and HFP is the only Bluetooth one on
+  offer. A policy that still asks for an input cannot fix this.
+- `activateSession(_:)` taking a policy, with `activateSession()` delegating to
+  it with `.radio` so no caller changes.
+- `allowBluetoothA2DP` (`0x20`) named but **unused**, with a test pinning that it
+  is unused: `.playback` reaches A2DP without it, and adding it to a recording
+  category does not stop HFP being chosen. It is a natural wrong turn and worth
+  closing off explicitly.
+
+**The obligation this puts on callers, and it is the reason this is not just a
+constant.** `AVAudioEngine` never revisits its input format, so an engine whose
+input unit is instantiated under a non-recording category reports 0 Hz for the
+life of the process — the app's `BU-1`, and why `activateSession()` exists at
+all. A caller that idles under `listening` **must** be able to discard and
+rebuild its engine when it switches back to `radio`, or the first transmit after
+any receive fails with a converter error and so does every one after it.
+Currawong's `AudioPipelineIO` already rebuilds once on a failed `startCapture`,
+which is the machinery this relies on.
+
+**Not done here:** the app-side switching. This task ships the policy and the
+entry point; deciding *when* to switch is Currawong's `BU-17`, in Currawong's
+repo, against a released tag.
+
+Tests: six, all on macOS except the symbol round-trip, which stays iOS-only.
 
 ### RC-11 — Audio-session policy without an engine ✅ DONE
 **Depends on:** RC-7 ✅. **Files:** `Sources/RadioCore/AudioPipeline.swift` +
