@@ -1062,6 +1062,86 @@ final class CaptureDrainTaskTests: XCTestCase {
 }
 
 
+// MARK: - Route-change cause (RC-13)
+
+/// The mapping from Apple's raw reason codes, which is the whole of RC-13 that
+/// can be asserted off-device — and it is worth asserting, because a caller
+/// implementing `SF-3` decides whether to unkey a live transmission from it.
+final class AudioRouteChangeCauseTests: XCTestCase {
+
+    func testEachKnownReasonMaps() {
+        XCTAssertEqual(AudioRouteChangeCause(rawReason: 1), .newDeviceAvailable)
+        XCTAssertEqual(AudioRouteChangeCause(rawReason: 2), .oldDeviceUnavailable)
+        XCTAssertEqual(AudioRouteChangeCause(rawReason: 3), .categoryChange)
+        XCTAssertEqual(AudioRouteChangeCause(rawReason: 4), .override)
+        XCTAssertEqual(AudioRouteChangeCause(rawReason: 6), .wakeFromSleep)
+        XCTAssertEqual(AudioRouteChangeCause(rawReason: 7), .noSuitableRouteForCategory)
+        XCTAssertEqual(AudioRouteChangeCause(rawReason: 8), .routeConfigurationChange)
+    }
+
+    /// Unrecognised reasons are carried through rather than flattened, so a
+    /// caller can log the number it did not understand. `0` is Apple's own
+    /// "unknown" and `5` is unused; both land here, which is correct.
+    func testUnrecognisedReasonsKeepTheirNumber() {
+        XCTAssertEqual(AudioRouteChangeCause(rawReason: 0), .unknown(reason: 0))
+        XCTAssertEqual(AudioRouteChangeCause(rawReason: 5), .unknown(reason: 5))
+        XCTAssertEqual(AudioRouteChangeCause(rawReason: 99), .unknown(reason: 99))
+    }
+
+    /// **The distinction the whole task exists for.** A category change is the
+    /// app changing its own mind — on the transmit path, it *is* the
+    /// transmission starting. Everything else is the route moving underneath.
+    func testOnlyACategoryChangeIsNotAnExternalMove() {
+        XCTAssertFalse(AudioRouteChangeCause.categoryChange.isExternalRouteMove)
+
+        for cause: AudioRouteChangeCause in [
+            .newDeviceAvailable, .oldDeviceUnavailable, .override, .wakeFromSleep,
+            .noSuitableRouteForCategory, .routeConfigurationChange,
+            .engineConfigurationChange,
+        ] {
+            XCTAssertTrue(cause.isExternalRouteMove, "\(cause) should count as a real move")
+        }
+    }
+
+    /// **An unknown cause must not be the quiet one.** If a future OS invents a
+    /// reason, the safe default is to treat it as the route moving, because the
+    /// failure mode of the other choice is a microphone left open.
+    func testAnUnknownCauseCountsAsAnExternalMove() {
+        XCTAssertTrue(AudioRouteChangeCause.unknown(reason: 42).isExternalRouteMove)
+        XCTAssertTrue(AudioRouteChangeCause(rawReason: 0).isExternalRouteMove)
+    }
+
+    /// The engine's own reconfiguration is not a session route change and has no
+    /// raw reason at all — it is the only cause on macOS.
+    func testEngineConfigurationChangeIsNotProducedByTheRawMapping() {
+        for raw in UInt(0)...UInt(10) {
+            XCTAssertNotEqual(
+                AudioRouteChangeCause(rawReason: raw), .engineConfigurationChange,
+                "the engine cause has no reason code and must not be mapped from one")
+        }
+    }
+
+    /// The raw numbers against the symbols they claim to be. iOS-only, so this
+    /// is a backstop for whoever runs the suite on a simulator rather than a
+    /// guard that fires on every push — the same arrangement as the policy
+    /// round-trip above.
+    func testRawReasonsRoundTripToTheAVFoundationSymbols() throws {
+        #if os(iOS)
+        XCTAssertEqual(AVAudioSession.RouteChangeReason.newDeviceAvailable.rawValue, 1)
+        XCTAssertEqual(AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue, 2)
+        XCTAssertEqual(AVAudioSession.RouteChangeReason.categoryChange.rawValue, 3)
+        XCTAssertEqual(AVAudioSession.RouteChangeReason.override.rawValue, 4)
+        XCTAssertEqual(AVAudioSession.RouteChangeReason.wakeFromSleep.rawValue, 6)
+        XCTAssertEqual(
+            AVAudioSession.RouteChangeReason.noSuitableRouteForCategory.rawValue, 7)
+        XCTAssertEqual(
+            AVAudioSession.RouteChangeReason.routeConfigurationChange.rawValue, 8)
+        #else
+        throw XCTSkip("AVAudioSession.RouteChangeReason is iOS-only")
+        #endif
+    }
+}
+
 // MARK: - Audio-session policy (RC-11)
 
 /// The policy is the one thing in this file that can be asserted on any

@@ -184,7 +184,7 @@ has merged and the code it describes exists.
 
 ```
 Phase 0  Bootstrap        BOOT-1             ✅ complete
-Phase 1  RadioCore        RC-1 … RC-12       ✅ complete
+Phase 1  RadioCore        RC-1 … RC-13       ✅ complete
 Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1 … CLI-3      ✅ complete
 Phase 4  SwiftUI app      APP-1 … APP-22     ✅ all closed → the app's own plan
@@ -960,6 +960,56 @@ disconnect — runs against nothing but `NetworkClient`, proven by a fake client
 in `RadioCoreTests` that is a plain `final class` rather than an actor; every
 mode's mapping table is asserted case by case; and a live IAX2 session shows
 `radioEvents` is exactly `events.compactMap(\.radioEvent)`, in order.
+
+### RC-13 — `routeChanged` carries why ✅ DONE
+
+**Why, and it is a defect this package enabled rather than a feature request.**
+`SF-3` says transmission must be dropped when the audio route changes, and
+`AudioSessionSignal.routeChanged` carried no reason — so nothing above this
+package could tell *"the category changed because the app just asked for it"*
+from *"the microphone was unplugged"*.
+
+That is not academic. Currawong tried `RC-12`'s listening policy on the transmit
+path on 2026-08-22 and had to revert the same day: a category change **is** a
+route change, so asking for the recording policy at key-down dropped the very
+transmission it was enabling, and the automatic resume did it again.
+
+```
+key down → activateSession(radio) → route change → SF-3 drops transmit
+         → resume keys back down → route change → …
+```
+
+Every component behaved as specified. The loop was the consequence of a signal
+that could not say why it fired, so `RC-12` was unusable without this.
+
+**What shipped.**
+
+- `AudioRouteChangeCause` — `categoryChange`, `newDeviceAvailable`,
+  `oldDeviceUnavailable`, `override`, `wakeFromSleep`,
+  `noSuitableRouteForCategory`, `routeConfigurationChange`,
+  `engineConfigurationChange`, and `unknown(reason:)` carrying the number it did
+  not recognise.
+- `init(rawReason:)`, mapping Apple's raw codes. Raw rather than typed for the
+  same reason ``AudioSessionPolicy`` uses raw strings: `AVAudioSession` is
+  iOS-only and a mapping that cannot be tested on macOS is one nobody checks.
+- `routeChanged(AudioRouteChangeCause)`.
+- `isExternalRouteMove` — false for `categoryChange`, **true for everything
+  else, `unknown` included**. An unrecognised cause must not be the quiet one:
+  the failure mode of the other choice is a microphone left open.
+
+**This package still does not decide.** `AudioPipeline` drops nothing, and which
+causes warrant an unkey stays where PTT state lives — the note on
+`AudioSessionSignal` has always said so. What changed is that the judgement is
+now *possible*.
+
+**Source break, deliberate and small.** `.routeChanged` gains an associated
+value, so a `switch` that matches without binding still compiles and any code
+*constructing* the case does not. The only construction sites are in this
+package; Currawong's test fakes emit it and will need the cause.
+
+Tests: six on macOS — the mapping, unrecognised numbers keeping their value, the
+`categoryChange`-is-not-external distinction, unknown-is-external, the engine
+cause never coming from a raw code — plus the raw-to-symbol round-trip on iOS.
 
 ### RC-12 — A listening policy, so HFP is held only while transmitting ✅ DONE
 
