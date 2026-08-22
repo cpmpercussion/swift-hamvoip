@@ -116,6 +116,94 @@ public struct AudioSessionPolicy: Equatable, Sendable {
     public static let allowBluetoothA2DP: UInt = 0x20
 }
 
+/// **Why the audio route changed (RC-13).**
+///
+/// `SF-3` says transmission must be dropped when the route changes, and that is
+/// right for every cause here but one. A **category change the app asked for**
+/// is not the world moving under a live transmission; it *is* the transmission
+/// starting. Without this distinction a caller that switches category on the
+/// transmit path drops the very over it is enabling and then, if it resumes,
+/// does it again — measured in Currawong on 2026-08-22, where it made
+/// transmitting unusable and had to be reverted.
+///
+/// So the cause travels with the signal, and the caller decides. **The library
+/// still does not decide**: `AudioPipeline` drops nothing, and which causes
+/// warrant an unkey is a judgement that belongs where PTT state lives. What
+/// changed is that the judgement is now *possible*.
+///
+/// Raw values rather than `AVAudioSession.RouteChangeReason`, for the same
+/// reason ``AudioSessionPolicy`` uses raw strings: that type is iOS-only, and a
+/// mapping that cannot be tested on the platform this package's tests run on is
+/// a mapping nobody checks.
+public enum AudioRouteChangeCause: Equatable, Sendable {
+
+    /// **The category, mode or options changed** — usually because the app asked.
+    /// The one cause that does not, on its own, mean a live transmission is in
+    /// danger. `AVAudioSession.RouteChangeReason.categoryChange`.
+    case categoryChange
+
+    /// Something was plugged in or connected.
+    case newDeviceAvailable
+
+    /// **Something was unplugged or went away.** The case `SF-3` exists for: a
+    /// microphone that has left while the operator is still talking.
+    case oldDeviceUnavailable
+
+    /// The route was overridden, e.g. by `overrideOutputAudioPort`.
+    case override
+
+    /// The device woke, and the route was re-evaluated.
+    case wakeFromSleep
+
+    /// No route can serve the current category. Transmission cannot continue.
+    case noSuitableRouteForCategory
+
+    /// The selected route's own configuration changed — sample rate, channel
+    /// count — without the route itself changing.
+    case routeConfigurationChange
+
+    /// **The engine's configuration changed**, rather than the session's route.
+    /// The only cause on macOS, where there is no `AVAudioSession`, and also
+    /// raised on iOS when the graph is rebuilt underneath a running engine.
+    case engineConfigurationChange
+
+    /// A reason this version does not recognise, carried through rather than
+    /// discarded so a caller can log it. Treated as dangerous by anyone
+    /// implementing `SF-3`: an unknown cause is not a safe cause.
+    case unknown(reason: UInt)
+
+    /// Map a raw `AVAudioSession.RouteChangeReason` value.
+    ///
+    /// The numbers are Apple's and are pinned by tests here, including a
+    /// round-trip against the symbols themselves on iOS.
+    public init(rawReason: UInt) {
+        switch rawReason {
+        case 1: self = .newDeviceAvailable
+        case 2: self = .oldDeviceUnavailable
+        case 3: self = .categoryChange
+        case 4: self = .override
+        case 6: self = .wakeFromSleep
+        case 7: self = .noSuitableRouteForCategory
+        case 8: self = .routeConfigurationChange
+        default: self = .unknown(reason: rawReason)
+        }
+    }
+
+    /// Whether this cause means the *session's route* moved, as opposed to the
+    /// app changing its own mind about what it wants.
+    ///
+    /// Offered as a description, not a decision: a caller implementing `SF-3`
+    /// will likely drop transmit for everything except ``categoryChange``, but
+    /// that choice stays with the caller. ``unknown(reason:)`` counts as a real
+    /// move, because an unrecognised cause must not be the quiet one.
+    public var isExternalRouteMove: Bool {
+        switch self {
+        case .categoryChange: return false
+        default: return true
+        }
+    }
+}
+
 /// SF-3 signal: audio session interruption or route change.
 ///
 /// `AudioPipeline` does not itself stop transmission — the caller (the call
@@ -137,7 +225,11 @@ public enum AudioSessionSignal: Sendable, Equatable {
     /// The audio route changed (headset plugged/unplugged, output device
     /// changed, engine configuration changed on macOS). Treated the same as
     /// an interruption per SF-3: transmit MUST be dropped.
-    case routeChanged
+    /// The audio route changed. **Carries why** (RC-13): `SF-3` wants transmit
+    /// dropped for a route that moved, but a `categoryChange` the app asked for
+    /// is the transmission *starting*, not the route being pulled away. See
+    /// ``AudioRouteChangeCause``.
+    case routeChanged(AudioRouteChangeCause)
 }
 
 // MARK: - Frame chunker (pure, directly testable — AU-5)
@@ -1205,7 +1297,10 @@ public final class AudioPipeline: @unchecked Sendable {
             object: engine,
             queue: nil
         ) { [weak self] _ in
-            self?.signalContinuation.yield(.routeChanged)
+            // Not a session route change: the engine itself was reconfigured.
+            // The only one of these on macOS, and on iOS it accompanies a graph
+            // rebuild.
+            self?.signalContinuation.yield(.routeChanged(.engineConfigurationChange))
         }
         notificationTokens.append(configurationToken)
 
@@ -1214,8 +1309,10 @@ public final class AudioPipeline: @unchecked Sendable {
             forName: AVAudioSession.routeChangeNotification,
             object: session,
             queue: nil
-        ) { [weak self] _ in
-            self?.signalContinuation.yield(.routeChanged)
+        ) { note in
+            let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            self?.signalContinuation.yield(
+                .routeChanged(AudioRouteChangeCause(rawReason: raw ?? 0)))
         }
         notificationTokens.append(routeToken)
         #endif
