@@ -31,8 +31,13 @@ licensed Swift implementation of IAX2 or M17 exists at all.
 ### Explicit non-goals
 
 - **NG-1.** DMR, System Fusion (YSF), D-STAR, P25 and NXDN are out of scope.
-  All require AMBE or AMBE+2, which is patent-encumbered. This is a permanent
-  exclusion, not a deferral.
+  All require AMBE or AMBE+2, which is patent-encumbered. The exclusion is
+  permanent for as long as that encumbrance stands — it is not a deferral, and
+  no amount of work on our side lifts it. It is conditional on patent status
+  and on nothing else; the provenance of any implementation is a separate
+  question, governed by LP-1 and LP-2 rather than by this requirement. Should
+  the encumbrance lapse, reopening these modes takes an explicit amendment
+  here, not an inference drawn from an expiry date.
 - **NG-2.** No MMDVM or USB hardware modem support. iOS cannot host USB serial
   devices without MFi, and the modes requiring it are excluded by NG-1 anyway.
 - **NG-3.** No MFi accessory protocol support. Requires Apple MFi programme
@@ -48,7 +53,14 @@ after distribution has begun.
 - **LP-1.** All protocol implementations in this repository MUST be clean-room.
   Permitted sources: published specifications (RFC 5456, the M17 specification,
   the EchoLink proxy protocol document), and packet captures of the author's own
-  sessions.
+  sessions. An **expired** patent counts as a published specification: the
+  disclosure is the consideration the public was granted in exchange for the
+  monopoly, and once the monopoly lapses the document is a reference rather than
+  a restriction. A patent still in force is not a permitted source: reading one
+  invites a willful-infringement finding on top of the infringement itself.
+  Expiry is the whole of the distinction. Checking a patent's *status* — filing
+  and grant dates, term adjustment, legal state — is not reading it, and is
+  always permitted.
 - **LP-2.** GPL-licensed implementations (DroidStar, SvxLink/EchoLib, thebridge,
   iaxclient) MUST NOT be consulted at source level by anyone contributing code.
   They may be referenced for behavioural observation only.
