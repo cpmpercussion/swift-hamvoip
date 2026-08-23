@@ -18,7 +18,9 @@ here, on its own branch and PR, cited from the app's plan by ID.
 - **Clean-room:** never fetch/read/search source code of DroidStar, SvxLink,
   EchoLib, thebridge, iaxclient, Asterisk, or any other implementation of
   these protocols. Allowed sources: RFC 5456, the M17 spec, ITU-T G.711,
-  and fixtures already in this repo.
+  fixtures already in this repo, and **expired** patents — a lapsed monopoly
+  leaves the disclosure behind as a reference (LP-1). A patent still in force
+  is not an allowed source; checking its status is not reading it.
 - Line 1 of every Swift file: `// SPDX-License-Identifier: Apache-2.0`.
 - No sockets in unit tests; network access only behind `DatagramTransport`.
 - No third-party dependencies unless the plan task names one.
