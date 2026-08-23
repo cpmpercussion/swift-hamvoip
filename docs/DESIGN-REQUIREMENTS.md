@@ -214,7 +214,10 @@ failure mode for software clients. These requirements are not negotiable.
   lowercase 32-character hex; **must be settled against a live node.**
 - **OQ-6.** LGPL-2.1 relinking versus App Store code signing, for Codec2. A
   licensing judgement, not a technical blocker. Gates App Store submission of
-  M17.
+  M17. **Split by platform 2026-08-23.** A Developer ID macOS build *can*
+  satisfy §6(b) literally — see the OQ-6 row of `docs/DEVELOPMENT-PLAN.md` for
+  the method — so only the store-distributed halves remain open, and those are
+  an upstream licensing question rather than ours to engineer.
 - **OQ-7.** ~~Is the M17 IP stream frame 56 bytes or 54?~~ **Resolved
   2026-08-11: 54 bytes**, a 28-byte LICH with the LSF's own CRC absent.
   Settled by observation against a live reflector, not from the document — the
