@@ -38,9 +38,12 @@ major version is 0, the API may change in any release.
 
 - **Weebill receive proven 2026-08-28**, on a net on M17-842 module H, decoded
   in Currawong on macOS. Other stations' audio, intelligible, no fault
-  attributable to the codec. **Transmit is still unproven** — no Weebill encode
-  has been heard by an independent station, and that is the harder direction.
-  Codec2 stays until it has been.
+  attributable to the codec.
+- **Weebill transmit heard by the reference codec, 2026-08-28.** Weebill encode
+  through M17-CBR module A, decoded by a second Currawong running the drowe67
+  codec2 XCFramework: normal quality. Both ends are our own app, so this is
+  cross-*implementation* but not cross-*station*; a third-party client
+  reporting us readable is still owed. Codec2 stays until it has been.
 
 ## [0.5.3] — 2026-08-20
 

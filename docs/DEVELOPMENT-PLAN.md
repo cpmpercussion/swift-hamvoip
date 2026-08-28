@@ -2439,15 +2439,24 @@ sound". That is other stations' encoders through our decoder, which is the
 direction a listener depends on and the one the OQ-7 differential could only
 approximate offline.
 
-⚠️ **Transmit remains unproven, and nothing here changes that.** No Weebill
-*encode* has been heard by anyone else. It is the harder half — decoding a
-reference bitstream demonstrates the quantiser tables and unpacking, while
-encoding demonstrates that our analysis stage picks indices a reference decoder
-renders as speech, which no test in this repository can establish. Until an
-independent station reports us readable, in the style of the M17-4 sign-off of
-2026-08-17, Weebill is validated in one direction only. **Do not remove codec2
-before then** — it is the fallback if transmit turns out to be where the two
-implementations diverge.
+✅ **TRANSMIT HEARD BY THE REFERENCE CODEC, SAME DAY.** Weebill encode →
+M17-CBR module A → a **second Currawong running `Codec2Codec`**, i.e. the
+drowe67 codec2 1.2.0 XCFramework, decoding it: normal Codec 2 quality, no
+artefact the maintainer could attribute to the encoder. This is the harder
+direction and the one no test here can reach — decoding a reference bitstream
+demonstrates the quantiser tables and the unpacking, while *encoding*
+demonstrates that our analysis stage picks indices a reference decoder renders
+as speech. It now has, over a real network path.
+
+⚠️ **What it is not: an independent station.** Both ends are our own app, by
+one author, on one machine, against a reflector we operate. The decode side is
+genuinely the reference C implementation rather than Weebill checking its own
+work, which is what makes the result worth having — but a third-party client
+reporting us readable, in the style of the M17-4 sign-off of 2026-08-17, is
+still owed and is what would close this out. **Do not remove codec2 before
+then**: it is both the fallback if transmit turns out to be where the two
+implementations diverge, and — as this result shows — the instrument that
+measures whether they do.
 
 **Measured against real on-air audio, decode side only.** The one piece of
 evidence here that is neither synthetic nor a matter of taste: both decoders
