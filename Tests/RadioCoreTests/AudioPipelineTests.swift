@@ -527,6 +527,169 @@ final class AudioPipelineConstructionTests: XCTestCase {
 /// both what it produces and what it costs. What is left for CLI-1 to confirm
 /// on real hardware is only whether audio flows at all — not whether the
 /// conversion, the chunking, the ring, or the allocation behaviour are right.
+// MARK: - Capture chain rebuild (RC-14)
+
+/// **RC-14 — the capture chain must not outlive the format it was built for.**
+///
+/// The defect: `startCapture` snapshotted the input device's format once and
+/// nothing rebuilt what it derived from it, so an
+/// `AVAudioEngineConfigurationChange` — which is what the operator changing the
+/// default input device produces — left a live tap resampling from a rate the
+/// device no longer ran at and, worse, striding by a channel count the buffers
+/// no longer had. `CaptureTapProcessor` reads `source[index * channelStride]`;
+/// a stride of 2 held over a de-interleaved mono buffer reads twice as far as
+/// channel 0's allocation, on the real-time audio thread.
+///
+/// The format decision is the part that was wrong, so the format decision is
+/// what these tests pin down, with no `AVAudioEngine` and no microphone.
+/// Whether a rebuild really happens when a device is pulled is hardware, and
+/// belongs to `hamvoip-cli` (AU-5) — what is checked here is that the decision
+/// it acts on is right and that nothing rebuilds when nothing changed.
+final class CaptureChainTests: XCTestCase {
+    /// `AVAudioFormat` refuses more than two channels without an explicit
+    /// channel layout, so the many-channel cases below skip rather than fail:
+    /// the point of those loops is that the stride rule holds for every channel
+    /// count the framework will describe, not that it describes all of them.
+    private func format(rate: Double, channels: AVAudioChannelCount, interleaved: Bool) -> AVAudioFormat? {
+        AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: rate,
+            channels: channels,
+            interleaved: interleaved
+        )
+    }
+
+    private func requiredFormat(
+        rate: Double, channels: AVAudioChannelCount, interleaved: Bool,
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws -> AVAudioFormat {
+        try XCTUnwrap(format(rate: rate, channels: channels, interleaved: interleaved), file: file, line: line)
+    }
+
+    private func chain(_ format: AVAudioFormat?) -> CaptureChain? {
+        guard let format else { return nil }
+        return chain(format)
+    }
+
+    private func chain(_ format: AVAudioFormat) -> CaptureChain? {
+        CaptureChain(
+            inputFormat: format,
+            wireSampleRate: AudioPipeline.wireSampleRate,
+            maxInputFrames: 4_096,
+            frameSize: AudioPipeline.captureFrameSize,
+            ringCapacity: AudioPipeline.captureRingCapacityFrames
+        )
+    }
+
+    // MARK: The stride decision
+
+    func testDeinterleavedBuffersStrideByOneWhateverTheChannelCount() {
+        for channels in AVAudioChannelCount(1)...8 {
+            guard let format = format(rate: 48_000, channels: channels, interleaved: false) else { continue }
+            XCTAssertEqual(
+                CaptureChain.channelStride(for: format), 1,
+                "channel 0 of a de-interleaved buffer is its own contiguous allocation"
+            )
+        }
+    }
+
+    func testInterleavedBuffersStrideByTheChannelCount() {
+        for channels in AVAudioChannelCount(1)...8 {
+            guard let format = format(rate: 48_000, channels: channels, interleaved: true) else { continue }
+            XCTAssertEqual(CaptureChain.channelStride(for: format), Int(channels))
+        }
+    }
+
+    func testTheChainCarriesTheStrideItDecidedIntoItsProcessor() throws {
+        let stereoInterleaved = try XCTUnwrap(chain(requiredFormat(rate: 48_000, channels: 2, interleaved: true)))
+        XCTAssertEqual(stereoInterleaved.channelStride, 2)
+        XCTAssertEqual(stereoInterleaved.sourceSampleRate, 48_000)
+
+        let monoDeinterleaved = try XCTUnwrap(chain(requiredFormat(rate: 44_100, channels: 1, interleaved: false)))
+        XCTAssertEqual(monoDeinterleaved.channelStride, 1)
+        XCTAssertEqual(monoDeinterleaved.sourceSampleRate, 44_100)
+    }
+
+    func testAChainIsNilForARateCoreAudioWillNotConvert() throws {
+        XCTAssertNil(chain(try requiredFormat(rate: 0, channels: 1, interleaved: false)),
+                     "a device reporting no rate must fail the chain, not produce a divide-by-nothing converter")
+    }
+
+    // MARK: What counts as stale
+
+    /// The exact swap seen on 2026-08-28: an interleaved stereo USB input
+    /// replaced by the de-interleaved mono built-in microphone. Stride 2 over
+    /// a mono buffer is the out-of-bounds read, so this pair *must* compare
+    /// unequal — it is the case the whole task exists for.
+    func testAStrideChangeMakesTheChainStale() throws {
+        let usb = try XCTUnwrap(chain(requiredFormat(rate: 48_000, channels: 2, interleaved: true)))
+        XCTAssertFalse(
+            usb.matches(try requiredFormat(rate: 48_000, channels: 1, interleaved: false)),
+            "stride 2 held over a de-interleaved mono buffer reads past channel 0"
+        )
+    }
+
+    func testARateChangeMakesTheChainStale() throws {
+        let at48k = try XCTUnwrap(chain(requiredFormat(rate: 48_000, channels: 1, interleaved: false)))
+        XCTAssertFalse(at48k.matches(try requiredFormat(rate: 44_100, channels: 1, interleaved: false)))
+    }
+
+    func testAnUnchangedFormatDoesNotMakeTheChainStale() throws {
+        let current = try requiredFormat(rate: 48_000, channels: 2, interleaved: true)
+        let built = try XCTUnwrap(chain(current))
+        XCTAssertTrue(built.matches(current))
+        XCTAssertTrue(
+            built.matches(try requiredFormat(rate: 48_000, channels: 2, interleaved: true)),
+            "an equal format described by a different object is still the same format"
+        )
+    }
+
+    /// Channel count alone is not staleness: de-interleaved stereo and
+    /// de-interleaved mono are both read as stride 1, because only channel 0 is
+    /// ever read. Rebuilding for that would drop the frames in flight for
+    /// nothing, and on iOS this notification arrives often.
+    func testAChannelCountChangeThatDoesNotMoveTheStrideIsNotStale() throws {
+        let stereo = try XCTUnwrap(chain(requiredFormat(rate: 48_000, channels: 2, interleaved: false)))
+        XCTAssertTrue(stereo.matches(try requiredFormat(rate: 48_000, channels: 1, interleaved: false)))
+    }
+}
+
+/// The pipeline-side half of RC-14: what a configuration change does when no
+/// capture is running. A running capture needs a microphone, so it is confirmed
+/// on hardware rather than here (AU-5) — but "there is nothing to rebuild" is
+/// the branch that must never reach for `engine.inputNode`, since that line
+/// instantiates the input audio unit and, on iOS, is permission-adjacent.
+final class CaptureConfigurationChangeTests: XCTestCase {
+    func testAConfigurationChangeWithNoCaptureRunningRebuildsNothing() {
+        let pipeline = AudioPipeline()
+        pipeline.simulateEngineConfigurationChange()
+        XCTAssertEqual(pipeline.captureChainRebuildCount, 0)
+        XCTAssertEqual(pipeline.captureChainRebuildFailureCount, 0)
+        XCTAssertEqual(pipeline.droppedCaptureFrameCount, 0, "no session, so no lost audio to report")
+    }
+
+    func testAConfigurationChangeIsStillAnnouncedWhenNothingWasRebuilt() async {
+        let pipeline = AudioPipeline()
+        var iterator = pipeline.signals.makeAsyncIterator()
+
+        pipeline.simulateEngineConfigurationChange()
+
+        let signal = await iterator.next()
+        XCTAssertEqual(
+            signal, .routeChanged(.engineConfigurationChange),
+            "SF-3 must hear about the reconfiguration whether or not capture had to be rebuilt"
+        )
+    }
+
+    func testStopIsStillSafeAfterAConfigurationChange() {
+        let pipeline = AudioPipeline()
+        pipeline.simulateEngineConfigurationChange()
+        pipeline.stop()
+        pipeline.simulateEngineConfigurationChange()
+        XCTAssertEqual(pipeline.captureChainRebuildCount, 0)
+    }
+}
+
 final class RealTimeCapturePathTests: XCTestCase {
     private let wireRate = 8_000.0
     private let frameSize = AudioPipeline.captureFrameSize // 160

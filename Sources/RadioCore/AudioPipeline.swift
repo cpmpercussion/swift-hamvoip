@@ -871,6 +871,104 @@ final class CaptureTapProcessor {
     }
 }
 
+// MARK: - Capture chain (RC-14)
+
+/// Everything about a capture session that is derived from the **input
+/// device's current format**, built in one place so that it can be rebuilt in
+/// one place.
+///
+/// ### Why this type exists (RC-14)
+///
+/// `startCapture` used to snapshot the hardware format inline and scatter what
+/// it derived from it — the converter's source rate, the tap's channel stride —
+/// across three local constants. Nothing rebuilt them, so an
+/// `AVAudioEngineConfigurationChange` (the operator changing the default input
+/// device is one) left a live tap resampling from a rate the device no longer
+/// ran at, striding by a channel count the buffers no longer had. The stride is
+/// the sharp end: ``CaptureTapProcessor/process(channelZero:frameCount:)``
+/// reads `source[index * channelStride]`, and a stride captured as 2 against a
+/// buffer that is now de-interleaved mono reads past the end of channel 0's
+/// allocation — an out-of-bounds read on the real-time audio thread.
+///
+/// Gathering the derivation here makes the rebuild a single expression
+/// (``init?(inputFormat:)``) rather than a second copy of `startCapture`'s
+/// body, and makes the format decision — which is the part that was wrong —
+/// testable without a microphone. See ``AudioPipeline`` for where the rebuild
+/// is triggered.
+///
+/// Compare ``PlaybackChain``, which is deliberately immune: playback buffers
+/// are declared in the chain's *own* mono format and `AVAudioMixerNode` adapts
+/// them to whatever the output hardware currently wants, so nothing on that
+/// side has to be rebuilt when the hardware moves. Capture cannot be symmetric
+/// with it, because a tap does not get to choose the format it is handed: the
+/// buffers arrive in the input device's format, so the input device's format is
+/// a fact this side must track rather than one it can convert away.
+struct CaptureChain {
+    /// The input rate this chain's converter was built for.
+    let sourceSampleRate: Double
+
+    /// Distance in `Float`s between consecutive channel-0 samples — see
+    /// ``CaptureTapProcessor``.
+    let channelStride: Int
+
+    /// The tap body. Owns the converter, the assembler and the ring.
+    let processor: CaptureTapProcessor
+
+    var ring: RealTimeRingBuffer { processor.ring }
+
+    /// The stride channel-0 reads must use for a given input format.
+    ///
+    /// De-interleaved buffers — what `AVAudioEngine` taps normally deliver —
+    /// put channel 0 in its own allocation, so consecutive samples are
+    /// adjacent whatever the channel count. Interleaved buffers put the
+    /// channels side by side, so channel 0's samples are `channelCount` apart.
+    ///
+    /// Floored at 1. A format reporting zero channels is not a format we can
+    /// read, but a stride of 0 would make every read land on sample 0 rather
+    /// than fail, and ``CaptureTapProcessor`` has a `precondition` that says
+    /// so; the caller's rate check rejects such a device first.
+    static func channelStride(for format: AVAudioFormat) -> Int {
+        guard format.isInterleaved else { return 1 }
+        return max(1, Int(format.channelCount))
+    }
+
+    /// - Returns: `nil` if CoreAudio will not build a converter for the input
+    ///   device's rate — the same condition `startCapture` reports as
+    ///   ``AudioPipelineError/converterUnavailable``.
+    init?(
+        inputFormat: AVAudioFormat,
+        wireSampleRate: Double,
+        maxInputFrames: Int,
+        frameSize: Int,
+        ringCapacity: Int
+    ) {
+        guard let converter = RealTimeDownConverter(
+            sourceSampleRate: inputFormat.sampleRate,
+            wireSampleRate: wireSampleRate,
+            maxInputFrames: maxInputFrames
+        ) else { return nil }
+
+        self.sourceSampleRate = inputFormat.sampleRate
+        self.channelStride = Self.channelStride(for: inputFormat)
+        self.processor = CaptureTapProcessor(
+            converter: converter,
+            ring: RealTimeRingBuffer(frameSize: frameSize, capacity: ringCapacity),
+            channelStride: channelStride
+        )
+    }
+
+    /// Whether this chain is still the right one for `format`.
+    ///
+    /// Rate and stride are the only two things derived from the format, so they
+    /// are the only two that can go stale. A configuration change that moves
+    /// neither — most of them, on iOS, where the notification accompanies route
+    /// changes that leave the input device alone — needs no rebuild, and
+    /// rebuilding anyway would drop the frames in flight for nothing.
+    func matches(_ format: AVAudioFormat) -> Bool {
+        sourceSampleRate == format.sampleRate && channelStride == Self.channelStride(for: format)
+    }
+}
+
 /// Carries the caller's `onFrame` closure from ``AudioPipeline/startCapture(onFrame:)``
 /// into the drain task.
 ///
@@ -1008,18 +1106,45 @@ public final class AudioPipeline: @unchecked Sendable {
     /// a bus that already has one.
     private var isCapturing = false
 
-    /// Guarded by ``lock``. The current (or most recent) capture session's ring.
+    /// Guarded by ``lock``. The **live** capture session's ring; `nil` between
+    /// sessions.
     ///
-    /// Deliberately **not** cleared by `stop()`: the dropped-frame count of the
-    /// session that just ended is the number a caller most wants to read, and
-    /// throwing it away the moment capture stops would hide exactly what it
-    /// exists to reveal. `startCapture` replaces it.
+    /// The dropped-frame count of the session that just ended is the number a
+    /// caller most wants to read, so it is not thrown away when the ring is —
+    /// ``teardownCaptureLocked()`` moves it into
+    /// ``droppedFramesFromRetiredRings`` first, and
+    /// ``droppedCaptureFrameCount`` adds the two. Before RC-14 the ring itself
+    /// was kept for this, which a mid-session rebuild would have made
+    /// ambiguous: two rings, one session, one number.
     private var captureRing: RealTimeRingBuffer?
 
     /// Guarded by ``lock``. Drains ``captureRing`` at ordinary priority and
     /// calls the caller's `onFrame`. Cancelled by `stop()` and by a repeated
     /// `startCapture`.
     private var captureTask: Task<Void, Never>?
+
+    /// Guarded by ``lock``. Everything the current capture session derives from
+    /// the input device's format — see ``CaptureChain``. Held so that
+    /// ``rebuildCaptureAfterConfigurationChange()`` can tell a chain that has
+    /// gone stale from one that has not (RC-14).
+    private var captureChain: CaptureChain?
+
+    /// Guarded by ``lock``. The current session's `onFrame`, kept so that a
+    /// chain rebuilt under the caller keeps delivering to the same closure
+    /// (RC-14). Cleared by `stop()`: without a caller asking for audio there is
+    /// nothing to rebuild for.
+    private var captureSink: FrameSink?
+
+    /// Guarded by ``lock``. Frames dropped by rings this session has retired —
+    /// see ``droppedCaptureFrameCount``, which adds the live ring's own count
+    /// to this. Non-zero only when a chain was rebuilt mid-session (RC-14).
+    private var droppedFramesFromRetiredRings = 0
+
+    /// Guarded by ``lock``. See ``captureChainRebuildCount``.
+    private var captureChainRebuilds = 0
+
+    /// Guarded by ``lock``. See ``captureChainRebuildFailureCount``.
+    private var captureChainRebuildFailures = 0
 
     private let signalContinuation: AsyncStream<AudioSessionSignal>.Continuation
 
@@ -1096,47 +1221,86 @@ public final class AudioPipeline: @unchecked Sendable {
     /// - Throws: ``AudioPipelineError/converterUnavailable`` if CoreAudio will
     ///   not build a converter for the input device's rate.
     public func startCapture(onFrame: @escaping ([Int16]) -> Void) throws {
-        let inputNode = engine.inputNode
-        let hardwareFormat = inputNode.outputFormat(forBus: 0)
-
-        // A converter per capture session, owned by this session's tap alone.
-        // Its rate comes from the input device and is never allowed to reach
-        // the playback path (RC-7 Defect 1) — and because it is never shared,
-        // the stateful converter inside it is only ever driven from the one
-        // thread that drives this tap (RC-7 Defect 2).
-        guard let captureConverter = RealTimeDownConverter(
-            sourceSampleRate: hardwareFormat.sampleRate,
-            wireSampleRate: Self.wireSampleRate,
-            maxInputFrames: Self.maxTapFrames
-        ) else {
-            throw AudioPipelineError.converterUnavailable
-        }
-
-        let ring = RealTimeRingBuffer(
-            frameSize: Self.captureFrameSize,
-            capacity: Self.captureRingCapacityFrames
-        )
-        let processor = CaptureTapProcessor(
-            converter: captureConverter,
-            ring: ring,
-            channelStride: hardwareFormat.isInterleaved ? Int(hardwareFormat.channelCount) : 1
-        )
         let sink = FrameSink(deliver: onFrame)
 
         lock.lock()
         defer { lock.unlock() }
 
-        // Installing a second tap on a bus that already has one is a hard
-        // error in AVAudioEngine; make a repeated startCapture mean "restart".
+        captureSink = sink
+        // A new session, so a new count. `installCaptureLocked` adds the
+        // outgoing ring's drops to the carry-over, which is what a *rebuild*
+        // wants and a fresh start does not, so clear it afterwards.
+        do {
+            try installCaptureLocked(sink: sink)
+            droppedFramesFromRetiredRings = 0
+            captureChainRebuilds = 0
+            captureChainRebuildFailures = 0
+        } catch {
+            captureSink = nil
+            throw error
+        }
+    }
+
+    /// Builds a chain for the input device's *current* format and installs it,
+    /// tearing down whatever was there first. The one place a tap is installed:
+    /// ``startCapture(onFrame:)`` calls it to begin a session and
+    /// ``rebuildCaptureAfterConfigurationChange()`` calls it to replace a chain
+    /// the hardware has invalidated (RC-14).
+    ///
+    /// Must be called with ``lock`` held.
+    ///
+    /// - Throws: ``AudioPipelineError/converterUnavailable`` if CoreAudio will
+    ///   not build a converter for the input device's rate, or whatever
+    ///   `AVAudioEngine.start()` throws.
+    private func teardownCaptureLocked() {
         if isCapturing {
-            inputNode.removeTap(onBus: 0)
+            // Only touch the input node if we actually opened it: reaching for
+            // `engine.inputNode` instantiates the input audio unit, which is
+            // pointless (and on iOS, permission-adjacent) in a receive-only or
+            // never-started session.
+            engine.inputNode.removeTap(onBus: 0)
             isCapturing = false
         }
         captureTask?.cancel()
         captureTask = nil
+        captureChain = nil
+        // The dropped count belongs to the *session*, not to the ring, so a
+        // chain rebuilt mid-session does not quietly reset the number that says
+        // how much transmit audio was lost. `startCapture` clears the
+        // carry-over for a session that is genuinely new.
+        droppedFramesFromRetiredRings += captureRing?.droppedFrameCount ?? 0
+        captureRing = nil
+    }
+
+    private func installCaptureLocked(sink: FrameSink) throws {
+        let inputNode = engine.inputNode
+        let hardwareFormat = inputNode.outputFormat(forBus: 0)
+
+        // A chain per capture session, owned by this session's tap alone. Its
+        // rate comes from the input device and is never allowed to reach the
+        // playback path (RC-7 Defect 1) — and because it is never shared, the
+        // stateful converter inside it is only ever driven from the one thread
+        // that drives this tap (RC-7 Defect 2).
+        guard let chain = CaptureChain(
+            inputFormat: hardwareFormat,
+            wireSampleRate: Self.wireSampleRate,
+            maxInputFrames: Self.maxTapFrames,
+            frameSize: Self.captureFrameSize,
+            ringCapacity: Self.captureRingCapacityFrames
+        ) else {
+            throw AudioPipelineError.converterUnavailable
+        }
+
+        // Installing a second tap on a bus that already has one is a hard
+        // error in AVAudioEngine; make a repeated startCapture mean "restart".
+        // Deliberately *after* the chain is built, so a `startCapture` that
+        // cannot build one leaves the session it was asked to replace running
+        // rather than killing it on the way out.
+        teardownCaptureLocked()
 
         // The only thing the render thread does. No allocation, no lock, no
         // caller code — see CaptureTapProcessor.
+        let processor = chain.processor
         inputNode.installTap(
             onBus: 0,
             bufferSize: Self.tapBufferSize,
@@ -1145,8 +1309,9 @@ public final class AudioPipeline: @unchecked Sendable {
             processor.process(buffer)
         }
         isCapturing = true
-        captureRing = ring
-        captureTask = Self.makeDrainTask(ring: ring, sink: sink)
+        captureChain = chain
+        captureRing = chain.ring
+        captureTask = Self.makeDrainTask(ring: chain.ring, sink: sink)
 
         do {
             if !engine.isRunning {
@@ -1157,7 +1322,66 @@ public final class AudioPipeline: @unchecked Sendable {
             isCapturing = false
             captureTask?.cancel()
             captureTask = nil
+            captureChain = nil
             throw error
+        }
+    }
+
+    /// **RC-14.** Replaces the capture chain with one built for the input
+    /// device's current format, after `AVAudioEngine` has told us the format it
+    /// was built for may no longer be the one arriving.
+    ///
+    /// Called from the `.AVAudioEngineConfigurationChange` observer **before**
+    /// the signal is published, so a consumer that acts on `.routeChanged` —
+    /// SF-3 ending a transmission, say — never observes a half-rebuilt chain.
+    ///
+    /// Does nothing when no capture is running (there is no stale chain to
+    /// replace; playback restarts the engine on its own — see
+    /// ``enqueuePlayback(_:)``) or when the format is unchanged, which is most
+    /// of them on iOS, where this notification accompanies route changes that
+    /// leave the input device alone.
+    ///
+    /// The whole of what an `.AVAudioEngineConfigurationChange` means to this
+    /// class: rebuild, then announce. Both halves in one method so that the
+    /// test hook drives the same two steps in the same order the notification
+    /// does, rather than a copy of them.
+    private func handleEngineConfigurationChange() {
+        rebuildCaptureAfterConfigurationChange()
+        signalContinuation.yield(.routeChanged(.engineConfigurationChange))
+    }
+
+    private func rebuildCaptureAfterConfigurationChange() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard isCapturing, let sink = captureSink else { return }
+
+        let hardwareFormat = engine.inputNode.outputFormat(forBus: 0)
+        if let current = captureChain, current.matches(hardwareFormat) {
+            // The formats agree, so the tap is still reading correctly. The
+            // engine may still have been stopped by the reconfiguration,
+            // though, and a stopped engine delivers no buffers at all.
+            if !engine.isRunning {
+                try? engine.start()
+            }
+            return
+        }
+
+        // **The stale tap comes down first, and unconditionally.** Not as part
+        // of installing its replacement: building one can fail — CoreAudio may
+        // refuse a converter for the device the system just moved to — and the
+        // failure path must not be the one that leaves a tap reading through a
+        // format description we already know is wrong. Silence is recoverable;
+        // an out-of-bounds read on the audio thread is not.
+        teardownCaptureLocked()
+        do {
+            try installCaptureLocked(sink: sink)
+            captureChainRebuilds += 1
+        } catch {
+            // Capture is over. The caller finds out through the `.routeChanged`
+            // signal published immediately after this, which for SF-3's sake it
+            // has to act on anyway.
+            captureChainRebuildFailures += 1
         }
     }
 
@@ -1168,11 +1392,13 @@ public final class AudioPipeline: @unchecked Sendable {
     /// nothing else; it is reported rather than hidden because a silent gap is
     /// indistinguishable, from the operator's chair, from a bad network path.
     /// Resets when ``startCapture(onFrame:)`` begins a new session; survives
-    /// ``stop()`` so the session that just ended can still be inspected.
+    /// ``stop()`` so the session that just ended can still be inspected, and
+    /// survives a chain rebuilt under a running session (RC-14) — a device
+    /// swap mid-over must not make the audio lost before it disappear.
     public var droppedCaptureFrameCount: Int {
         lock.lock()
         defer { lock.unlock() }
-        return captureRing?.droppedFrameCount ?? 0
+        return droppedFramesFromRetiredRings + (captureRing?.droppedFrameCount ?? 0)
     }
 
     /// Frames currently sitting in the capture ring, waiting for the drain
@@ -1181,6 +1407,30 @@ public final class AudioPipeline: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return captureRing?.availableFrames ?? 0
+    }
+
+    /// How many times a running capture session has had its chain rebuilt for
+    /// a changed input format (RC-14).
+    ///
+    /// Diagnostic. This package has no logger, and a rebuild is deliberately
+    /// invisible to the caller — the same `onFrame` goes on being called — so
+    /// this is how a harness or a bug report gets to say the device moved under
+    /// an over. Cleared by ``startCapture(onFrame:)``; survives `stop()`.
+    public var captureChainRebuildCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return captureChainRebuilds
+    }
+
+    /// How many of those rebuilds failed, each of which ended capture (RC-14).
+    ///
+    /// Non-zero means the system moved to an input device CoreAudio will not
+    /// build a converter for, and any transmission running at the time went
+    /// silent. Counts and clears with ``captureChainRebuildCount``.
+    public var captureChainRebuildFailureCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return captureChainRebuildFailures
     }
 
     /// The normal-priority side of the handoff: drain everything the ring has,
@@ -1257,17 +1507,11 @@ public final class AudioPipeline: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        captureTask?.cancel()
-        captureTask = nil
+        teardownCaptureLocked()
+        // No caller wants audio any more, so there is nothing for a
+        // configuration change to rebuild (RC-14).
+        captureSink = nil
 
-        if isCapturing {
-            // Only touch the input node if we actually opened it: reaching for
-            // `engine.inputNode` instantiates the input audio unit, which is
-            // pointless (and on iOS, permission-adjacent) in a receive-only or
-            // never-started session.
-            engine.inputNode.removeTap(onBus: 0)
-            isCapturing = false
-        }
         playerNode.stop()
         if engine.isRunning {
             engine.stop()
@@ -1297,10 +1541,21 @@ public final class AudioPipeline: @unchecked Sendable {
             object: engine,
             queue: nil
         ) { [weak self] _ in
+            guard let self else { return }
             // Not a session route change: the engine itself was reconfigured.
             // The only one of these on macOS, and on iOS it accompanies a graph
             // rebuild.
-            self?.signalContinuation.yield(.routeChanged(.engineConfigurationChange))
+            //
+            // **RC-14: rebuild first, announce second.** The format this
+            // session's tap was built for may no longer be the format arriving
+            // in it, and a stale channel stride is an out-of-bounds read on the
+            // audio thread. Doing it here rather than leaving it to the
+            // consumer is not a convenience: the consumer cannot reach the
+            // chain, and the ~7 ms it takes one to notice and stop is 7 ms of a
+            // live tap reading through a format description the system has
+            // already told us is wrong. Ordering it before the `yield` means a
+            // consumer acting on the signal never races a half-rebuilt chain.
+            self.handleEngineConfigurationChange()
         }
         notificationTokens.append(configurationToken)
 
@@ -1402,6 +1657,20 @@ public final class AudioPipeline: @unchecked Sendable {
     /// Must equal ``playbackBufferFormat`` — a buffer scheduled in a format
     /// other than its connection's is the bug this pair of hooks guards.
     var playbackConnectionFormat: AVAudioFormat { playerNode.outputFormat(forBus: 0) }
+
+    /// Runs exactly what the `.AVAudioEngineConfigurationChange` observer runs
+    /// (RC-14), without a device having to disappear underneath the test.
+    ///
+    /// Internal and test-only. It reaches no hardware while no capture is
+    /// running — ``rebuildCaptureAfterConfigurationChange()`` returns before
+    /// touching `engine.inputNode`, which is the line that would instantiate
+    /// the input audio unit and, on iOS, raise a permission prompt — so this
+    /// is safe to call on a headless machine. Under a *running* capture it
+    /// does the real rebuild, which is why the hardware half of RC-14 is
+    /// confirmed by `hamvoip-cli` rather than here (AU-5).
+    func simulateEngineConfigurationChange() {
+        handleEngineConfigurationChange()
+    }
 
     /// Starts the same drain loop `startCapture` starts, against a
     /// caller-supplied ring.

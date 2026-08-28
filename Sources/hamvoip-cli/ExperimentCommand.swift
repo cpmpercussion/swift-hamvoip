@@ -27,5 +27,5 @@ struct ExperimentCommand: AsyncParsableCommand {
             Useful against a second reflector — a different answer there would be \
             new information, not a bug. Receive-only.
             """,
-        subcommands: [OQ5Command.self, OQ7Command.self])
+        subcommands: [OQ5Command.self, OQ7Command.self, CaptureSwapCommand.self])
 }

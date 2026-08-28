@@ -963,7 +963,7 @@ in `RadioCoreTests` that is a plain `final class` rather than an actor; every
 mode's mapping table is asserted case by case; and a live IAX2 session shows
 `radioEvents` is exactly `events.compactMap(\.radioEvent)`, in order.
 
-### RC-14 — the capture chain survives an engine reconfiguration 🔧 OPEN 2026-08-28
+### RC-14 — the capture chain survives an engine reconfiguration ✅ DONE 2026-08-28
 
 **Found while investigating a Currawong crash (`BU-23`), by reading rather than
 by a failing test.** `startCapture` snapshots the hardware format once:
@@ -1011,6 +1011,57 @@ gain a comment saying why it cannot be.
 report nothing about whether captured audio is actually *present*, which is what
 `BU-22` needs in order to warm the input at connect time and know it worked. A
 cheap non-silence signal on the capture path would serve both.
+
+**Done.** `CaptureChain` (new) owns everything derived from the input device's
+format — the converter's source rate and the tap's channel stride, which were
+three loose constants inside `startCapture` — so the rebuild is one expression
+rather than a second copy of that method's body, and the format decision that
+went stale is testable without a microphone. The
+`.AVAudioEngineConfigurationChange` observer now rebuilds **before** it yields
+the signal, so a consumer acting on `.routeChanged` never races a half-rebuilt
+chain. Three details worth not re-deriving:
+
+- **The stale tap comes down first, and unconditionally.** Not as part of
+  installing its replacement: building one can fail — CoreAudio may refuse a
+  converter for the device the system just moved to — and that failure path must
+  not be the one that leaves a live tap reading through a format we already know
+  is wrong. Silence is recoverable; an out-of-bounds read on the audio thread is
+  not. `startCapture` keeps the opposite order on purpose, so a `startCapture`
+  that cannot build a chain leaves the session it was asked to replace running.
+- **A configuration change that moves neither the rate nor the stride rebuilds
+  nothing** (`CaptureChain.matches`). On iOS this notification accompanies route
+  changes that leave the input device alone, and rebuilding for those would drop
+  the frames in flight for nothing.
+- **`droppedCaptureFrameCount` now spans the rings of one session**, so a device
+  swap mid-over cannot quietly reset the number that says how much transmit
+  audio was lost. `captureChainRebuildCount` and
+  `captureChainRebuildFailureCount` are new alongside it — this package has no
+  logger, and a rebuild is invisible to the caller by design, so a counter is how
+  a bug report gets to say the device moved under an over.
+
+**Confirmed on hardware, because no unit test can reach this claim.** New
+subcommand `hamvoip-cli experiment capture-swap` changes the system default
+input device under a live capture and reports what the pipeline did; see
+`docs/CLI.md` §12, transcripts in `experiment-data/rc14-capture-swap.txt`. Two
+AddressSanitizer runs on melchior, 2026-08-28, macOS 26.5.1, eight swaps each:
+as shipped, 550 frames delivered, 0 rebuilds, 0 drops, ASan silent; with
+`matches()` temporarily forced to `false` so every swap rebuilds, 530 frames, 8
+rebuilds, 0 failures, 0 drops, ASan silent — the tap comes down and back up, the
+same `onFrame` keeps being called, and a rebuild costs about 25 ms of audio.
+
+**And one finding that goes back to `BU-23`, stated plainly because it cuts
+against the case for this task having caused that crash: the out-of-bounds read
+is not reachable on this Mac.** The input node reports 44100 Hz **de-interleaved**
+for every input device, including one whose hardware is running at 48 kHz; the
+only thing that moves across a swap is the channel count, and de-interleaved
+buffers stride by 1 whatever the channel count. The stride can only go stale for
+an *interleaved* format, and macOS did not hand one to an `AVAudioEngine` tap in
+any configuration tried. The rate half stays reachable on iOS, where a Bluetooth
+HFP route changes the session rate under a running capture. So this was worth
+fixing on its own merits — a live tap must not keep reading through a format
+description the system has told us is stale — and it remains true that fixing it
+does not answer `BU-23`. It now looks *less* likely to have been the cause, not
+more.
 
 **One more observation from the same crash report, recorded here because it is
 this file's code:** `AudioPipeline.enqueuePlayback` was blocking a
