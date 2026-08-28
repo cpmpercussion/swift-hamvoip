@@ -1483,9 +1483,14 @@ idle as the default input (278 ms / 279 ms), 10 minutes idle with the default
 moved away so macOS released the audio profile (268 / 268), and a genuine power
 cycle measured within a second of the device reappearing (265 / 265).
 
-So **the fault is not "Bluetooth"** — it is inputs that power their microphone
-down between uses, and a speaker-mic built for PTT keeps its ready. This one
-sits with the USB webcam. Two things follow for anyone running this probe:
+So **the fault is not simply "Bluetooth"** — but **what distinguishes the two
+devices is not established.** What this probe measures is behaviour: one input
+delivered frames of exact zeros for 1574 ms after the open, another delivered
+audio in its first frame. Why is unknown, and nothing here separates the
+candidates — SCO setup timing, profile switching, the device's own DSP or AGC
+start-up, noise gating, or the link being kept active by other traffic. Do not
+repeat a power-management explanation as though this probe had produced one.
+Two things follow for anyone running it:
 
 - **A device that shows no fault has not confirmed anything.** It cannot
   exercise a hold chosen to fix one, so Currawong's number remains settled by the
