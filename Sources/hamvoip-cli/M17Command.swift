@@ -38,11 +38,11 @@ struct M17Command: AsyncParsableCommand {
             on M17-434 B through an independent client). Validated against one \
             reflector and one receiving implementation so far.
 
-            Requires Codec2.xcframework:
+            The codec is Weebill, the library's pure-Swift Codec 2 3200, on \
+            every build. Pass --codec codec2 to use the LGPL XCFramework \
+            instead, which is available only where it has been built:
 
                 scripts/build-codec2-xcframework.sh
-
-            Without it this command is built out entirely and will report so.
             """)
 
     @Option(name: .long, help: "Reflector host name or address.")
@@ -69,21 +69,24 @@ struct M17Command: AsyncParsableCommand {
     @Option(name: .long, help: "End the session after this many seconds.")
     var duration: Int?
 
+    /// Which Codec 2 3200 implementation to run (M17-7).
+    ///
+    /// The point of the option is A/B on the air: the two are the same codec
+    /// from different implementations, so anything audibly different between
+    /// them is a finding. `codec2` needs the XCFramework and so is rejected on
+    /// a build without it, rather than silently falling back — a fallback would
+    /// make the comparison report a result for a codec it did not run.
+    @Option(
+        name: .long,
+        help: "Codec 2 3200 implementation: weebill (pure Swift) or codec2 (XCFramework).")
+    var codec: CodecChoice = .weebill
+
+    enum CodecChoice: String, ExpressibleByArgument, CaseIterable {
+        case weebill
+        case codec2
+    }
+
     func run() async throws {
-        #if !CODEC2
-        throw ValidationError(
-            """
-            This build has no Codec2, so M17 audio is not available.
-
-            Build the framework and rebuild:
-
-                scripts/build-codec2-xcframework.sh
-                swift package reset      # SwiftPM caches the manifest
-                swift build
-
-            See docs/reference/CODEC2-XCFRAMEWORK.md.
-            """)
-        #else
         guard let moduleLetter = module.first, module.count == 1,
             moduleLetter.isLetter, moduleLetter.isUppercase, moduleLetter.isASCII
         else {
@@ -94,6 +97,7 @@ struct M17Command: AsyncParsableCommand {
         }
 
         let session = try M17Session(
+            codec: try Self.makeCodec(codec),
             destination: M17Destination(
                 host: host, port: port, module: moduleLetter,
                 callsign: try ConfigFile.requireCallsign(commandLineValue: callsign).uppercased()),
@@ -101,11 +105,33 @@ struct M17Command: AsyncParsableCommand {
             useAudioDevices: audio,
             duration: duration.map { .seconds($0) })
         try await session.run()
-        #endif
+    }
+
+    /// The chosen codec, or an error naming what to do about it.
+    static func makeCodec(_ choice: CodecChoice) throws -> any VoiceCodec {
+        switch choice {
+        case .weebill:
+            return try WeebillVoiceCodec()
+        case .codec2:
+            #if CODEC2
+            return try Codec2VoiceCodec()
+            #else
+            throw ValidationError(
+                """
+                This build has no Codec2.xcframework, so --codec codec2 is not \
+                available. Build it and rebuild:
+
+                    scripts/build-codec2-xcframework.sh
+                    swift package reset      # SwiftPM caches the manifest
+                    swift build
+
+                Or drop the option: --codec weebill is the default and needs \
+                nothing. See docs/reference/CODEC2-XCFRAMEWORK.md.
+                """)
+            #endif
+        }
     }
 }
-
-#if CODEC2
 
 /// One `hamvoip-cli m17` session.
 private final class M17Session: @unchecked Sendable {
@@ -127,6 +153,7 @@ private final class M17Session: @unchecked Sendable {
     private var isQuitting = false
 
     init(
+        codec: any VoiceCodec,
         destination: M17Destination,
         transmitTimeout: Duration,
         useAudioDevices: Bool,
@@ -136,7 +163,7 @@ private final class M17Session: @unchecked Sendable {
         self.useAudioDevices = useAudioDevices
         self.duration = duration
         self.client = M17Client(
-            codec: try Codec2VoiceCodec(),
+            codec: codec,
             configuration: M17Client.Configuration(transmitTimeout: transmitTimeout),
             clock: ContinuousClock())
         self.console = Console(isInteractive: isatty(STDOUT_FILENO) == 1)
@@ -433,5 +460,3 @@ private final class M17Session: @unchecked Sendable {
         if isQuitting { await console.log("Quit requested by operator.") }
     }
 }
-
-#endif

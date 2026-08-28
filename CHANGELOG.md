@@ -8,6 +8,32 @@ major version is 0, the API may change in any release.
 
 ## [Unreleased]
 
+### Added
+
+- **Weebill: Codec 2 3200 in pure Swift, alongside the existing LGPL
+  XCFramework (M17-7, FR-2.4).** `WeebillVoiceCodec` conforms to
+  `RadioCore.VoiceCodec` exactly as `Codec2VoiceCodec` does — 160 samples /
+  8 bytes, lock-guarded, separate encoder and decoder instances — and is now a
+  second `Package.swift` dependency
+  (`https://github.com/cpmpercussion/weebill`, BSD-2-Clause, no dependencies of
+  its own; the second this package has ever taken, after
+  `swift-argument-parser`/CLI-1). Unlike the XCFramework it is source, not a
+  binary, so it needs no manifest probe, no build script and no conditional
+  compilation — it is present on every checkout, CI included. `Codec2VoiceCodec`
+  is unchanged and still present behind `#if CODEC2`; removing it is a later,
+  separate decision that has not been taken. 12 new tests in
+  `WeebillVoiceCodecTests`, 9 of them unconditional and 3 gated `#if CODEC2` to
+  cross-check the two implementations against each other.
+- **`hamvoip-cli m17 --codec weebill|codec2` (M17-7).** The command no longer
+  compiles out entirely on a checkout without `Codec2.xcframework` — it now
+  defaults to Weebill and runs anywhere. `--codec codec2` throws a
+  `ValidationError` naming the build script when the framework is not present,
+  rather than silently falling back to Weebill.
+
+### Changed
+
+- Full suite: **1039 tests, 0 failures, 4 skipped.**
+
 ## [0.5.3] — 2026-08-20
 
 ⚠️ **Two environment variables were renamed, neither with a fallback. Read

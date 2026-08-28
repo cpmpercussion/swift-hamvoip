@@ -23,17 +23,17 @@ which is patented.
 
 ## Status
 
-**v0.5.3.** 1016 tests, green on `main` — a few more with the Codec2 framework
-present, and one that skips unless it is given a station-list download. This is
-a 0.x release — the API will change, and v0.5.3 renamed the CLI's
-`HAMVOIP_SECRET` to `IAX2_SECRET` with no fallback. As of v0.5.0 **every mode has
-both audio directions confirmed on the air.**
+**Unreleased.** 1039 tests, green on `main` — a few more with the Codec2
+framework present, and one that skips unless it is given a station-list
+download. This is a 0.x release — the API will change, and v0.5.3 renamed the
+CLI's `HAMVOIP_SECRET` to `IAX2_SECRET` with no fallback. As of v0.5.0 **every
+mode has both audio directions confirmed on the air.**
 
 | Module | State |
 |---|---|
 | `RadioCore` | Complete. Transport abstractions for datagram and stream, G.711 µ-law, adaptive jitter buffer, transmit watchdog, received-audio leveller, `AVAudioEngine` pipeline with 48 kHz ↔ 8 kHz conversion and a real-time-safe capture path, and the `NetworkClient` seam an app is written against — state, events, received audio and a transmit path, with no protocol type in sight. |
 | `IAX2Kit` | Complete. AllStarLink over IAX2 (RFC 5456): frames and mini-frames, information elements, sequencing and retransmission, MD5 authentication, call state machine, voice, DTMF, registration, and `IAX2Client` composing them. |
-| `M17Kit` | Complete. Reflector control, base-40 callsigns, stream mode both ways, Codec2 3200 (FR-2.4), and `M17Client`. Both directions confirmed against live reflectors — see below. |
+| `M17Kit` | Complete. Reflector control, base-40 callsigns, stream mode both ways, Codec 2 3200 (FR-2.4) via two interchangeable implementations — `WeebillVoiceCodec` (pure Swift, the default) and `Codec2VoiceCodec` (the LGPL XCFramework, opt-in) — and `M17Client`. Both directions confirmed against live reflectors — see below; Weebill itself has not yet been on the air. |
 | `EchoLinkKit` | Complete. Proxy transport, directory login, RTP/RTCP audio, GSM 06.10 over a vendored C target, the station directory, public proxy discovery, and `EchoLinkClient`. Proxied routes only — see below. |
 | `hamvoip-cli` | macOS harness, one command per protocol: `iax2` (alias `connect`), `echolink`, `m17` — plus `experiment`, the on-air probes that settled OQ-5 and OQ-7. |
 
@@ -101,7 +101,11 @@ no test opens a socket.
   edge timing, met its half-duplex target — a parrot node — on 2026-08-17.)
 - **Codec2 under LGPL-2.1 for App Store distribution** is an open licensing
   question (OQ-6), deliberately deferred until submission is actually in view.
-  It gates shipping M17 in a signed iOS app rather than the code here.
+  It gates shipping M17 in a signed iOS app rather than the code here. M17-7
+  made it *avoidable* rather than resolved: `WeebillVoiceCodec` is a
+  BSD-2-Clause, pure-Swift alternative conforming to the same seam, and is now
+  the CLI's default. Codec2 has not been removed and nobody has decided to —
+  OQ-6 still wants a conscious decision, just no longer only one way.
 
 The open questions are tracked in
 [`docs/DEVELOPMENT-PLAN.md`](docs/DEVELOPMENT-PLAN.md).
@@ -126,13 +130,16 @@ Then depend on the products you need:
 ])
 ```
 
-`M17Kit` additionally wants a `Codec2.xcframework`, which is not committed —
-the manifest probes for it and builds the codec conformance only when it is
-present, so a bare checkout builds and tests without it. Run
+`M17Kit` uses Codec 2 3200 via `WeebillVoiceCodec`, a pure-Swift dependency
+(`weebill`) that needs nothing extra to build or run. A `Codec2.xcframework`
+is optional: it is not committed, and the manifest probes for it and builds the
+`Codec2VoiceCodec` conformance — plus a handful of cross-implementation tests —
+only when it is present, so a bare checkout builds and tests the whole package
+without it. It is worth building only for `--codec codec2` on the CLI (an
+on-air A/B against Weebill) or to run those cross-implementation tests. Run
 `scripts/build-codec2-xcframework.sh`, then `swift package reset`, because
 SwiftPM caches the evaluated manifest against its contents rather than against
-the filesystem the probe reads. Everything except the codec conformance itself
-is tested either way.
+the filesystem the probe reads.
 
 ## Quick start
 
@@ -229,7 +236,8 @@ swift run hamvoip-cli echolink --auto-proxy --callsign VK1ABC --list
 swift run hamvoip-cli echolink --auto-proxy --callsign VK1ABC \
     --peer 203.0.113.7 --node '*ECHOTEST*'
 
-# M17: link module C of a reflector (needs Codec2.xcframework — see above)
+# M17: link module C of a reflector (Weebill by default; --codec codec2 needs
+# Codec2.xcframework — see above)
 swift run hamvoip-cli m17 --host ref.example.org --module C --callsign VK1ABC
 
 swift run hamvoip-cli --help
