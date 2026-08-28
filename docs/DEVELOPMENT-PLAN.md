@@ -2429,10 +2429,25 @@ and takes the shortest lag within 10% of the best.
 **Honestly recorded, not glossed over:** the perceptual claim behind this
 task is the maintainer's — they listened to test audio through every
 encode/decode combination and could hear no difference. The in-tree tests above
-are a regression net under that judgement, not the evidence for it. **No
-Weebill audio has been on the air yet as of this writing** — that is the gap
-between this entry's "done" and a live-validation claim in the style of M17-5's,
-and is why this task is marked done for the *library* work only.
+are a regression net under that judgement, not the evidence for it.
+
+✅ **RECEIVE PROVEN ON AIR 2026-08-28.** A net on **M17-842 module H**, decoded
+by `WeebillVoiceCodec` in Currawong on macOS (APP-27, library v0.6.0), heard by
+the maintainer: other operators' audio, intelligible, with no fault attributable
+to the codec — "as fine as multiple-stage-encoded 3200 bps audio is likely to
+sound". That is other stations' encoders through our decoder, which is the
+direction a listener depends on and the one the OQ-7 differential could only
+approximate offline.
+
+⚠️ **Transmit remains unproven, and nothing here changes that.** No Weebill
+*encode* has been heard by anyone else. It is the harder half — decoding a
+reference bitstream demonstrates the quantiser tables and unpacking, while
+encoding demonstrates that our analysis stage picks indices a reference decoder
+renders as speech, which no test in this repository can establish. Until an
+independent station reports us readable, in the style of the M17-4 sign-off of
+2026-08-17, Weebill is validated in one direction only. **Do not remove codec2
+before then** — it is the fallback if transmit turns out to be where the two
+implementations diverge.
 
 **Measured against real on-air audio, decode side only.** The one piece of
 evidence here that is neither synthetic nor a matter of taste: both decoders
