@@ -1434,3 +1434,48 @@ before the format is read. The crash is a bad pointer dereference with garbage
 high bits, which macOS reports as a *possible pointer authentication failure* —
 the same crash shape as `BU-23`, from nothing more exotic than a use-after-free.
 The engine is held in a local for the duration of the call, and must be.
+
+## 13. `experiment input-warm-up` — the silence a cold device delivers (BU-22)
+
+**What it is for.** Currawong's `BU-22`: the first over after the input device
+spins up is silent, and *frames arrive the whole time* — they are simply all
+zero — so nothing above the device can tell it from an operator saying nothing.
+This measures the gap between the first frame and the first frame that carries
+audio, before and after a warm-up.
+
+Local, not on air. It opens the microphone (§1 covers the macOS permission) and
+reports counts and timings only; no audio is written anywhere.
+
+```sh
+hamvoip-cli experiment input-warm-up                       # warm-up, gap, then an over
+hamvoip-cli experiment input-warm-up --no-warm-up          # the fault on its own
+hamvoip-cli experiment input-warm-up --warm-up 0.5         # a warm-up shorter than the silence
+```
+
+### It needs a cold device, and that is the hard part
+
+A permanently powered input shows nothing at all. On melchior, 2026-08-28, the
+Logitech StreamCam delivered room noise **in its first buffer at 283 ms** while
+a Bluetooth headset on the same machine, minutes later, delivered **1574 ms of
+exact zeros**. Make the headset the default input and leave the machine alone
+for twenty minutes or so; anything that opens the microphone in the meantime —
+including a previous run of this command — warms the device and spends the
+measurement.
+
+### Result — melchior, 2026-08-28 ✅
+
+Recorded in `experiment-data/bu22-input-warmup.txt`.
+
+```
+warm-up (0.8 s):               35 frames,  0 with audio, first frame 198 ms, first audio NEVER
+over, 0.8 s after the warm-up: 75 frames, 67 with audio, first frame 134 ms, first audio 233 ms
+```
+
+**The warm-up never saw audio itself** — 35 frames, every one of them zero, for
+its whole 800 ms — and the over that followed carried audio 98 ms after its
+first frame, against roughly 1400 ms cold. So **it is the opening that wakes the
+device**, not holding it open until audio appears, which is the premise
+Currawong's warm-up hold was chosen on and had until now only an argument for.
+
+One trial on one device. A second, on a different Bluetooth input, would be
+worth having before the number is treated as settled.
