@@ -6,7 +6,7 @@ All notable changes to this project are recorded here. The format follows
 follows [semantic versioning](https://semver.org/spec/v2.0.0.html) — while the
 major version is 0, the API may change in any release.
 
-## [Unreleased]
+## [0.6.0] — 2026-08-28
 
 ### Added
 
@@ -33,6 +33,14 @@ major version is 0, the API may change in any release.
 ### Changed
 
 - Full suite: **1039 tests, 0 failures, 4 skipped.**
+
+### On air
+
+- **Weebill receive proven 2026-08-28**, on a net on M17-842 module H, decoded
+  in Currawong on macOS. Other stations' audio, intelligible, no fault
+  attributable to the codec. **Transmit is still unproven** — no Weebill encode
+  has been heard by an independent station, and that is the harder direction.
+  Codec2 stays until it has been.
 
 ## [0.5.3] — 2026-08-20
 
