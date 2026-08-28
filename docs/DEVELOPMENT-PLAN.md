@@ -1043,25 +1043,42 @@ chain. Three details worth not re-deriving:
 subcommand `hamvoip-cli experiment capture-swap` changes the system default
 input device under a live capture and reports what the pipeline did; see
 `docs/CLI.md` §12, transcripts in `experiment-data/rc14-capture-swap.txt`. Two
-AddressSanitizer runs on melchior, 2026-08-28, macOS 26.5.1, eight swaps each:
+AddressSanitizer runs on melchior, 2026-08-28, macOS 26.5.1, eight swaps each
+(a third, against a Bluetooth headset, is discussed below):
 as shipped, 550 frames delivered, 0 rebuilds, 0 drops, ASan silent; with
 `matches()` temporarily forced to `false` so every swap rebuilds, 530 frames, 8
 rebuilds, 0 failures, 0 drops, ASan silent — the tap comes down and back up, the
 same `onFrame` keeps being called, and a rebuild costs about 25 ms of audio.
 
 **And one finding that goes back to `BU-23`, stated plainly because it cuts
-against the case for this task having caused that crash: the out-of-bounds read
-is not reachable on this Mac.** The input node reports 44100 Hz **de-interleaved**
-for every input device, including one whose hardware is running at 48 kHz; the
-only thing that moves across a swap is the channel count, and de-interleaved
+against the case for this task having caused that crash: nothing in the capture
+chain can go stale under a running capture on macOS, so the out-of-bounds read
+is not reachable there.** A third probe run, after a Bluetooth headset joined the
+machine, is what established the rule — and corrected a wrong reading of the
+first two, which had suggested the input node simply reports 44100 Hz for
+everything:
+
+> `AVAudioEngine` fixes its input rate when the input audio unit is
+> instantiated, and a device change afterwards does not move it — CoreAudio
+> resamples into the rate the engine already chose. Only the **channel count**
+> follows the device.
+
+The evidence is that a *fresh* engine on the AirPods reports 24000 Hz mono,
+against 44100 Hz stereo for the StreamCam, while swapping to those same AirPods
+*under a running capture* reports 44100 Hz mono — the engine's rate, the new
+device's channel count. So the rate cannot go stale within an engine's life, and
+the stride cannot either: every device here is de-interleaved, and de-interleaved
 buffers stride by 1 whatever the channel count. The stride can only go stale for
-an *interleaved* format, and macOS did not hand one to an `AVAudioEngine` tap in
-any configuration tried. The rate half stays reachable on iOS, where a Bluetooth
-HFP route changes the session rate under a running capture. So this was worth
-fixing on its own merits — a live tap must not keep reading through a format
-description the system has told us is stale — and it remains true that fixing it
-does not answer `BU-23`. It now looks *less* likely to have been the cause, not
-more.
+an *interleaved* format, which macOS did not hand to a tap in any configuration
+tried.
+
+The rebuild therefore never fires on macOS 26.5, and that is the correct
+behaviour rather than a gap — `matches()` is doing its job. It is reachable
+where the graph is rebuilt under the caller rather than resampled into, which on
+iOS is what this notification accompanies. So this was worth fixing on its own
+merits — a live tap must not keep reading through a format description the
+system has told us is stale — and it remains true that fixing it does not answer
+`BU-23`. It now looks *less* likely to have been the cause, not more.
 
 **One more observation from the same crash report, recorded here because it is
 this file's code:** `AudioPipeline.enqueuePlayback` was blocking a
