@@ -963,6 +963,62 @@ in `RadioCoreTests` that is a plain `final class` rather than an actor; every
 mode's mapping table is asserted case by case; and a live IAX2 session shows
 `radioEvents` is exactly `events.compactMap(\.radioEvent)`, in order.
 
+### RC-14 — the capture chain survives an engine reconfiguration 🔧 OPEN 2026-08-28
+
+**Found while investigating a Currawong crash (`BU-23`), by reading rather than
+by a failing test.** `startCapture` snapshots the hardware format once:
+
+```swift
+let hardwareFormat = inputNode.outputFormat(forBus: 0)
+guard let captureConverter = RealTimeDownConverter(
+    sourceSampleRate: hardwareFormat.sampleRate, …)
+let processor = CaptureTapProcessor(
+    …, channelStride: hardwareFormat.isInterleaved ? Int(hardwareFormat.channelCount) : 1)
+```
+
+and the `.AVAudioEngineConfigurationChange` observer does exactly one thing with
+that notification — `signalContinuation.yield(.routeChanged(.engineConfigurationChange))`.
+**Nothing rebuilds the capture chain.** The converter keeps resampling from a
+rate the device may no longer be running at, and the tap keeps striding by a
+channel count the buffers may no longer have, for as long as the caller leaves
+capture running.
+
+**The stride is the sharp end.** `CaptureTapProcessor.process` reads
+`source[index * channelStride]` for `count` frames. Output is properly bounded —
+`mDataByteSize` is set from `outputCapacity` and `packets` is capped — and the
+input frame count is chunked against `maxInputFrames`. But `channelStride` is
+neither bounded nor rechecked, so a stride captured as ≥2 against a buffer that
+is now de-interleaved mono reads up to `stride ×` past the end of channel 0's
+allocation. **An out-of-bounds read on the real-time audio thread.**
+
+Observed in the wild on 2026-08-28: the operator changed the default input
+device mid-over, `AudioPipeline` yielded the signal, Currawong ended the
+transmission 7 ms later, and the process segfaulted 400 ms after that. Whether
+those are causally linked is `BU-23`'s question and is **not** settled — see
+that entry, and do not treat fixing this as answering it. This is worth fixing
+on its own merits: a live tap must not keep reading through a format description
+the system has told us is stale.
+
+**Shape of the fix.** Handle the notification rather than merely announcing it:
+tear the tap down and rebuild the converter, the stride and the processor from
+the current `inputNode.outputFormat(forBus: 0)`, then reinstall — before the
+signal is yielded, so a consumer acting on `.routeChanged` never races a
+half-rebuilt chain. Note that the playback side is deliberately immune and says
+so in a comment at `PlaybackChain`; capture is the asymmetric case and should
+gain a comment saying why it cannot be.
+
+**Worth doing at the same time, since it is the same code:** the pipeline can
+report nothing about whether captured audio is actually *present*, which is what
+`BU-22` needs in order to warm the input at connect time and know it worked. A
+cheap non-silence signal on the capture path would serve both.
+
+**One more observation from the same crash report, recorded here because it is
+this file's code:** `AudioPipeline.enqueuePlayback` was blocking a
+`com.apple.root.user-initiated-qos.cooperative` thread on a `pthread` mutex.
+Blocking a cooperative-pool thread is a hazard this repository has already paid
+for once — see the actor-reentrancy note in `CLAUDE.md` — and it wants its own
+look, though starvation causes hangs rather than the segfault seen there.
+
 ### RC-13 — `routeChanged` carries why ✅ DONE
 
 **Why, and it is a defect this package enabled rather than a feature request.**
