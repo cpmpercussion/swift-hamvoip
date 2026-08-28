@@ -53,8 +53,14 @@ struct InputWarmUpCommand: AsyncParsableCommand {
             MEASURED 2026-08-28, melchior, cold AirPods: a 0.8 s warm-up that never saw \
             audio itself — 35 frames, every one of them zero — was still enough to leave \
             the next open carrying audio 98 ms in, against roughly 1400 ms cold. So it is \
-            the opening that wakes the device. One trial on one device; a second, on a \
-            different Bluetooth input, is worth having. See docs/CLI.md §13.
+            the opening that wakes the device.
+
+            SECOND DEVICE 2026-08-29, a TIDRADIO Q2L: no fault at all — audio in the \
+            first frame from every state tried, including a power cycle. The fault is not \
+            "Bluetooth", it is inputs that power their microphone down; a PTT speaker-mic \
+            keeps its ready. A device with no fault cannot confirm a hold chosen to fix \
+            one. Note that idling may not produce a cold device: 20 minutes left the Q2L \
+            awake. See docs/CLI.md §13.
             """)
 
     @Option(name: .long, help: "Seconds to hold the warm-up capture open.")

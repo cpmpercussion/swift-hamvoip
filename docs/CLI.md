@@ -1477,5 +1477,23 @@ first frame, against roughly 1400 ms cold. So **it is the opening that wakes the
 device**, not holding it open until audio appears, which is the premise
 Currawong's warm-up hold was chosen on and had until now only an argument for.
 
-One trial on one device. A second, on a different Bluetooth input, would be
-worth having before the number is treated as settled.
+**The second device, 2026-08-29: a TIDRADIO Q2L, which does not have the fault
+at all.** Audio in the *first frame* from every starting state tried — 20 minutes
+idle as the default input (278 ms / 279 ms), 10 minutes idle with the default
+moved away so macOS released the audio profile (268 / 268), and a genuine power
+cycle measured within a second of the device reappearing (265 / 265).
+
+So **the fault is not "Bluetooth"** — it is inputs that power their microphone
+down between uses, and a speaker-mic built for PTT keeps its ready. This one
+sits with the USB webcam. Two things follow for anyone running this probe:
+
+- **A device that shows no fault has not confirmed anything.** It cannot
+  exercise a hold chosen to fix one, so Currawong's number remains settled by the
+  single AirPods measurement. Only an AirPods-class input tests it.
+- **Getting a genuinely cold device is the hard part, and idling may not do it.**
+  Twenty minutes idle as the default input left the Q2L wide awake, as did ten
+  with the default moved elsewhere. Where the device will not go cold on its own,
+  power-cycling it is the reliable way, and the measurement has to happen before
+  anything else opens the input. `kAudioDevicePropertyDeviceIsRunningSomewhere`
+  tells you nothing is holding it; the nominal sample rate does not — a Bluetooth
+  input reports its HFP rate even while idle.
