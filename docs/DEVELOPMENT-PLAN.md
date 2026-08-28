@@ -963,6 +963,68 @@ in `RadioCoreTests` that is a plain `final class` rather than an actor; every
 mode's mapping table is asserted case by case; and a live IAX2 session shows
 `radioEvents` is exactly `events.compactMap(\.radioEvent)`, in order.
 
+### RC-15 — installing the capture tap races the device, and the throw is not catchable 🔧 OPEN 2026-08-29
+
+**Found by a real crash, on air, in Currawong** — `BU-24` there, log in
+`experiment-data/bu24-installtap-format-mismatch-20260829.txt`:
+
+```
+Terminating app due to uncaught exception 'com.apple.coreaudio.avfaudio',
+reason: 'Failed to create tap due to format mismatch,
+         <AVAudioFormat 1 ch, 16000 Hz, Float32>'
+
+RadioSession.connect -> warmUpInput() -> AudioPipelineIO.startCapture
+  -> AudioPipeline.startCapture -> installCaptureLocked
+  -> AVAudioNode.installTapOnBus   <- throws
+```
+
+`installCaptureLocked` snapshots the format, builds the chain from it, tears the
+old tap down, and only then installs:
+
+```swift
+let hardwareFormat = inputNode.outputFormat(forBus: 0)
+guard let chain = CaptureChain(inputFormat: hardwareFormat, …)
+teardownCaptureLocked()
+inputNode.installTap(onBus: 0, bufferSize: …, format: hardwareFormat) { … }
+```
+
+**Between the read and the install, the device can change.** The node has moved
+on, the snapshot has not, and AVFAudio rejects it. 16000 Hz / 1 ch is a
+Bluetooth HFP input that was current when the format was read and was not when
+the tap went in.
+
+**Three things make this worse than a lost capture.**
+
+1. **The throw is an Objective-C `NSException`, so no Swift `catch` sees it.**
+   `installCaptureLocked` is `throws`, which is irrelevant here. Every caller
+   that believes it is handling failure — Currawong's `warmUpInput()` catches
+   explicitly so that "the connection is not failed over this" — gets process
+   termination instead. **A library that can kill its host from a `do/catch`
+   is the defect, more than the race is.**
+2. **It fires on the connect path**, because that is where the warm-up runs.
+3. **The RC-14 rebuild may share the window**, since
+   `rebuildCaptureAfterConfigurationChange` reaches the same install. Check
+   rather than assume; if it does, RC-14's fix can itself terminate the app on
+   the notification it exists to handle.
+
+**Same family as RC-14, different failure.** RC-14 was a bad read inside a
+*running* tap; this is a rejected install at the *start* of one, and RC-14's fix
+does not cover it. It is also **not** `BU-23` — different signal, different
+stack — so it closes nothing there.
+
+**The fix has a real design question in it, which is why this is a task and not
+a patch.** Passing `nil` as the format lets AVFAudio use whatever the node
+currently has, which cannot mismatch — but then the `CaptureChain` built from
+the snapshot is wrong in exactly the way RC-14 was about, so the two cannot be
+chosen independently. The chain has to be built from the format the tap actually
+gets, not from one read before it. Whatever the shape, **the requirement is that
+no input-device change can terminate the host process**, and that wants a test
+that drives the install with the format changing underneath it.
+
+Needs a hardware probe as well as a unit test: `hamvoip-cli experiment
+capture-swap` changes the device under a *running* capture, and this fault is at
+the start of one, so the probe does not currently reach it.
+
 ### RC-14 — the capture chain survives an engine reconfiguration ✅ DONE 2026-08-28
 
 **Found while investigating a Currawong crash (`BU-23`), by reading rather than
