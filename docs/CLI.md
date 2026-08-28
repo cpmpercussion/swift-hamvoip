@@ -1331,3 +1331,87 @@ That is the check to trust. A client-side "CONNECTED" is **not** sufficient: the
 node answers on its failure path too, before hanging up, so an unauthorised call
 still reports as connected for a second or so. If a call drops after about a
 second, the authority check failed; if it holds, you are attached.
+
+## 12. `experiment capture-swap` — pulling the microphone out mid-over (RC-14)
+
+**What it is for.** Everything else in the capture path is settled by unit
+tests that drive the tap body through its pointer entry point with no hardware
+at all (AU-5). One claim cannot be: *the capture chain is rebuilt when the input
+device changes underneath it.* That is a claim about what `AVAudioEngine` does
+on a real machine, so it is measured on one — the same way `oq5` and `oq7`
+measure things a document cannot answer.
+
+Local, not on air. Nothing is transmitted and no node is dialled. It opens the
+microphone (§1 covers the macOS permission) and changes the **system's default
+input device**, which it restores on the way out, including on `^C`.
+
+```sh
+hamvoip-cli experiment capture-swap --list          # what it can see
+hamvoip-cli experiment capture-swap --swaps 8       # capture, then swap 8 times
+hamvoip-cli experiment capture-swap --target "MacBook Air"
+```
+
+### What it is measuring
+
+Before RC-14, `startCapture` snapshotted the input device's format once — the
+converter's source rate and the tap's channel stride came from it — and nothing
+rebuilt them. `AVAudioEngineConfigurationChange`, which is exactly what changing
+the default input device produces, left a live tap resampling from a rate the
+device no longer ran at and striding by a channel count the buffers no longer
+had. A stride of 2 held over a de-interleaved mono buffer reads past the end of
+channel 0's allocation: an out-of-bounds read on the real-time audio thread.
+
+Worth running under AddressSanitizer, which catches such a read at the instant
+it happens rather than leaving it to be inferred from a crash somewhere else
+later — that is `BU-23`'s question:
+
+```sh
+swift build -Xswiftc -sanitize=address
+ASAN_OPTIONS=detect_leaks=0 .build/debug/hamvoip-cli experiment capture-swap --swaps 8
+```
+
+### Reading the result
+
+| Line | What it means |
+|---|---|
+| `rebuilds` | swaps that moved the input rate or the channel stride. **Zero is a legitimate result** — see below |
+| `failures` | rebuilds where CoreAudio would not build a converter for the new device. Each ended capture; any non-zero value wants explaining |
+| `+n frames` | must be non-zero after every swap. A zero is capture that stopped and did not come back — the probe fails on it |
+| `dropped` | ring overruns. Should be zero, and it accumulates across rebuilds on purpose, so a device swap cannot quietly reset it |
+
+### Result — melchior, 2026-08-28, macOS 26.5.1 ✅
+
+Recorded in `experiment-data/rc14-capture-swap.txt`. Two runs, both under ASan,
+eight swaps each between a Logitech StreamCam and the built-in microphone.
+
+**1. As shipped: 550 frames delivered, 0 rebuilds, 0 failures, 0 dropped, ASan
+silent.** Zero rebuilds is the honest answer and not a dodge — on this Mac the
+input node reports **44100 Hz, de-interleaved** for *every* input device,
+including one whose hardware is running at 48 kHz, and the only thing that moves
+across a swap is the channel count (2 ↔ 1). De-interleaved buffers stride by 1
+whatever the channel count, so the snapshotted chain stays correct and rebuilding
+it would drop frames for nothing.
+
+Which means the sharp end of RC-14 — the out-of-bounds read — **is not reachable
+on this hardware**: it needs an interleaved input format, and macOS does not hand
+one to an `AVAudioEngine` tap here. The rate half is reachable on iOS, where a
+Bluetooth HFP route really does change the session rate under a running capture.
+That is evidence worth carrying into `BU-23`, where the same reasoning is written
+out.
+
+**2. With `CaptureChain.matches()` temporarily forced to `false`**, so that every
+swap takes the rebuild path on real hardware: **530 frames, 8 rebuilds, 0
+failures, 0 dropped, ASan silent.** The tap comes down and goes back up, the
+caller's `onFrame` keeps being called across it, and the cost is about 25 ms of
+audio per rebuild — the ~20 frames' difference between the two runs. The patch
+was reverted immediately; it is not in the branch.
+
+### One thing the probe itself taught
+
+`AVAudioEngine().inputNode.outputFormat(forBus: 0)`, written as a single
+expression, **segfaults** in `AVAudioIONodeImpl::GetOutputFormat`: an
+`AVAudioNode` does not keep its engine alive, so the temporary is released
+before the format is read. The crash is a bad pointer dereference with garbage
+high bits, which macOS reports as a *possible pointer authentication failure* —
+the same crash shape as `BU-23`, from nothing more exotic than a use-after-free.
+The engine is held in a local for the duration of the call, and must be.
