@@ -6,6 +6,80 @@ All notable changes to this project are recorded here. The format follows
 follows [semantic versioning](https://semver.org/spec/v2.0.0.html) — while the
 major version is 0, the API may change in any release.
 
+## [0.6.2] — 2026-08-29
+
+Two probes and the fault one of them found. No API was removed or changed —
+`AudioPipeline` gains two counters and everything else is source-compatible with
+`v0.6.1` — so this is a patch bump, on the same reading as `v0.5.3`: while the
+major version is 0, anything may change in any release, and here nothing did.
+
+### Fixed
+
+- **The capture chain is rebuilt when the engine is reconfigured (RC-14).**
+  `startCapture` snapshotted the input device's format once — the converter's
+  source rate and the tap's channel stride both came from it — and nothing ever
+  rebuilt them. The `.AVAudioEngineConfigurationChange` observer only announced
+  the notification, so a live tap went on resampling from a rate the device may
+  no longer have run at, striding by a channel count the buffers may no longer
+  have had, for as long as the caller left capture running. **The stride is the
+  sharp end:** `CaptureTapProcessor` reads `source[index * channelStride]`, and a
+  stride of 2 held over a de-interleaved mono buffer reads past channel 0's
+  allocation — an out-of-bounds read on the real-time audio thread. A new
+  `CaptureChain` owns everything derived from the format, so the rebuild is one
+  expression rather than a second copy of `startCapture`'s body, and the decision
+  that went stale is testable without a microphone. The observer rebuilds
+  *before* it yields, so a consumer acting on `.routeChanged` never races a
+  half-rebuilt chain.
+
+### Added
+
+- **`AudioPipeline.captureChainRebuildCount` and
+  `.captureChainRebuildFailureCount`.** Additive, and the only API change in this
+  release. Building a replacement chain can fail — CoreAudio may refuse a
+  converter for the device the system moved to — and the stale tap comes down
+  first regardless, so a failure is a capture that has stopped rather than one
+  running on stale numbers. The counters are how a caller sees that happen.
+- **`hamvoip-cli experiment capture-swap` (RC-14).** What `AudioPipeline` does
+  when the input device is pulled out from under a running capture. Local, not on
+  air.
+- **`hamvoip-cli experiment input-warm-up` (BU-22).** Opens the input twice with
+  a gap and reports, for each, the time to the first frame and the time to the
+  first frame that is not all zeros. **The gap between those two numbers is the
+  fault** — frames arrive the whole time and are simply all zero, which is
+  exactly why nothing above the device can tell it from an operator saying
+  nothing. Zeros are counted exactly rather than against a threshold: a device
+  that has not woken delivers nothing at all, and a threshold would blur that
+  into "quiet", which is the distinction `BU-22` turns on. Local, not on air —
+  nothing is transmitted, no node is dialled, and no audio is written anywhere.
+  `docs/CLI.md` §13.
+
+### Measured
+
+- **It is the opening that wakes a Bluetooth input, not holding it open
+  (BU-22).** Cold AirPods, 2026-08-28: a 0.8 s warm-up that saw no audio at all
+  across 35 frames still left the next open carrying audio 98 ms in, against
+  roughly 1400 ms cold. So a hold shorter than the device's silence is enough,
+  which is what Currawong's constant had assumed without a measurement behind it.
+  One trial on one device; a second, on a different Bluetooth input, is worth
+  having before the number is treated as settled.
+- **A permanently powered input shows none of this.** Same machine, minutes
+  apart: a USB webcam delivered room noise in its first buffer at 283 ms, the
+  Bluetooth headset 1574 ms of exact zeros. That is why the fault went
+  unreproduced for a day.
+- **The input rate is per-engine, not per-device (RC-14).** `AVAudioEngine`
+  fixes its input rate when the input audio unit is instantiated and CoreAudio
+  resamples into it afterwards; only the channel count follows the device. A
+  fresh engine on the AirPods reports 24000 Hz mono against 44100 Hz stereo for
+  the StreamCam, but swapping to those same AirPods *under a running capture*
+  reports 44100 Hz mono — the engine's rate, the new device's channel count.
+  This leaves `BU-23`'s conclusion intact: neither the rate nor the stride can go
+  stale under a running capture on macOS, so the out-of-bounds read above is not
+  reachable there.
+
+### Changed
+
+- Full suite: **1050 tests, 0 failures, 4 skipped.**
+
 ## [0.6.0] — 2026-08-28
 
 ### Added
@@ -900,7 +974,12 @@ DMR, System Fusion (YSF), D-STAR, P25 and NXDN. All require AMBE or AMBE+2,
 which is patent-encumbered (NG-1). No MMDVM or USB modem support (NG-2), no MFi
 (NG-3), and no RF layer (NG-4).
 
-[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.6.1...v0.6.2
+[0.6.1]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.4...v0.6.0
+[0.5.4]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.3...v0.5.4
+[0.5.3]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.4.0...v0.5.0
