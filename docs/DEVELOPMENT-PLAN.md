@@ -192,8 +192,9 @@ Phase 4  SwiftUI app      APP-1 … APP-22     ✅ all closed → the app's own 
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ shipped as APP-5 → the app's plan
 Phase 6  EchoLink         EL-1 … EL-15       ✅ complete; M3 2026-08-13, and
                                              since run from the app
-Phase 7  M17Kit           M17-1 … M17-6      RX proven 2026-08-16; TX heard
-                                             2026-08-17. M17-6 re-scoped, open
+Phase 7  M17Kit           M17-1 … M17-7      RX proven 2026-08-16; TX heard
+                                             2026-08-17. M17-6 re-scoped, open;
+                                             M17-7 added Weebill alongside codec2
 Phase 8  Silent mode      SIL-1              🔬 spike first — nothing scheduled
 ```
 
@@ -205,7 +206,7 @@ Phase 8  Silent mode      SIL-1              🔬 spike first — nothing schedu
 | **IAX-10** | Pace transmitted frames instead of bursting them | here | Small |
 | **IAX-11** | Say "the node answered from another address" instead of `ENOTCONN` | here | Small; decided, unimplemented |
 | **SIL-1** | Silent operating mode — design spike, on-device STT/TTS. The one app task never scoped; Phase 8 below still holds its write-up, and it moves to the app's plan when it is taken up | `currawong` | Unscoped by design |
-| **OQ-6** | Codec2 LGPL relinking vs App Store signing | maintainer | Deferred until submission, deliberately |
+| **OQ-6** | Codec2 LGPL relinking vs App Store signing | maintainer | Deferred until submission, deliberately — and *avoidable* since M17-7, not resolved |
 
 **Phases 4 and 5 are somebody else's file now** — both moved to
 `currawong/docs/DEVELOPMENT-PLAN.md` on 2026-08-21, closed, with the reasoning
@@ -2363,6 +2364,102 @@ worked, against which peer, in the same style as the OQ-7 tally. **A parrot
 that works also closes the M17 transmit question above** — record that outcome
 there, not only here.
 
+### M17-7 — Weebill: Codec 2 3200 in pure Swift (FR-2.4) ✅ DONE (library)
+**Depends on:** M17-4 ✅ (the `VoiceCodec` seam `Codec2VoiceCodec` conforms to).
+**Raised by:** the maintainer, as a second implementation of the same codec
+rather than a replacement — the point is A/B, not migration.
+
+**What landed.** A second `Package.swift` dependency —
+`https://github.com/cpmpercussion/weebill`, `from: "0.1.0"`, BSD-2-Clause, pure
+Swift, no dependencies of its own — the second this package has ever taken
+(rule 8; `swift-argument-parser`/CLI-1 was the first). `WeebillVoiceCodec`
+conforms to `RadioCore.VoiceCodec` exactly as `Codec2VoiceCodec` does: 160
+samples / 8 bytes, lock-guarded (the audio path is synchronous and real-time,
+so no actor), separate encoder and decoder instances, and a `phaseSeed`
+pinned by default because Weebill synthesises unvoiced phases stochastically
+and an unpinned codec would make every downstream test unreproducible. Twelve
+tests in `WeebillVoiceCodecTests`: geometry, the two-frames-per-payload
+arithmetic, input validation, decode determinism across instances, `reset()`,
+pitch-and-level survival through a round trip, silence, and a 2000-frame
+random-bitstream fuzz asserting `nonFiniteSampleCount == 0` — all unconditional,
+so they run on a bare checkout and on CI. Three more, gated `#if CODEC2` because
+they need the framework on both sides: codec2 decodes what Weebill encoded,
+Weebill decodes what codec2 encoded, and both report the same geometry.
+
+**Unlike `Codec2VoiceCodec`, this needed no manifest probe.** The framework is a
+binary that may or may not have been built locally, so `Package.swift` has to
+guess whether it is there (`codec2IsBuilt`) before it can even reference it.
+Weebill is source, so it is simply always a dependency — no `#if`, no
+conditional target, no `swift package reset` after building or deleting
+anything. `hamvoip-cli m17` follows from that: the whole command used to be
+compiled out behind `#if CODEC2` and would refuse to run at all without the
+framework (M17-4's note). That gate is gone. The command now runs on any
+checkout, defaulting to Weebill, with a new `--codec weebill|codec2` option for
+on-air A/B; `--codec codec2` throws a `ValidationError` naming the build script
+on a checkout without the framework, rather than silently falling back to
+Weebill and reporting a result for a codec that did not run.
+
+**Full suite: 1039 tests, 0 failures, 4 skipped.**
+
+**What this does not do.** It does not remove `Codec2VoiceCodec` — that stays
+exactly as M17-4 left it, LGPL XCFramework, `#if CODEC2`, unchanged by this
+task. Weebill sits *alongside* it; removing codec2 is a later, separate
+decision that has not been taken, and nothing here forces it. It also does not
+touch FR-2.4's wording ("Codec2 3200 bps encode/decode via dynamic framework")
+— that text no longer describes the *default* path (Weebill is source, not a
+framework, and is what a bare checkout now runs), and wants revisiting **when**
+codec2 is actually removed, not before; changing a requirement's wording to
+match an implementation that has not yet made the old wording untrue would be
+getting ahead of the decision. See OQ-6 below for what this does and does not
+settle about LGPL relinking.
+
+⚠️ **A measured finding, recorded because it is exactly the trap the next
+person will fall into.** On a synthetic 8-harmonic voiced signal, the two
+encoders choose the *same* 7-bit pitch quantiser index at 100, 150 and 200 Hz,
+and differ by two steps at 125 Hz — index 77 vs 79, about 3%, inaudible. The
+two implementations are not bit-identical and are not expected to be: Codec
+2's analysis stage is not specified to the bit, so two conforming encoders may
+legitimately land on different indices. A first attempt at the cross-decode
+test appeared to show the Weebill encoder halving the pitch (62 Hz for a
+125 Hz input) — that was a fault in the *test's* autocorrelation, which locked
+onto the double period on a perfectly periodic synthetic signal, not a fault in
+either codec. The fundamental-estimator now normalises by both windows' energy
+and takes the shortest lag within 10% of the best.
+
+**Honestly recorded, not glossed over:** the perceptual claim behind this
+task is the maintainer's — they listened to test audio through every
+encode/decode combination and could hear no difference. The in-tree tests above
+are a regression net under that judgement, not the evidence for it. **No
+Weebill audio has been on the air yet as of this writing** — that is the gap
+between this entry's "done" and a live-validation claim in the style of M17-5's,
+and is why this task is marked done for the *library* work only.
+
+**Measured against real on-air audio, decode side only.** The one piece of
+evidence here that is neither synthetic nor a matter of taste: both decoders
+were fed the *same* Codec 2 bitstream taken off the air — the 104 frames
+(52 datagrams x 2, 2.08 s) carried by `experiment-data/m17-oq7.pcap`, the OQ-7
+capture, produced by a third party's encoder on a public reflector. Mean
+absolute per-frame RMS difference **0.38 dB**, max **2.27 dB**, Pearson r
+between the two RMS envelopes **0.98**, and **zero** non-finite-sample
+substitutions from Weebill across the run. Both decodes are written out as WAVs
+beside the report in `experiment-data/weebill-m17-7/`.
+
+Three limits on that number, none of them small. It is **decode only** — the
+bitstream came from an encoder we do not control, so there is no reference for
+what *our* encoder should emit and the encode direction is untested against
+anything but codec2 itself. It is **2.08 seconds**, the whole of the only
+real-traffic capture we have. And **RMS-in-dB is a loudness measure**: it would
+not notice two decoders that agreed on level while disagreeing on timbre. It
+is corroboration of the maintainer's listening, not a substitute for it, and
+the on-air test is still owed.
+
+⚠️ **The capture stays out of the repo, and so does everything cut from it.**
+`m17-oq7.pcap` is passive capture of other operators' traffic and deliberately
+has no fixture (CLAUDE.md; `docs/CLI.md` §8). The extracted frames, the WAVs and
+the report live in `experiment-data/`, unversioned. Do not promote any of it to
+`Tests/`: the differential is reproducible from the capture, and the in-tree
+tests are synthetic precisely so they can be committed.
+
 ---
 
 ## Phase 8 — Silent operating mode (speech to text, text to speech) 🔬 SPIKE FIRST
@@ -2440,7 +2537,7 @@ requirement number; this is a feature idea, however good.
 | ~~OQ-3b~~ | ~~Bundle identifier~~ **RESOLVED: `au.charlesmartin.currawong`.** Extensions extend it (`…currawong.liveactivity`); the Keychain access group is `$(TeamID).au.charlesmartin.currawong`. | — |
 | ~~OQ-4~~ | ~~App in a separate repo?~~ **RESOLVED: yes**, a separate `currawong` repo depending on `swift-hamvoip` via SPM. Keeps the Apache-2.0 protocol libraries reusable, keeps app-only dependencies out of the library repo, and lets the two release independently. | — |
 | **OQ-5** | ✅ **RESOLVED 2026-08-09 — hexadecimal. Keep sending lowercase; no code change.** Settled by `hamvoip-cli oq5 --method register --exhaustive` against an ASL3 node (Asterisk + app_rpt in a UTM VM), packet capture retained. Result: **`lowercase-hex` ACCEPTED** (REGACK), **`uppercase-hex` ACCEPTED** (REGACK), **`base64` REFUSED**, **`raw-bytes` REFUSED** — both refusals `CAUSE "Registration Refused"`, `CAUSE CODE 29`, and each of the four probes got its own fresh CHALLENGE on its own UDP association, so these are four independent verifications. Both hex cases being accepted is not a contradiction and does not make the run unreliable: the node is decoding the IE text back to sixteen bytes, or comparing it case-insensitively. The refusals are what carry the weight — a node that accepted anything would have taken base64 too, so the digest is genuinely being checked. Corroborated on the wire: the node answered REGACK immediately but held both REGREJs for ~1.0 s, the pacing of a real credential check that failed rather than a parse error. **Scope of the claim:** this is an observation about one implementation, not a fact about the protocol. Case-insensitivity is that node's business; another peer may well compare byte-for-byte, so `IAX2Auth.TextDigestEncoding.oq5Default` stays lowercase hex. **Original question:** §8.6.15 says the IE carries the UTF-8-encoded MD5 of `challenge ‖ password`, but the RFC never states the text encoding — hex or not, upper or lower case, padded or not. Unresolvable from the specification, and LP-2 forbids reading an implementation to find out. | Confirms IAX-4's shipped assumption. Unblocks the `connect` path and FR-1.3 registered node mode; downgrades the `IAX2Registrar` encoding seam from defect to hygiene |
-| **OQ-6** | ⏸ **DEFERRED 2026-08-13 — revisit before submission, not before.** The maintainer's call: App Store submission is gated behind substantial UI/UX and testing work in Currawong that has not started, so deciding this now would be deciding it twice. Nothing in the library changes either way, and shipping Codec2 as a dynamic framework (which is what the tree does) keeps both options open. **The question:** **LGPL-2.1 relinking vs App Store code signing.** Shipping Codec2 as a dynamic framework satisfies LP-4's letter, but a signed iOS app cannot have its framework substituted by the user, which is what LGPL §6 relinking is for. A licensing judgement, not a technical blocker, and unchanged by the M17-1 spike — but it wants a conscious decision before App Store submission, not after. | App Store submission of M17 — and nothing before it |
+| **OQ-6** | ⏸ **DEFERRED 2026-08-13 — revisit before submission, not before. Now *avoidable*, as of M17-7 (2026-08-28) — not resolved.** The maintainer's call stands: App Store submission is gated behind substantial UI/UX and testing work in Currawong that has not started, so deciding this now would be deciding it twice. **The question:** **LGPL-2.1 relinking vs App Store code signing.** Shipping Codec2 as a dynamic framework satisfies LP-4's letter, but a signed iOS app cannot have its framework substituted by the user, which is what LGPL §6 relinking is for. **What M17-7 changes:** the question only binds if `Codec2VoiceCodec` (the LGPL XCFramework) is what actually ships, and after M17-7 it no longer has to be — `WeebillVoiceCodec` (BSD-2-Clause, pure Swift) conforms to the same `VoiceCodec` seam and is the CLI's default already. **What it does not change:** codec2 has not been removed, Currawong's switch to Weebill (APP-27) is on a branch awaiting a library release, and nobody has decided to drop codec2 — this is a live option now, not an outcome. Do not overstate it: the licensing judgement below is deferred exactly as before; only what a future decision would need to weigh has changed. | App Store submission of M17 — and nothing before it |
 | **OQ-7** | ✅ **RESOLVED 2026-08-11 — 54 bytes. The LSF CRC is not on the wire; `M17StreamPacket` changed to match.** Settled by `hamvoip-cli oq7` against a live reflector on UDP 17000, packet capture retained (`m17-oq7.pcap`, workspace, unversioned). One over of 52 consecutive stream datagrams, one SID, one transmitting station. Three independent readings of those bytes agree and only on this layout: **length** — 54 bytes, 52 of 52, no exceptions; **sequencing** — the two bytes at offset 34 ran 0, 1, 2 … 51, while at offset 36, where the 56-byte reading puts FN, the same bytes do not count at all and set bit 15 in 35 of 52 frames, which a mid-over last-frame flag must never be; **CRC** — the trailing two bytes are the M17 CRC16 (Part I: polynomial `0x5935`, init `0xFFFF`) over the preceding 52 bytes, valid 52 of 52. That third test is what rules out a truncated 56-byte frame — two bytes lost in transit would not leave a CRC closing over what remains — and it fails 0 of 52 for the LSF-CRC-present reading. Field offsets corroborated too: SID constant, DST/SRC decoding as base-40 callsigns at 6-11 and 12-17, TYPE `0x0005` at 18-19, META all zeros, and 16 bytes of Codec 2 differing in every frame at 36-51. **Scope of the claim:** one reflector, one over, one transmitting client — an observation about what M17-over-IP actually carries, not a correction to the specification, which says 240 bits and is what we implemented first. A second reflector disagreeing would be new information rather than a bug; the tally's guidance says so. **Original question:** the spec's Table 27 gives LICH as 240 bits, the full 30-byte LSF *including* its own CRC → 56 bytes; 54 is widely quoted elsewhere, and the difference is exactly whether that CRC is present. Unresolvable from the document, and LP-2 forbids reading an implementation to find out. | Unblocks **M17-4** stream TX/RX |
 | **OQ-8** | ✅ **RESOLVED 2026-08-13 — keep a local copy, outside both repos.** The maintainer's call: M17's documentation situation is not going to improve, the project describes the specification as open, and the archived chapter is the best record there is, so use it rather than waiting for a better one. A copy of the Internet Archive capture now sits at `m17-spec-archive/` in the workspace with its retrieval URL, timestamp and SHA-256 (`d3ffacd2…`) recorded beside it. **Not committed**, and that half is a licence judgement rather than a preference: the page carries no licence statement, so redistributing it in an Apache-2.0 repository would assert a right nobody has checked. Holding a reference copy is a different act from republishing one. The citation chain in the repo is unchanged — `M17ReflectorProtocol.swift` and `docs/reference/PROVENANCE.md` still cite the archive URL; the local copy is the belt to that braces. **Original question:** the chapter we implement against was published as HTML at a readthedocs host that now 404s, so the only record of what we implemented against was a third-party archive that may itself disappear. | Nothing today; the maintenance risk is now hedged |
 | ~~OQ-9~~ | ✅ **RESOLVED 2026-08-12 — permitted sources named; Phase 6 unblocks. Maintainer's judgement.** The permitted sources for EchoLink protocol knowledge are: **(a)** RFC 3550 for RTP framing and **(b)** the ETSI/ITU GSM 06.10 specification for the codec, as spec anchors *for the parts they actually cover* — with the standing caveat that RFC 3550 does **not** describe this protocol as implemented (observed RTP version bits are 3, not 2; the proxy framing and the directory protocol on TCP 5200 fall outside it entirely), so where wire and RFC disagree the wire wins and the divergence is recorded; **(c) packet captures of the maintainer's own EchoLink sessions** are the **primary** source, under the same LP-1 fixture rule that governs IAX-9. Candidate **(d)**, prose write-ups, is admitted **only** under a provenance bar materially higher than the captures': because no published specification exists, most such prose derives from the very implementations LP-2 forbids (a summary of thebridge's source is the source at one remove, not "behavioural observation"), so a (d) source may be used only when its own provenance is independently established as *not* derived from forbidden implementations, and its use logged per `docs/reference/PROVENANCE.md` before any code depends on it. When (d) cannot clear that bar, the answer is another capture, not the write-up. **Standing procedural rules that come with this resolution:** (1) protocol ambiguities are settled by designing another on-air experiment and cutting another capture — never by reading an implementation; the pressure to peek is highest exactly where captures are thinnest, which is where the clean-room boundary matters most. (2) Capture work spans **multiple peers**: a single-peer capture already produced two confident wrong conclusions (SSRC always zero; sequence numbers start at zero) that a four-peer capture corrected — see the PROVENANCE.md OQ-9 entry. (3) Directory-server captures (TCP 5200) carry other operators' callsigns, locations and IPs; they get the same third-party-traffic hygiene the M17 OQ-7 capture did (`docs/CLI.md` §8), and no such capture's path is named in a versioned file. **Terms rechecked online 2026-08-12** against echolink.org directly (Access Policies, Validation, Download, Support): no anti-reverse-engineering clause, no client-software restriction, and no software EULA is even linked — the access policies govern *who* may connect (licensed amateurs) and what a Sysop node may interconnect *to*, never what client software reaches the service. echolink.org's own Download page lists compatible third-party implementations (EchoHam, EchoIRLP, svxLink/QTel, an Asterisk channel driver) with "we do not support these programs" — the service operator publicly acknowledges independent clients. This closes the narrow terms caveat left open under OQ-1 and does not disturb OQ-1's reasoning. **This resolves the sourcing question only** — OQ-1b (trademark, nominative use only) still governs all EchoLink naming, and LP-1/LP-2 are unchanged: no implementation source, at any level, is ever read. | ~~Phase 6~~ **unblocked** |

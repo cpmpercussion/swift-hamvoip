@@ -56,6 +56,23 @@ let package = Package(
         // CLI-1 in docs/DEVELOPMENT-PLAN.md. Nothing else in this package may
         // acquire a dependency without a task that says so (plan rule 8).
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
+
+        // M17-7. Codec 2 3200 in pure Swift, BSD-2-Clause, no dependencies of
+        // its own. Authorised by M17-7 in docs/DEVELOPMENT-PLAN.md, and the
+        // second dependency this package has ever taken.
+        //
+        // It sits *alongside* the Codec2 XCFramework rather than replacing it.
+        // Both conform to `RadioCore.VoiceCodec`, which is what makes them
+        // interchangeable and what makes the comparison in
+        // `WeebillVoiceCodecTests` possible at all. Removing codec2 is a later
+        // decision — see M17-7's note on OQ-6.
+        //
+        // Unlike the framework this is source, so it needs no build script, no
+        // manifest probe and no conditional compilation: a bare checkout
+        // builds and tests the codec, on CI included. That is the same
+        // reasoning that governs the vendored `libgsm` below, arrived at from
+        // the licence rather than from taste.
+        .package(url: "https://github.com/cpmpercussion/weebill", from: "0.1.0"),
     ],
     targets: [
         // Transport, codec protocol, jitter buffer, audio graph.
@@ -66,10 +83,16 @@ let package = Package(
         .target(name: "IAX2Kit", dependencies: ["RadioCore"]),
 
         // M17 reflector protocol and stream mode. Priority 3.
-        // The Codec2 dependency is conditional — see the note at the top.
+        //
+        // Two Codec 2 3200 implementations, both conforming to
+        // `RadioCore.VoiceCodec`: `WeebillVoiceCodec`, always present because
+        // Weebill is a source dependency, and `Codec2VoiceCodec`, present only
+        // when the XCFramework has been built — the conditional dependency,
+        // see the note at the top.
         .target(
             name: "M17Kit",
-            dependencies: ["RadioCore"] + (codec2IsBuilt ? ["Codec2"] : []),
+            dependencies: ["RadioCore", .product(name: "Weebill", package: "weebill")]
+                + (codec2IsBuilt ? ["Codec2"] : []),
             swiftSettings: codec2IsBuilt ? [.define("CODEC2")] : []
         ),
 
