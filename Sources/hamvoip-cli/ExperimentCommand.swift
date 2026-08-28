@@ -30,6 +30,13 @@ struct ExperimentCommand: AsyncParsableCommand {
             from under a live capture (RC-14). Local, not on air: nothing is transmitted \
             and no node is dialled. The one claim in the capture path that no unit test \
             can reach, because it is a claim about AVAudioEngine on real hardware.
+            input-warm-up  how long an input device delivers silence after it is opened, \
+            and whether opening it once beforehand removes that delay (Currawong's BU-22). \
+            Local, not on air. Needs an input device left alone long enough to go cold, \
+            which a USB webcam never does.
             """,
-        subcommands: [OQ5Command.self, OQ7Command.self, CaptureSwapCommand.self])
+        subcommands: [
+            OQ5Command.self, OQ7Command.self, CaptureSwapCommand.self,
+            InputWarmUpCommand.self,
+        ])
 }
