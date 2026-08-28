@@ -1381,23 +1381,42 @@ ASAN_OPTIONS=detect_leaks=0 .build/debug/hamvoip-cli experiment capture-swap --s
 
 ### Result — melchior, 2026-08-28, macOS 26.5.1 ✅
 
-Recorded in `experiment-data/rc14-capture-swap.txt`. Two runs, both under ASan,
-eight swaps each between a Logitech StreamCam and the built-in microphone.
+Recorded in `experiment-data/rc14-capture-swap.txt`. Three runs, all under ASan:
+two of eight swaps between a Logitech StreamCam and the built-in microphone, and
+a third of four against a Bluetooth headset that turned up later in the evening
+and is the one that explains the other two.
 
 **1. As shipped: 550 frames delivered, 0 rebuilds, 0 failures, 0 dropped, ASan
-silent.** Zero rebuilds is the honest answer and not a dodge — on this Mac the
-input node reports **44100 Hz, de-interleaved** for *every* input device,
-including one whose hardware is running at 48 kHz, and the only thing that moves
-across a swap is the channel count (2 ↔ 1). De-interleaved buffers stride by 1
-whatever the channel count, so the snapshotted chain stays correct and rebuilding
-it would drop frames for nothing.
+silent.** Zero rebuilds is the finding, not the probe failing to fire — and a
+third run, below, is what explains it.
 
-Which means the sharp end of RC-14 — the out-of-bounds read — **is not reachable
-on this hardware**: it needs an interleaved input format, and macOS does not hand
-one to an `AVAudioEngine` tap here. The rate half is reachable on iOS, where a
-Bluetooth HFP route really does change the session rate under a running capture.
-That is evidence worth carrying into `BU-23`, where the same reasoning is written
-out.
+**3. A Bluetooth headset joined the machine between runs**, which is what
+established the actual rule. A **fresh** engine on the AirPods reports
+**24000 Hz mono**, where the StreamCam gives 44100 Hz stereo and the built-in
+44100 Hz mono — so the input node's rate plainly *does* differ between devices,
+which run 1 alone would have suggested it did not. But swapping to those same
+AirPods **under a running capture** reports `44100 Hz, 1 ch`: the engine's rate,
+the new device's channel count.
+
+So the rule on macOS 26.5 is:
+
+> `AVAudioEngine` fixes its input rate when the input audio unit is
+> instantiated, and a device change afterwards does not move it — CoreAudio
+> resamples into the rate the engine already chose. Only the **channel count**
+> follows the device.
+
+Which settles what can go stale under a running capture here: not the rate, and
+not the stride either, since every device is de-interleaved and de-interleaved
+buffers stride by 1 whatever the channel count. **So the sharp end of RC-14 —
+the out-of-bounds read — is not reachable on this platform**, and the rebuild
+correctly never fires. It is reachable where the graph is rebuilt under the
+caller rather than resampled into, which on iOS is what this notification
+accompanies. That is evidence worth carrying into `BU-23`, where the same
+reasoning is written out.
+
+This is also why the app rebuilds its whole pipeline rather than reusing one
+across a session (`Currawong`'s `AudioPipelineIO`): a rate is a decision an
+engine makes once.
 
 **2. With `CaptureChain.matches()` temporarily forced to `false`**, so that every
 swap takes the rebuild path on real hardware: **530 frames, 8 rebuilds, 0
