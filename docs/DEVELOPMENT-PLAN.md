@@ -963,7 +963,7 @@ in `RadioCoreTests` that is a plain `final class` rather than an actor; every
 mode's mapping table is asserted case by case; and a live IAX2 session shows
 `radioEvents` is exactly `events.compactMap(\.radioEvent)`, in order.
 
-### RC-15 — installing the capture tap races the device, and the throw is not catchable 🔧 OPEN 2026-08-29
+### RC-15 — installing the capture tap races the device, and the throw is not catchable ✅ DONE 2026-08-29
 
 **Found by a real crash, on air, in Currawong** — `BU-24` there, log in
 `experiment-data/bu24-installtap-format-mismatch-20260829.txt`:
@@ -978,8 +978,8 @@ RadioSession.connect -> warmUpInput() -> AudioPipelineIO.startCapture
   -> AVAudioNode.installTapOnBus   <- throws
 ```
 
-`installCaptureLocked` snapshots the format, builds the chain from it, tears the
-old tap down, and only then installs:
+`installCaptureLocked` snapshotted the format, built the chain from it, tore the
+old tap down, and only then installed:
 
 ```swift
 let hardwareFormat = inputNode.outputFormat(forBus: 0)
@@ -993,37 +993,94 @@ on, the snapshot has not, and AVFAudio rejects it. 16000 Hz / 1 ch is a
 Bluetooth HFP input that was current when the format was read and was not when
 the tap went in.
 
-**Three things make this worse than a lost capture.**
+**Three things made this worse than a lost capture.**
 
 1. **The throw is an Objective-C `NSException`, so no Swift `catch` sees it.**
-   `installCaptureLocked` is `throws`, which is irrelevant here. Every caller
-   that believes it is handling failure — Currawong's `warmUpInput()` catches
-   explicitly so that "the connection is not failed over this" — gets process
-   termination instead. **A library that can kill its host from a `do/catch`
-   is the defect, more than the race is.**
+   `installCaptureLocked` is `throws`, which was irrelevant here. Every caller
+   that believed it was handling failure — Currawong's `warmUpInput()` catches
+   explicitly so that "the connection is not failed over this" — got process
+   termination instead. **A library that can kill its host from a `do/catch` is
+   the defect, more than the race is.**
 2. **It fires on the connect path**, because that is where the warm-up runs.
-3. **The RC-14 rebuild may share the window**, since
-   `rebuildCaptureAfterConfigurationChange` reaches the same install. Check
-   rather than assume; if it does, RC-14's fix can itself terminate the app on
-   the notification it exists to handle.
+3. **The RC-14 rebuild shares the window**, since
+   `rebuildCaptureAfterConfigurationChange` reaches the same install — checked,
+   not assumed. RC-14's fix could itself have terminated the app on the
+   notification it exists to handle. It goes through the same installer now.
 
 **Same family as RC-14, different failure.** RC-14 was a bad read inside a
-*running* tap; this is a rejected install at the *start* of one, and RC-14's fix
-does not cover it. It is also **not** `BU-23` — different signal, different
-stack — so it closes nothing there.
+*running* tap; this was a rejected install at the *start* of one. It is also
+**not** `BU-23` — different signal, different stack — so it closes nothing there.
 
-**The fix has a real design question in it, which is why this is a task and not
-a patch.** Passing `nil` as the format lets AVFAudio use whatever the node
-currently has, which cannot mismatch — but then the `CaptureChain` built from
-the snapshot is wrong in exactly the way RC-14 was about, so the two cannot be
-chosen independently. The chain has to be built from the format the tap actually
-gets, not from one read before it. Whatever the shape, **the requirement is that
-no input-device change can terminate the host process**, and that wants a test
-that drives the install with the format changing underneath it.
+#### What was decided
 
-Needs a hardware probe as well as a unit test: `hamvoip-cli experiment
-capture-swap` changes the device under a *running* capture, and this fault is at
-the start of one, so the probe does not currently reach it.
+**The format stops being an input to the install and becomes something checked
+after it.** `installTap(format:)` is never given a format at all: `nil` means
+AVFAudio uses whatever the bus has at that instant, which cannot mismatch by
+construction. That alone would have moved the problem rather than solved it —
+the chain would still be built from a snapshot, and a chain built for the wrong
+format is exactly RC-14's out-of-bounds read — so the install is followed by a
+second read of the node's format, and the chain is kept only if it is right for
+that answer. A device that moved inside the window fails the check and the
+attempt is retried against what it moved to, bounded at four attempts, after
+which `.inputFormatUnstable` is thrown. **The two halves could not be chosen
+independently, which is why this was a task rather than a patch.**
+
+Three pieces, in `Sources/RadioCore/CaptureTapInstaller.swift` and
+`AudioPipeline.swift`:
+
+- **`CaptureTapHost`** — the three things the install needs from the input node
+  (`currentInputFormat`, `installTap(bufferSize:body:)`, `removeTap()`), behind
+  a protocol so the *sequence* is testable with no engine, microphone or
+  permission prompt (AU-5). `installTap` has nowhere to put a format, which is
+  how "the format is never passed to the install" is enforced structurally
+  rather than by a comment.
+- **`CaptureTapInstaller.install`** — the read/install/verify/retry loop, and
+  the only place a capture tap is installed. No tap is left behind on any
+  throwing path.
+- **`CaptureTapProcessor` clamps its reads to the buffer it is handed.** There
+  is always *some* window where the chain is briefly wrong for the buffers
+  arriving; bounding the read by the first `AudioBuffer`'s `mDataByteSize` (a
+  pointer dereference, not `buffer.format`, which allocates) turns the
+  out-of-bounds read into half a buffer of wrong-rate audio. The allocation
+  tests still pass, so the render thread's budget is unchanged.
+
+`AudioPipelineError.inputFormatUnstable` is the API-visible half, and the reason
+the next release is 0.7.0 rather than 0.6.3.
+
+#### What settles it, and what does not
+
+**`Tests/RadioCoreTests/CaptureTapInstallerTests.swift` is the deterministic
+half** — a fake host that moves the format at a chosen point in the sequence:
+the BU-24 sequence exactly (48 kHz read, 16 kHz by the time the tap is in) is
+retried and converges on 16 kHz; a stride change with the rate unmoved is caught
+too; a device that flaps under every attempt throws a Swift error, bounded, with
+no tap left installed. Plus `CaptureTapReadBoundsTests` for the clamp. 1050
+tests green.
+
+**The hardware half is `hamvoip-cli experiment capture-swap --at-start`**, new
+in this task, transcripts in `experiment-data/rc15-capture-swap-at-start.txt`.
+Q2L (16 kHz HFP — the device from the crash) against a 48 kHz StreamCam, 24
+capture starts across 19 device changes: all 24 started cleanly, 835 frames, no
+errors, no crash.
+
+**It does not reproduce the fault, and is not written as though it does.** The
+window is microseconds wide and cannot be aimed at: the pre-fix library survives
+the same run (24 starts, 20 changes, 775 frames). What the probe settles is that
+the new install path works on real hardware across a real format change.
+
+**A finding from building it, worth carrying into `BU-23`:** changing the
+default input device every 125–400 ms takes CoreAudio itself down — every
+`startCapture` fails in `engine.start()` (-10875), and within a minute the
+process dies in `AVAudioIOUnit::IOUnitPropertyListener` or
+`HALC_ProxyNotifications::SendPropertiesChanged`, **with no frame of ours on the
+stack, on both builds.** That is the probe over-driving the system, so a crash
+under a fast cadence is not evidence about anything here — but it is a
+demonstration that a process can die from inside CoreAudio with nothing of the
+application's in the fault path, which is the shape `BU-23` wears.
+
+**Left for the app:** what a warm-up that could not open the input should mean
+for the connect sequence, now that the failure is a Swift error the `catch` can
+actually see for the first time. That is `BU-24` in Currawong.
 
 ### RC-14 — the capture chain survives an engine reconfiguration ✅ DONE 2026-08-28
 

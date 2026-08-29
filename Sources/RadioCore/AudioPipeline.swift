@@ -11,10 +11,25 @@ public enum AudioPipelineError: Error, Equatable, CustomStringConvertible, Senda
     /// `AVAudioConverter` could not be constructed for the requested formats.
     case converterUnavailable
 
+    /// The input device's format changed under every attempt to install a
+    /// capture tap in it, so no tap could be installed in a format that was
+    /// still current when the install finished (RC-15).
+    ///
+    /// **A recoverable, reportable failure, which is the whole point of it.**
+    /// Before RC-15 this condition was not an error at all: AVFAudio raised an
+    /// Objective-C `NSException` no Swift `catch` could see, and the host
+    /// process was terminated. A caller may now treat it as it would any other
+    /// failure to open the microphone — Currawong's connect-path warm-up logs
+    /// it and carries on. Retrying is reasonable: it means the hardware was
+    /// moving, not that it is unusable.
+    case inputFormatUnstable
+
     public var description: String {
         switch self {
         case .converterUnavailable:
             return "could not construct an AVAudioConverter for the requested PCM formats"
+        case .inputFormatUnstable:
+            return "the input device's format kept changing while the capture tap was installed"
         }
     }
 }
@@ -842,9 +857,45 @@ final class CaptureTapProcessor {
     }
 
     /// Tap entry point. Called on the real-time audio thread.
+    ///
+    /// **The frame count is bounded by the buffer, not by the caller (RC-15).**
+    /// ``channelStride`` is fixed when the chain is built, and there is always
+    /// some window — however short — in which the buffers arriving belong to a
+    /// device the chain was not built for: between the tap install and the
+    /// verifying read (``CaptureTapInstaller``), and between a device change
+    /// and the `.AVAudioEngineConfigurationChange` that announces it (RC-14).
+    /// A stride of 2 held over a de-interleaved mono buffer would read twice
+    /// the buffer's length — an out-of-bounds read on the real-time audio
+    /// thread, which is the one failure in this class that cannot be allowed to
+    /// depend on anything upstream being timely. Clamping costs one pointer
+    /// dereference and some arithmetic, and turns that read into the far
+    /// cheaper failure of half a buffer of wrong-rate audio.
     func process(_ buffer: AVAudioPCMBuffer) {
         guard let channels = buffer.floatChannelData else { return }
-        process(channelZero: channels[0], frameCount: Int(buffer.frameLength))
+        process(
+            channelZero: channels[0],
+            frameCount: min(Int(buffer.frameLength), readableFrames(in: buffer))
+        )
+    }
+
+    /// How many strided channel-0 samples can be read from `buffer` without
+    /// leaving channel 0's allocation.
+    ///
+    /// Reads `audioBufferList`, not `format`: the buffer list is a pointer into
+    /// storage the buffer already owns, whereas `buffer.format` is an
+    /// Objective-C property fetch that has been observed to allocate — see
+    /// ``channelStride``, and the allocation tests that pin both.
+    ///
+    /// De-interleaved buffers put channel 0 alone in the first `AudioBuffer`
+    /// (`mDataByteSize` = frames × 4); interleaved buffers put every channel in
+    /// it (frames × channels × 4). Either way the first buffer's byte size is
+    /// the bound on what channel-0 reads may touch, and the last readable frame
+    /// is the highest `n` with `n × stride` still inside it.
+    private func readableFrames(in buffer: AVAudioPCMBuffer) -> Int {
+        let bytes = Int(buffer.audioBufferList.pointee.mBuffers.mDataByteSize)
+        let floats = bytes / MemoryLayout<Float>.size
+        guard floats > 0 else { return 0 }
+        return 1 + (floats - 1) / channelStride
     }
 
     /// Pointer-level entry point — the same code path as ``process(_:)``, minus
@@ -1082,6 +1133,13 @@ public final class AudioPipeline: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
 
+    /// The input node, behind the seam the tap install is tested through
+    /// (RC-15). `lazy` so that constructing an `AudioPipeline` still touches no
+    /// input hardware: `EngineInputTapHost` reaches for `engine.inputNode` only
+    /// when asked, and this property is only ever reached from the capture path
+    /// with ``lock`` held.
+    private lazy var tapHost: CaptureTapHost = EngineInputTapHost(engine: engine)
+
     /// Wire→engine conversion and buffer format for the playback path,
     /// derived from the **output** device only (see ``PlaybackChain``).
     ///
@@ -1258,7 +1316,7 @@ public final class AudioPipeline: @unchecked Sendable {
             // `engine.inputNode` instantiates the input audio unit, which is
             // pointless (and on iOS, permission-adjacent) in a receive-only or
             // never-started session.
-            engine.inputNode.removeTap(onBus: 0)
+            tapHost.removeTap()
             isCapturing = false
         }
         captureTask?.cancel()
@@ -1273,41 +1331,52 @@ public final class AudioPipeline: @unchecked Sendable {
     }
 
     private func installCaptureLocked(sink: FrameSink) throws {
-        let inputNode = engine.inputNode
-        let hardwareFormat = inputNode.outputFormat(forBus: 0)
+        // Pre-flight, before anything is torn down: can CoreAudio convert at
+        // all from the rate the device is running at now? A `startCapture` that
+        // cannot must leave the session it was asked to replace running rather
+        // than killing it on the way out, and the installer below cannot offer
+        // that because it needs the bus free before its first attempt.
+        //
+        // A converter rather than a whole chain, because this answer is
+        // discarded: the chain that ends up installed is the installer's, built
+        // from the format the tap is actually given (RC-15).
+        guard RealTimeDownConverter(
+            sourceSampleRate: tapHost.currentInputFormat.sampleRate,
+            wireSampleRate: Self.wireSampleRate,
+            maxInputFrames: Self.maxTapFrames
+        ) != nil else {
+            throw AudioPipelineError.converterUnavailable
+        }
+
+        // Installing a second tap on a bus that already has one is a hard error
+        // in AVAudioEngine; make a repeated startCapture mean "restart".
+        teardownCaptureLocked()
 
         // A chain per capture session, owned by this session's tap alone. Its
         // rate comes from the input device and is never allowed to reach the
         // playback path (RC-7 Defect 1) — and because it is never shared, the
         // stateful converter inside it is only ever driven from the one thread
         // that drives this tap (RC-7 Defect 2).
-        guard let chain = CaptureChain(
-            inputFormat: hardwareFormat,
-            wireSampleRate: Self.wireSampleRate,
-            maxInputFrames: Self.maxTapFrames,
-            frameSize: Self.captureFrameSize,
-            ringCapacity: Self.captureRingCapacityFrames
-        ) else {
-            throw AudioPipelineError.converterUnavailable
-        }
-
-        // Installing a second tap on a bus that already has one is a hard
-        // error in AVAudioEngine; make a repeated startCapture mean "restart".
-        // Deliberately *after* the chain is built, so a `startCapture` that
-        // cannot build one leaves the session it was asked to replace running
-        // rather than killing it on the way out.
-        teardownCaptureLocked()
-
-        // The only thing the render thread does. No allocation, no lock, no
+        //
+        // **The installer decides which format that is, not this method**
+        // (RC-15). It installs with no format at all, then checks the chain
+        // against what the node reports afterwards, so a device that changes
+        // inside the window is retried rather than allowed to raise an
+        // uncatchable format-mismatch exception. The tap body it installs is
+        // the only thing the render thread does: no allocation, no lock, no
         // caller code — see CaptureTapProcessor.
-        let processor = chain.processor
-        inputNode.installTap(
-            onBus: 0,
+        let chain = try CaptureTapInstaller.install(
+            host: tapHost,
             bufferSize: Self.tapBufferSize,
-            format: hardwareFormat
-        ) { buffer, _ in
-            processor.process(buffer)
-        }
+            makeChain: { format in
+                CaptureChain(
+                    inputFormat: format,
+                    wireSampleRate: Self.wireSampleRate,
+                    maxInputFrames: Self.maxTapFrames,
+                    frameSize: Self.captureFrameSize,
+                    ringCapacity: Self.captureRingCapacityFrames
+                )
+            })
         isCapturing = true
         captureChain = chain
         captureRing = chain.ring
@@ -1318,7 +1387,7 @@ public final class AudioPipeline: @unchecked Sendable {
                 try engine.start()
             }
         } catch {
-            inputNode.removeTap(onBus: 0)
+            tapHost.removeTap()
             isCapturing = false
             captureTask?.cancel()
             captureTask = nil
@@ -1356,7 +1425,7 @@ public final class AudioPipeline: @unchecked Sendable {
 
         guard isCapturing, let sink = captureSink else { return }
 
-        let hardwareFormat = engine.inputNode.outputFormat(forBus: 0)
+        let hardwareFormat = tapHost.currentInputFormat
         if let current = captureChain, current.matches(hardwareFormat) {
             // The formats agree, so the tap is still reading correctly. The
             // engine may still have been stopped by the reconfiguration,
