@@ -6,9 +6,9 @@ All notable changes to this project are recorded here. The format follows
 follows [semantic versioning](https://semver.org/spec/v2.0.0.html) — while the
 major version is 0, the API may change in any release.
 
-## [Unreleased]
+## [0.7.0] — 2026-08-29
 
-Next version is **0.7.0**, not 0.6.3: `AudioPipelineError` gains a case, and a
+A minor bump rather than 0.6.3: `AudioPipelineError` gains a case, and a
 public non-frozen enum growing one is source-breaking for any consumer that
 switches over it exhaustively. Nothing else changed shape.
 
@@ -1028,7 +1028,8 @@ DMR, System Fusion (YSF), D-STAR, P25 and NXDN. All require AMBE or AMBE+2,
 which is patent-encumbered (NG-1). No MMDVM or USB modem support (NG-2), no MFi
 (NG-3), and no RF layer (NG-4).
 
-[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.5.4...v0.6.0
