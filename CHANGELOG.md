@@ -6,7 +6,28 @@ All notable changes to this project are recorded here. The format follows
 follows [semantic versioning](https://semver.org/spec/v2.0.0.html) — while the
 major version is 0, the API may change in any release.
 
-## [Unreleased]
+## [0.8.0] — 2026-08-29
+
+A minor bump rather than 0.7.1, on the same reading as `v0.7.0`:
+`AudioPipelineError` gains three cases, and a public non-frozen enum growing one
+is source-breaking for any consumer that switches over it exhaustively. Nothing
+else changed shape — the four products are otherwise source-compatible with
+`v0.7.0`.
+
+Cut for Currawong, and specifically for `BU-25`. `v0.7.0` removed the crash that
+killed the app on air and left a worse outcome behind it: the same install still
+raised, and the raise orphaned the pipeline's only lock, so the app stayed up,
+kept its window, and never responded again. **On a transmit path that is worse
+than a crash — nothing tells the operator the radio has stopped working.** The
+app cannot pick this up without a tag.
+
+**Verified on air 2026-08-29**, on a build carrying this: the `BU-25` sequence —
+connect, key PTT, change the audio input device, key PTT again — did not
+reproduce across three input devices, and PTT transmitted normally after every
+switch. That run exercised the **pre-check**, which reconciled the formats before
+the install; the containment this release actually claims was therefore not
+exercised on air and remains pinned by `AudioPipelineLockTests`. The raise is
+narrower, not shown to be gone.
 
 ### Fixed
 
@@ -1087,7 +1108,8 @@ DMR, System Fusion (YSF), D-STAR, P25 and NXDN. All require AMBE or AMBE+2,
 which is patent-encumbered (NG-1). No MMDVM or USB modem support (NG-2), no MFi
 (NG-3), and no RF layer (NG-4).
 
-[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.6.0...v0.6.1
