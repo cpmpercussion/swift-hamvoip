@@ -25,9 +25,29 @@ import Foundation
 /// intercept**: the app died from inside a `do/catch` written to tolerate
 /// exactly this failure. A library that can terminate its host out of a
 /// `do/catch` is a worse defect than the race that triggers it, so the fix is
-/// to make the mismatch unreachable rather than to try to handle it. Passing
-/// `nil` for the format tells AVFAudio to use whatever the bus has *at the
-/// moment of the install*, which cannot mismatch by construction.
+/// to narrow the mismatch rather than to try to handle it. Passing `nil` for
+/// the format tells AVFAudio to use whatever the *bus* has at the moment of the
+/// install, which takes our stale snapshot out of the picture.
+///
+/// **RC-16: `nil` narrowed the window, it did not close it.** Given no format,
+/// AVFAudio uses the input *node's* current format — not the hardware's, and
+/// the two are allowed to disagree. A node still carrying a Bluetooth headset's
+/// 16 kHz after the hardware had moved to the built-in microphone at 44.1 kHz
+/// raised anyway, from one layer further in:
+///
+/// ```
+/// [avae] AVAudioEngineGraph.mm:504 Error, formats don't match!
+///        Input HW format: <1 ch, 44100 Hz>, tap format: <1 ch, 16000 Hz>
+/// [avae] Failed to initialize active nodes in input chain! err = -10868
+/// ```
+///
+/// A different message from RC-15's, which is the tell that this is a second
+/// path to a raise rather than a regression of the first: the mismatch moved
+/// from *between our snapshot and the device* to *inside `AVAudioEngine`*. So
+/// the install is now preceded by a check that the node and the hardware agree
+/// — see ``CaptureTapInstaller`` — and, because no guard can be proved complete
+/// against an API that raises, ``AudioPipeline`` no longer holds its lock
+/// across the call at all.
 ///
 /// Dropping the format from the call moves the problem rather than solving it,
 /// though — the chain would still be built from a snapshot, and a chain built
@@ -39,12 +59,33 @@ protocol CaptureTapHost: AnyObject {
     /// legitimately differ — that is the whole subject of RC-15.
     var currentInputFormat: AVAudioFormat { get }
 
+    /// What the input **hardware** reports right now, which is not necessarily
+    /// what ``currentInputFormat`` says (RC-16). While these two disagree,
+    /// installing a tap raises an `NSException` from inside the engine's graph
+    /// initialisation, whatever format the install was given — including none.
+    ///
+    /// A sample rate of zero means "no opinion": an input node with no device
+    /// behind it reports that, and it is not evidence of a disagreement.
+    var hardwareInputFormat: AVAudioFormat { get }
+
     /// Installs a tap on bus 0 **with no format**, i.e. in whatever format the
-    /// bus has at that instant. Cannot raise the format-mismatch `NSException`.
+    /// bus has at that instant.
+    ///
+    /// **Can raise an Objective-C `NSException`** — not over the format it was
+    /// given, since it is given none, but over a node whose format disagrees
+    /// with the hardware's (RC-16). Callers must hold no lock across this call.
     func installTap(bufferSize: AVAudioFrameCount, body: @escaping (AVAudioPCMBuffer) -> Void)
 
     /// Removes the tap on bus 0. Safe to call when there is none.
     func removeTap()
+
+    /// Asks the input node to re-read the hardware, for the case where
+    /// ``currentInputFormat`` and ``hardwareInputFormat`` disagree.
+    ///
+    /// The engine adopts a new input format when it is reconfigured, so this
+    /// stops and resets it; the ordinary start paths bring it back up. Best
+    /// effort — the caller looks again rather than assuming this worked.
+    func reloadInputFormat()
 }
 
 /// The real host: `AVAudioEngine`'s input node.
@@ -68,6 +109,14 @@ final class EngineInputTapHost: CaptureTapHost {
         engine.inputNode.outputFormat(forBus: 0)
     }
 
+    /// The hardware's own format, which is `inputFormat(forBus: 0)` — the
+    /// node's *input* side. `outputFormat` above is what a tap is handed, and
+    /// RC-16 is the case where the engine had not yet carried a device change
+    /// from the one to the other.
+    var hardwareInputFormat: AVAudioFormat {
+        engine.inputNode.inputFormat(forBus: 0)
+    }
+
     func installTap(bufferSize: AVAudioFrameCount, body: @escaping (AVAudioPCMBuffer) -> Void) {
         // `format: nil` — see the protocol's documentation. This is the line
         // RC-15 is about.
@@ -78,6 +127,15 @@ final class EngineInputTapHost: CaptureTapHost {
 
     func removeTap() {
         engine.inputNode.removeTap(onBus: 0)
+    }
+
+    func reloadInputFormat() {
+        // Deliberately does not restart the engine: whichever path needs it
+        // next starts it — the end of a successful capture install, or the next
+        // `enqueuePlayback` — and starting it here would only re-initialise the
+        // graph we are asking to be re-read.
+        engine.stop()
+        engine.reset()
     }
 }
 
@@ -101,6 +159,25 @@ final class EngineInputTapHost: CaptureTapHost {
 /// devices change occasionally, not continuously. ``maxAttempts`` bounds it
 /// anyway, because a bounded failure the caller can see beats an unbounded loop
 /// on the connect path.
+///
+/// ### The check that happens *before* the install (RC-16)
+///
+/// Reading the format after the fact is not enough on its own, because the
+/// install itself can raise: when the input node's format and the hardware's
+/// disagree, `AVAudioEngine` fails to initialise the input chain and throws an
+/// Objective-C `NSException` no `catch` here can see (see ``CaptureTapHost``).
+/// So each attempt first asks whether those two agree, and when they do not it
+/// spends the attempt asking the node to re-read the hardware
+/// (``CaptureTapHost/reloadInputFormat()``) rather than installing into a state
+/// already known to raise. A device that never settles exhausts the attempts
+/// and fails as ``AudioPipelineError/inputFormatUnstable`` — the same
+/// catchable error a device that keeps moving under the *after* check gets, and
+/// for the same reason.
+///
+/// That guard is a narrowing, not a proof: `AVAudioEngine` may have other ways
+/// to raise from this call, and nothing observable here would distinguish them.
+/// What makes the raise survivable rather than fatal is ``AudioPipeline``
+/// holding no lock across the install.
 ///
 /// ### What is still true after this returns
 ///
@@ -131,7 +208,19 @@ enum CaptureTapInstaller {
         attempts: Int = maxAttempts
     ) throws -> CaptureChain {
         for _ in 0..<max(1, attempts) {
-            guard let chain = makeChain(host.currentInputFormat) else {
+            // The format the tap would be installed in, and the one read the
+            // chain is built from.
+            let nodeFormat = host.currentInputFormat
+
+            // RC-16, before anything is installed: a node that disagrees with
+            // the hardware raises out of `installTap`, so spend the attempt
+            // asking it to re-read rather than making the call.
+            guard Self.agrees(node: nodeFormat, hardware: host.hardwareInputFormat) else {
+                host.reloadInputFormat()
+                continue
+            }
+
+            guard let chain = makeChain(nodeFormat) else {
                 throw AudioPipelineError.converterUnavailable
             }
 
@@ -152,5 +241,24 @@ enum CaptureTapInstaller {
             host.removeTap()
         }
         throw AudioPipelineError.inputFormatUnstable
+    }
+
+    /// Whether the input node's format and the hardware's are close enough that
+    /// installing a tap will not fail graph initialisation (RC-16).
+    ///
+    /// Rate and channel count only. Those are what the engine's own message
+    /// names (`Input HW format: <1 ch, 44100 Hz>, tap format: <1 ch, 16000 Hz>`)
+    /// and they are what a device change moves; interleaving is a property of
+    /// the buffers the tap is handed, which is the *chain's* problem and is
+    /// checked after the install, not before it.
+    ///
+    /// A hardware rate of zero is no opinion rather than a disagreement — an
+    /// input node with no device behind it reports that, and the chain check
+    /// below refuses it as ``AudioPipelineError/converterUnavailable``, which
+    /// says far more about what is wrong than "unstable" would.
+    static func agrees(node: AVAudioFormat, hardware: AVAudioFormat) -> Bool {
+        guard hardware.sampleRate > 0 else { return true }
+        return node.sampleRate == hardware.sampleRate
+            && node.channelCount == hardware.channelCount
     }
 }
