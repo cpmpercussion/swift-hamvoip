@@ -6,6 +6,57 @@ All notable changes to this project are recorded here. The format follows
 follows [semantic versioning](https://semver.org/spec/v2.0.0.html) — while the
 major version is 0, the API may change in any release.
 
+## [Unreleased]
+
+### Fixed
+
+- **An `NSException` from `installTap` can no longer wedge the host process
+  (RC-16).** RC-15 removed the *crash* and left something worse behind. The
+  `nil`-format install still raises — AVFAudio uses the input node's format,
+  which is allowed to disagree with the hardware's — and `AudioPipeline` held
+  one non-recursive `NSLock` across that call, released by `defer`. **A Swift
+  `defer` does not run when an Objective-C exception unwinds through it**, so
+  the lock was not released late, it was orphaned for the life of the process,
+  and AppKit swallowed the exception at the run loop. Currawong stayed up, kept
+  its window and never responded again, with a dead audio pipeline and three
+  threads waiting on a lock nobody held (`BU-25`). On a transmit path that is
+  worse than a crash: nothing tells the operator the radio has stopped working.
+
+  State and graph are now **two locks with a rule each**. `lock` guards state and
+  is never held across a call into AVFAudio; `engineLock` guards the graph, is
+  held across those calls, and is only ever taken with a deadline. A raise can
+  still orphan `engineLock` — every caller then reports `.audioEngineBusy` or
+  drops a frame instead of blocking. **An orphaned engine lock costs the audio
+  path; it cannot cost the caller's thread.** `stop()` and `enqueuePlayback`
+  answer in 0.1 s rather than 2, because an operator is waiting on both.
+
+- **The capture tap is not installed into a node the hardware disagrees with
+  (RC-16).** `CaptureTapInstaller` now compares the node's rate and channel
+  count against the hardware's before installing, and spends the attempt asking
+  the node to re-read when they differ. This **narrows** the raise; it does not
+  close it, and nothing here proves it is unreachable — the guard cannot be
+  complete against an API that raises from a layer it does not expose.
+
+### Added
+
+- **`AudioPipelineError.captureInstallInProgress`, `.captureInstallSuperseded`
+  and `.audioEngineBusy`** — the API-visible half of RC-16, and the reason this
+  is a minor bump. An install is now several locked regions serialised by an
+  in-flight claim that a raise deliberately does **not** release: a later caller
+  is told `.captureInstallInProgress` rather than made to wait for something
+  that will never happen, and **`stop()` clears the claim**, which makes "stop,
+  then start again" the recovery for a fault the process cannot otherwise
+  observe. `.captureInstallSuperseded` reports an install that a concurrent
+  `stop()` overtook — newly possible, since an install is no longer atomic.
+  `.audioEngineBusy` is the deadline on `engineLock` expiring.
+
+### Changed
+
+- **`CaptureTapHost`'s documentation said the `nil` install cannot raise.** That
+  was the reason this path was believed closed, and it is corrected in place —
+  along with the same claim in `docs/DEVELOPMENT-PLAN.md` (RC-15) and in the
+  `v0.7.0` entry below.
+
 ## [0.7.0] — 2026-08-29
 
 A minor bump rather than 0.6.3: `AudioPipelineError` gains a case, and a
@@ -30,6 +81,14 @@ switches over it exhaustively. Nothing else changed shape.
   chain is then checked against the format the node reports *afterwards*,
   retrying (up to four times) if the device moved. A device that will not hold
   still for one install now throws `.inputFormatUnstable` instead.
+
+  > **Corrected by RC-16 (v0.8.0).** *"Which cannot mismatch"* was wrong. A
+  > `nil` format makes AVFAudio use the input **node's** format, not the
+  > **hardware's**, and the two are allowed to disagree — so the mismatch moved
+  > inside `AVAudioEngine` rather than disappearing, surfacing as *"formats
+  > don't match"* / `-10868` from graph initialisation. RC-15 is not reverted:
+  > installing with no format, and checking the chain afterwards, are both still
+  > right. What was wrong was calling the result impossible.
 
 - **The capture tap bounds its reads by the buffer it is handed, not by the
   stride it was built with (RC-15).** There is always some window in which
