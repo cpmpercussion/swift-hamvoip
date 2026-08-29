@@ -1072,9 +1072,48 @@ nothing here proves it is gone; the guard cannot be complete against an API that
 raises from a layer it does not expose. The claim this task makes is the other
 one — that a raise costs the audio path rather than the host — and the on-air
 confirmation it wants is the `BU-25` reproduction run again on a build pinning
-this, which is Currawong's to do. **A hardware probe is not offered**, because
+this, which is Currawong's to do — it was, on the day, and the run is recorded
+below. **A hardware probe is not offered**, because
 `hamvoip-cli experiment capture-swap` (RC-15) already drives device changes
 under repeated capture starts and would report a hang as a hang.
+
+#### The on-air confirmation, and the half of the fix it did not exercise
+
+**Run 2026-08-29**, on Currawong built against this branch — a path dependency
+on the `task/rc-16` worktree rather than a pinned release, since no release
+carries it yet. The `BU-25` sequence, connect → key PTT → change the audio input
+device → key PTT again, **did not reproduce.** Three input devices were switched
+between, including the Bluetooth PTT handset whose 16 kHz arrival and departure
+is the trigger, and PTT transmitted normally after every switch with no error
+surfaced to the operator. Currawong's own macOS suite is green against the same
+swapped library: 726 tests, 1 skipped.
+
+The log is `experiment-data/app33-rc16-device-switch-2026-08-29-log.txt` — a
+`log stream` over AVFAudio and CoreAudio for the length of the run. It holds the
+three input device changes and a HAL default-device notification, `iounit
+configuration changed > stopping the engine` followed by a restart, and from
+16:07:28 a *different* `AVAudioEngine` instance — so the graph was rebuilt on the
+new hardware format rather than carried over. It holds **no `formats don't
+match`, no `-10868` and no `NSException`**, which is the failure's whole
+signature. A `sample` of the still-running process afterwards found the main
+thread in the ordinary run-loop wait, with no lock-wait frame and no
+`AVAudioEngine` frame on any of its twelve threads: the three-threads-on-one-lock
+picture the fault was diagnosed from is simply absent.
+
+**PTT reporting no error is the pre-check's result, not the containment's.** The
+node and the hardware were reconciled before the install, so the raise was never
+reached — which means the half of RC-16 that this task actually claims, an
+orphaned `engineLock` costing the audio path while callers are told
+`.audioEngineBusy` or `.captureInstallInProgress` instead of blocking, went
+**unexercised on air** and stays pinned only by `AudioPipelineLockTests`. One
+clean run also cannot separate "the pre-check prevented the raise" from "this run
+would not have raised anyway"; what it is worth is that the fault it replaces was
+reproducible by this exact sequence on this hardware, and that the log carries
+positive evidence of the rebuild rather than only the absence of a crash. The
+paragraph above still stands: the raise is narrower, not shown to be gone.
+
+Still owed: the same run against a *released* build once one carries this, and
+`BU-25`'s own closure, which is Currawong's to write.
 
 ### RC-15 — installing the capture tap races the device, and the throw is not catchable ✅ DONE 2026-08-29
 
