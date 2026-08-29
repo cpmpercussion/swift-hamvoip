@@ -67,7 +67,7 @@ struct CaptureSwapCommand: AsyncParsableCommand {
 
             --at-start MEASURES A DIFFERENT FAULT (RC-15). The default mode changes the \
             device under a capture that is already running, which is RC-14's window. \
-            RC-15's is narrower and earlier: between `installCaptureLocked` reading the \
+            RC-15's is narrower and earlier: between the install path reading the \
             input format and `installTap` being given it. Landing in it terminated \
             Currawong on air (BU-24), because AVFAudio rejects a stale format with an \
             Objective-C NSException that no Swift `catch` can see — from inside a \
@@ -81,6 +81,11 @@ struct CaptureSwapCommand: AsyncParsableCommand {
 
               *** Terminating app due to uncaught exception 'com.apple.coreaudio.avfaudio',
                   reason: 'Failed to create tap due to format mismatch, ...'
+
+            A RUN THAT HANGS IS ALSO A FAILURE (RC-16). The same install can raise \
+            over a node whose format has not caught up with the hardware's, and since \
+            RC-16 that unwinds without orphaning the pipeline's state lock. If this probe \
+            ever stops printing and does not return, that is the fault to report.
 
             IT CANNOT BE AIMED AT THE WINDOW, and does not pretend to be. A pre-RC-15 \
             build survives this run too — the window is microseconds wide and landing in \

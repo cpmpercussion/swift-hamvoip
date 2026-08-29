@@ -963,6 +963,119 @@ in `RadioCoreTests` that is a plain `final class` rather than an actor; every
 mode's mapping table is asserted case by case; and a live IAX2 session shows
 `radioEvents` is exactly `events.compactMap(\.radioEvent)`, in order.
 
+### RC-16 — an `NSException` from `installTap` must not orphan the pipeline's lock ✅ DONE 2026-08-29
+
+**Found in Currawong** (`BU-25` there, issue #60 here), during the on-air
+verification of its macOS App Sandbox change, on a build pinning **v0.7.0 — the
+release carrying RC-15**. Ruled out as a sandbox effect by an un-sandboxed
+control build of the same commit stopping at the identical exception.
+
+**The host app dies and cannot recover — and does not crash.** The process stays
+up, keeps its window, and never responds again, with a dead audio pipeline. On a
+transmit path that is worse than a crash: nothing tells the operator the radio
+has stopped working. Connect, key PTT (fine), change the audio input device, key
+PTT again → permanently unresponsive, with three threads waiting on
+`AudioPipeline`'s `NSLock` and none holding it — the PTT release in `stop()`,
+received audio in `enqueuePlayback`, and the RC-14 rebuild on the `engine`
+queue. Two `sample` runs six minutes apart were identical.
+
+**Two separable defects, and the second is the one that turns a survivable
+failure into a dead app.**
+
+1. **The `format: nil` install still raises.** With no format AVFAudio uses the
+   input *node's* current format, which is not the hardware's; the node still
+   carried a Bluetooth headset's 16 kHz after the hardware had moved to the
+   built-in microphone at 44.1 kHz. The mismatch did not disappear, it moved
+   *inside* `AVAudioEngine`, where it surfaces as `Error, formats don't match!`
+   / `-10868` from graph initialisation rather than RC-15's tap-creation
+   message. The retry loop cannot help: it re-reads the format *after*
+   `installTap` returns, and here it never returns.
+2. **The lock was released by `defer`, and `defer` does not run when an
+   Objective-C exception unwinds through it.** One non-recursive `NSLock` held
+   across the install is therefore not released late, it is orphaned for the
+   life of the process. AppKit swallows the exception at the run loop, which is
+   why the app hangs rather than terminating; `-NSApplicationCrashOnExceptions
+   YES` converts it back into the crash the backtrace came from.
+
+#### What was decided
+
+**No lock is held across a call into AVFAudio, and the one that is has a
+deadline.** Exception *safety* was not on the table — there is no pure-Swift way
+to make `defer` survive an ObjC unwind — so the shape had to change rather than
+the handling. The A2 option in the issue, an Objective-C `@try/@catch` shim
+turning the raise into a Swift error, was **not** taken: it would be the
+package's first Objective-C target, and a caught `NSException` leaves
+`AVAudioEngine` in an undefined state anyway, so it buys reportability at the
+cost of a structural change. A1 alone removes the unrecoverable outcome, which
+is the part that matters.
+
+In `AudioPipeline.swift`:
+
+- **Two locks with a rule each.** `lock` guards *state* and is never held across
+  AVFAudio; `engineLock` guards the *graph*, is held across those calls, and is
+  only ever taken with a deadline (`withEngine(timeout:)`). Acquisition order is
+  `lock` first, released before `engineLock` — never nested, never the reverse.
+  A raise can still orphan `engineLock`; every caller then reports
+  `.audioEngineBusy` or drops a frame instead of blocking. **An orphaned engine
+  lock costs the audio path; it cannot cost the caller's thread.**
+- **An install is now several locked regions**, serialised by a dedicated
+  in-flight flag rather than by an inference from `isCapturing` — the same
+  pattern as `M17ReflectorClient`, per the actor-reentrancy rule in `CLAUDE.md`.
+  The flag is deliberately *not* released by a raise: a later caller is told
+  `.captureInstallInProgress` rather than made to wait for something that will
+  never happen, and **`stop()` clears it**, which makes "stop, then start again"
+  the recovery for a fault the process cannot otherwise observe.
+- **A session generation, because `stop()` can now land mid-install.** It could
+  not before — an install was one locked region — and an install that committed
+  over a `stop()` would leave a live tap and a drain task feeding a caller who
+  had already said stop. The commit checks the generation and reports
+  `.captureInstallSuperseded` instead. This is A1's cost, named in the issue,
+  and it is paid here rather than left to be found on air.
+- **`stop()` and `enqueuePlayback` answer in 0.1 s, not 2.** They run where an
+  operator is waiting — a PTT release on the main thread, and a received frame
+  every 20 ms — so they give the graph one frame and then go without it. The
+  install path is allowed the longer wait, because its caller is waiting for
+  exactly that.
+
+And in `CaptureTapInstaller.swift`, the narrowing that makes the raise harder to
+reach in the first place: **each attempt checks that the node and the hardware
+agree before installing**, and spends itself asking the node to re-read
+(`reloadInputFormat()`, i.e. stop + reset) when they do not. A device that never
+settles exhausts the attempts and throws `.inputFormatUnstable`. Three new API
+cases — `.captureInstallInProgress`, `.captureInstallSuperseded`,
+`.audioEngineBusy` — and the corrected `CaptureTapHost` documentation, which had
+said the `nil` install *cannot* raise and was the reason this path was believed
+closed.
+
+#### What settles it, and what does not
+
+**`Tests/RadioCoreTests/AudioPipelineLockTests.swift`**, seven tests, all of
+which fail by timing out against the code as it was. The raise itself cannot be
+staged — an `NSException` no `catch` can intercept would take the test runner
+down, which is the complaint rather than a test of it — so what is pinned is the
+property that makes a raise survivable, and which holds on ordinary runs too:
+**while the pipeline is inside `installTap`, the rest of it still answers.** A
+fake tap host calls back into the pipeline from another thread from inside its
+own install, and the counter read, `stop()`, `enqueuePlayback` and a second
+`startCapture` each have to come back within the timeout. Plus the state a raise
+leaves behind, staged directly: an orphaned claim fails installs instead of
+blocking them, and `stop()` clears it.
+
+**The pre-check has its own four tests** in `CaptureTapInstallerTests`: a node
+and hardware that disagree are never installed into, one that is reconciled by a
+reload is, an input with no device behind it is `converterUnavailable` rather
+than "unstable", and the comparison is rate and channel count — what the
+engine's own refusal names — not interleaving. 1061 tests green.
+
+**What is not settled: that the raise is now unreachable.** It is narrower, and
+nothing here proves it is gone; the guard cannot be complete against an API that
+raises from a layer it does not expose. The claim this task makes is the other
+one — that a raise costs the audio path rather than the host — and the on-air
+confirmation it wants is the `BU-25` reproduction run again on a build pinning
+this, which is Currawong's to do. **A hardware probe is not offered**, because
+`hamvoip-cli experiment capture-swap` (RC-15) already drives device changes
+under repeated capture starts and would report a hang as a hang.
+
 ### RC-15 — installing the capture tap races the device, and the throw is not catchable ✅ DONE 2026-08-29
 
 **Found by a real crash, on air, in Currawong** — `BU-24` there, log in
@@ -1015,8 +1128,15 @@ the tap went in.
 
 **The format stops being an input to the install and becomes something checked
 after it.** `installTap(format:)` is never given a format at all: `nil` means
-AVFAudio uses whatever the bus has at that instant, which cannot mismatch by
-construction. That alone would have moved the problem rather than solved it —
+AVFAudio uses whatever the bus has at that instant.
+
+> **Corrected by RC-16 (2026-08-29).** "Which cannot mismatch by construction",
+> as this read at the time, was wrong. `nil` makes AVFAudio use the input
+> *node's* format, not the *hardware's*, and those two are allowed to disagree —
+> a node still carrying a departed headset's 16 kHz while the hardware is at
+> 44.1 kHz raises from graph initialisation instead. `nil` narrowed the window;
+> it did not close it. Everything else in this entry stands: the retry loop and
+> the after-the-fact chain check are still right, and RC-16 is not a revert. That alone would have moved the problem rather than solved it —
 the chain would still be built from a snapshot, and a chain built for the wrong
 format is exactly RC-14's out-of-bounds read — so the install is followed by a
 second read of the node's format, and the chain is kept only if it is right for

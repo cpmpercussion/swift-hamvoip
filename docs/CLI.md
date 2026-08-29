@@ -1438,8 +1438,8 @@ The engine is held in a local for the duration of the call, and must be.
 ### `--at-start` — the same device change, at the *beginning* of a capture (RC-15)
 
 The mode above changes the device under a capture that is already running, which
-is RC-14's window. RC-15's is earlier and much narrower: between
-`installCaptureLocked` reading the input format and `installTap` being given it.
+is RC-14's window. RC-15's is earlier and much narrower: between the install path reading the
+input format and `installTap` being given it.
 Landing in it terminated Currawong on air on 2026-08-29 (`BU-24`), because
 AVFAudio rejects a stale format with an Objective-C `NSException` that no Swift
 `catch` can see — out of a `do/catch` written to tolerate exactly that failure.
@@ -1459,6 +1459,14 @@ changes, no errors, no crash. The window is microseconds wide and landing in it
 is luck. The deterministic half of RC-15 is `CaptureTapInstallerTests`, which
 moves the format under a fake input node; this is the hardware half, and it is
 here to show the fix did not break the ordinary case.
+
+**RC-16 gave this run a second thing to watch for, and it needs no new
+flag.** The same install can raise for a *different* reason — an input node
+whose format has not caught up with the hardware's — and since RC-16 that no
+longer terminates the process, it hangs it: a lock orphaned by the unwind, with
+every later call waiting on it forever. So a run of this probe that stops
+printing and never returns is as much a failure as one that dies, and is the
+shape to report. Neither has been seen since.
 
 **Two devices with different formats or nothing is being exercised.** On
 melchior the useful pair is the TID-MIC-Q2L (16 kHz mono, HFP) and the Logitech

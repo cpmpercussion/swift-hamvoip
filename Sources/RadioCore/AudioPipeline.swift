@@ -22,7 +22,41 @@ public enum AudioPipelineError: Error, Equatable, CustomStringConvertible, Senda
     /// failure to open the microphone — Currawong's connect-path warm-up logs
     /// it and carries on. Retrying is reasonable: it means the hardware was
     /// moving, not that it is unusable.
+    ///
+    /// RC-16 widened it: it is also what a device that never *settles* reports,
+    /// i.e. one whose input node and hardware went on disagreeing about the
+    /// format through every attempt to reconcile them.
     case inputFormatUnstable
+
+    /// Another install of the capture tap was already in flight, so this one
+    /// did nothing rather than racing it (RC-16).
+    ///
+    /// Ordinarily a genuine race — a PTT press against the rebuild an
+    /// `.AVAudioEngineConfigurationChange` started — and retrying is right.
+    ///
+    /// It is also what a caller sees after an install was unwound by an
+    /// Objective-C `NSException`, since a raise runs no `defer` and so never
+    /// releases the claim. ``AudioPipeline/stop()`` clears it, which makes
+    /// "stop, then start again" the recovery for a fault the process cannot
+    /// otherwise observe at all.
+    case captureInstallInProgress
+
+    /// The capture session this install was building was ended — by `stop()`,
+    /// or by another install — before it had anything to commit (RC-16).
+    ///
+    /// Nothing was installed and nothing is running: the caller's `stop()` won,
+    /// which is what it should do. A `startCapture` that races the caller's own
+    /// `stop()` is the ordinary way to see this, and starting again is the
+    /// answer if capture was in fact wanted.
+    case captureInstallSuperseded
+
+    /// The audio engine could not be reached within the deadline (RC-16).
+    ///
+    /// Either something else is mid-install, or an `NSException` unwound out of
+    /// AVFAudio and left the engine unreachable for good. Deliberately a
+    /// bounded failure rather than a wait: a caller that blocks forever on the
+    /// audio graph is the deadlock RC-16 is about.
+    case audioEngineBusy
 
     public var description: String {
         switch self {
@@ -30,6 +64,12 @@ public enum AudioPipelineError: Error, Equatable, CustomStringConvertible, Senda
             return "could not construct an AVAudioConverter for the requested PCM formats"
         case .inputFormatUnstable:
             return "the input device's format kept changing while the capture tap was installed"
+        case .captureInstallInProgress:
+            return "another capture tap install is already in flight"
+        case .captureInstallSuperseded:
+            return "the capture session this install was building was ended before it finished"
+        case .audioEngineBusy:
+            return "the audio engine could not be reached within the deadline"
         }
     }
 }
@@ -1064,13 +1104,37 @@ private struct FrameSink: @unchecked Sendable {
 ///   not read or write any property of this class, and never takes a lock —
 ///   taking a contended lock on a real-time audio thread would be a bug in its
 ///   own right.
-/// * Everything on the caller's side — the engine graph, `isCapturing` — is
-///   mutated only under ``lock``, which the render thread never touches.
+/// * Everything on the caller's side — `isCapturing` and the rest of the
+///   capture session's state — is mutated only under ``lock``, which the
+///   render thread never touches. The engine *graph* is serialised separately,
+///   by ``engineLock``.
 /// * ``playback`` and ``signals`` are `let`s established in `init`.
 ///
 /// Public methods (`startCapture`, `enqueuePlayback`, `stop`) may therefore be
 /// called from any thread, but **must not** be called from an audio render
-/// callback, since they take the lock and allocate.
+/// callback, since they take a lock and allocate.
+///
+/// ### RC-16 — no lock is held across a call that can raise
+///
+/// AVFAudio reports some failures as Objective-C `NSException`s, and **a Swift
+/// `defer` does not run when an ObjC exception unwinds through it**. A single
+/// lock held across such a call is therefore not merely unlocked late, it is
+/// orphaned forever — which is how Currawong hung: three threads waiting on
+/// this class's `NSLock`, none holding it, the process alive and permanently
+/// unresponsive with a dead audio pipeline. On a transmit path that is worse
+/// than a crash, because nothing tells the operator the radio has stopped.
+///
+/// So the two jobs one lock used to do are now two locks, with a rule each:
+///
+/// * ``lock`` guards **state**, and is never held across a call into AVFAudio.
+/// * ``engineLock`` guards the **graph**, is held across those calls, and is
+///   only ever taken with a deadline — see ``withEngine(timeout:_:)``.
+///
+/// A raise can still cost the audio path: an orphaned ``engineLock`` makes the
+/// engine unreachable, and every caller then reports
+/// ``AudioPipelineError/audioEngineBusy`` instead of blocking. That is a
+/// reportable, non-fatal failure of *this object*, which is the most a library
+/// can offer against an API that raises; what it is not is a wedged host.
 ///
 /// ### RC-9 — the capture path is real-time safe
 ///
@@ -1136,9 +1200,14 @@ public final class AudioPipeline: @unchecked Sendable {
     /// The input node, behind the seam the tap install is tested through
     /// (RC-15). `lazy` so that constructing an `AudioPipeline` still touches no
     /// input hardware: `EngineInputTapHost` reaches for `engine.inputNode` only
-    /// when asked, and this property is only ever reached from the capture path
-    /// with ``lock`` held.
-    private lazy var tapHost: CaptureTapHost = EngineInputTapHost(engine: engine)
+    /// when asked.
+    ///
+    /// A `lazy var` is not thread-safe, so it is *materialised* under ``lock``
+    /// — every capture path reads it into a local and then works from that
+    /// local, because the calls it makes must happen with ``lock`` released
+    /// (RC-16). Reached only where a tap is known to exist or is about to, so
+    /// that a receive-only session never instantiates the input audio unit.
+    lazy var tapHost: CaptureTapHost = EngineInputTapHost(engine: engine)
 
     /// Wire→engine conversion and buffer format for the playback path,
     /// derived from the **output** device only (see ``PlaybackChain``).
@@ -1152,17 +1221,81 @@ public final class AudioPipeline: @unchecked Sendable {
     /// of hardware.
     private let playback: PlaybackChain
 
-    /// Serialises caller-side state and engine-graph mutations.
+    /// Serialises the capture session's caller-side **state**: `isCapturing`,
+    /// the ring, the chain, the drain task, the sink and the counters.
     ///
     /// **Never acquired from the real-time audio thread.** The tap closure is
     /// built to need nothing this lock protects; see the type-level
     /// concurrency note.
+    ///
+    /// **Never held across a call into AVFAudio** (RC-16) — that is the whole
+    /// of the fix, and every method below is shaped by it: read or commit state
+    /// under this lock, touch the graph outside it. A call that raises an
+    /// Objective-C `NSException` runs no `defer`, so a lock held across one is
+    /// orphaned for the life of the process.
     private let lock = NSLock()
+
+    /// Serialises engine-**graph** calls: installing and removing the tap,
+    /// starting and stopping the engine, and building and scheduling playback
+    /// buffers.
+    ///
+    /// Separate from ``lock`` because it is the one that *is* held across
+    /// AVFAudio, two threads mutating one engine graph being a fault of its
+    /// own. What makes that survivable is that it is only ever taken with a
+    /// deadline, through ``withEngine(timeout:_:)``: an orphaned engine lock
+    /// costs the audio path, not the caller's thread.
+    ///
+    /// Acquisition order where both are wanted: ``lock`` first, released before
+    /// this one is taken. Never nested, and never the reverse.
+    private let engineLock = NSLock()
+
+    /// How long a caller waits for ``engineLock`` before reporting
+    /// ``AudioPipelineError/audioEngineBusy``.
+    ///
+    /// Comfortably longer than an install or an engine start — tens of
+    /// milliseconds on real hardware — and short enough that a thread which is
+    /// never going to get the lock finds out and says so.
+    private static let engineLockTimeout: TimeInterval = 2
+
+    /// The deadline for the paths an operator is waiting on: `stop()`,
+    /// `enqueuePlayback`, and the engine nudge after a configuration change.
+    ///
+    /// One playback frame rather than seconds. Dropping 20 ms of received
+    /// audio, or leaving a tap on a bus whose session has already been ended,
+    /// both cost less than a PTT release that takes two seconds to return —
+    /// and this is the deadline that runs on the app's main thread.
+    private static let responsiveEngineLockTimeout: TimeInterval = 0.1
 
     /// Guarded by ``lock``. Tracks whether a tap is installed, so `stop()` is
     /// idempotent and a second `startCapture` cannot install a second tap on
     /// a bus that already has one.
     private var isCapturing = false
+
+    /// Guarded by ``lock``. Claimed for the length of one install, which now
+    /// spans several separately-locked regions rather than one (RC-16), so that
+    /// two installs cannot interleave over a bus that holds one tap.
+    ///
+    /// A dedicated in-flight flag rather than an inference from `isCapturing`,
+    /// which the install's own completion path writes — the same rule the
+    /// actor-reentrancy hazard in `M17ReflectorClient` is written to.
+    ///
+    /// **Not released by an `NSException`**, since a raise runs no `defer`. An
+    /// orphaned claim makes later installs fail with
+    /// ``AudioPipelineError/captureInstallInProgress`` — a catchable error, not
+    /// a block — and ``stop()`` clears it.
+    private var captureInstallInFlight = false
+
+    /// Guarded by ``lock``. Bumped by every ``retireCaptureSessionLocked()``,
+    /// so that an install can tell whether the session it was building for is
+    /// still the one wanted by the time it has something to commit.
+    ///
+    /// Needed because an install is no longer one locked region (RC-16): a
+    /// `stop()` can now land in the middle of one, and without this the install
+    /// would go on to commit a live tap and a drain task delivering to a caller
+    /// who has already said stop. The claim flag cannot answer this — it is
+    /// what stops two *installs* overlapping, and `stop()` deliberately does
+    /// not wait on it.
+    private var captureSessionGeneration = 0
 
     /// Guarded by ``lock``. The **live** capture session's ring; `nil` between
     /// sessions.
@@ -1277,48 +1410,48 @@ public final class AudioPipeline: @unchecked Sendable {
     /// task are torn down first.
     ///
     /// - Throws: ``AudioPipelineError/converterUnavailable`` if CoreAudio will
-    ///   not build a converter for the input device's rate.
+    ///   not build a converter for the input device's rate,
+    ///   ``AudioPipelineError/inputFormatUnstable`` if the input device would
+    ///   not hold still long enough to install a tap in a format it agrees
+    ///   with, ``AudioPipelineError/captureInstallInProgress`` if another
+    ///   install is already running, or
+    ///   ``AudioPipelineError/audioEngineBusy`` if the engine could not be
+    ///   reached. Every one of them is a `throw` a caller's `do/catch` can see
+    ///   — which is not a given on this path, and is the subject of RC-15 and
+    ///   RC-16.
     public func startCapture(onFrame: @escaping ([Int16]) -> Void) throws {
-        let sink = FrameSink(deliver: onFrame)
-
-        lock.lock()
-        defer { lock.unlock() }
-
-        captureSink = sink
-        // A new session, so a new count. `installCaptureLocked` adds the
-        // outgoing ring's drops to the carry-over, which is what a *rebuild*
-        // wants and a fresh start does not, so clear it afterwards.
-        do {
-            try installCaptureLocked(sink: sink)
-            droppedFramesFromRetiredRings = 0
-            captureChainRebuilds = 0
-            captureChainRebuildFailures = 0
-        } catch {
-            captureSink = nil
-            throw error
-        }
+        try installCaptureSession(sink: FrameSink(deliver: onFrame), isRebuild: false)
     }
 
-    /// Builds a chain for the input device's *current* format and installs it,
-    /// tearing down whatever was there first. The one place a tap is installed:
-    /// ``startCapture(onFrame:)`` calls it to begin a session and
-    /// ``rebuildCaptureAfterConfigurationChange()`` calls it to replace a chain
-    /// the hardware has invalidated (RC-14).
+    /// Runs `body` with ``engineLock`` held, or returns `nil` if that lock
+    /// cannot be had within `timeout`.
+    ///
+    /// **The deadline is the point** (RC-16). This is the lock that is held
+    /// across AVFAudio, so it is the one an Objective-C `NSException` can
+    /// orphan; a `nil` return says the engine is unreachable — busy, or gone
+    /// for good — and every caller has something honest to do with that, from
+    /// dropping one playback frame to reporting
+    /// ``AudioPipelineError/audioEngineBusy``. What no caller does is wait.
+    private func withEngine<T>(timeout: TimeInterval, _ body: () -> T) -> T? {
+        guard engineLock.lock(before: Date().addingTimeInterval(timeout)) else { return nil }
+        let value = body()
+        engineLock.unlock()
+        return value
+    }
+
+    /// Ends the live capture session's **state** and reports whether a tap is
+    /// still on the bus.
+    ///
+    /// Only the state: taking the tap off the bus is an AVFAudio call like any
+    /// other, so it happens in ``removeTap(from:)`` once the caller has
+    /// released ``lock`` (RC-16). Splitting it this way is what lets `stop()`
+    /// finish its bookkeeping even when the graph is unreachable.
     ///
     /// Must be called with ``lock`` held.
-    ///
-    /// - Throws: ``AudioPipelineError/converterUnavailable`` if CoreAudio will
-    ///   not build a converter for the input device's rate, or whatever
-    ///   `AVAudioEngine.start()` throws.
-    private func teardownCaptureLocked() {
-        if isCapturing {
-            // Only touch the input node if we actually opened it: reaching for
-            // `engine.inputNode` instantiates the input audio unit, which is
-            // pointless (and on iOS, permission-adjacent) in a receive-only or
-            // never-started session.
-            tapHost.removeTap()
-            isCapturing = false
-        }
+    @discardableResult
+    private func retireCaptureSessionLocked() -> Bool {
+        let hadTap = isCapturing
+        isCapturing = false
         captureTask?.cancel()
         captureTask = nil
         captureChain = nil
@@ -1328,30 +1461,120 @@ public final class AudioPipeline: @unchecked Sendable {
         // carry-over for a session that is genuinely new.
         droppedFramesFromRetiredRings += captureRing?.droppedFrameCount ?? 0
         captureRing = nil
+        captureSessionGeneration &+= 1
+        return hadTap
     }
 
-    private func installCaptureLocked(sink: FrameSink) throws {
-        // Pre-flight, before anything is torn down: can CoreAudio convert at
-        // all from the rate the device is running at now? A `startCapture` that
-        // cannot must leave the session it was asked to replace running rather
-        // than killing it on the way out, and the installer below cannot offer
-        // that because it needs the bus free before its first attempt.
+    /// Takes the tap off the bus. Call with ``lock`` released, and only when a
+    /// tap was actually installed: reaching for `engine.inputNode` instantiates
+    /// the input audio unit, which is pointless (and on iOS,
+    /// permission-adjacent) in a receive-only or never-started session.
+    private func removeTap(from host: CaptureTapHost) {
+        _ = withEngine(timeout: Self.engineLockTimeout) { host.removeTap() }
+    }
+
+    /// Builds a chain for the input device's current format and installs it,
+    /// retiring whatever was there first. The one place a tap is installed:
+    /// ``startCapture(onFrame:)`` calls it to begin a session and
+    /// ``rebuildCaptureAfterConfigurationChange()`` calls it to replace a chain
+    /// the hardware has invalidated (RC-14).
+    ///
+    /// **Takes ``lock`` several times and holds it across none of the AVFAudio
+    /// calls** (RC-16). An install used to be one locked region, which meant a
+    /// raise out of `installTap` orphaned the lock and wedged the host. What
+    /// serialises it now is ``captureInstallInFlight``, claimed here and
+    /// released on every path a Swift `throw` can take — and, deliberately, on
+    /// no path an `NSException` can take, because there is no such path: a
+    /// caller that finds a stale claim is told
+    /// ``AudioPipelineError/captureInstallInProgress`` rather than being made
+    /// to wait for something that will never happen.
+    private func installCaptureSession(sink: FrameSink, isRebuild: Bool) throws {
+        // 1 — claim the install and take a reference to the host, under the
+        // state lock and nothing else.
+        lock.lock()
+        guard !captureInstallInFlight else {
+            lock.unlock()
+            throw AudioPipelineError.captureInstallInProgress
+        }
+        captureInstallInFlight = true
+        captureSink = sink
+        let host = tapHost
+        // RC-14: a rebuild's chain is *already* known to be wrong for the
+        // buffers arriving, so its tap comes down before anything that can
+        // fail. A fresh start keeps the session it was asked to replace until
+        // the pre-flight below says a replacement is possible at all.
+        let staleTap = isRebuild ? retireCaptureSessionLocked() : false
+        // Read after our own retire, so that what invalidates this install is
+        // somebody *else* ending the session.
+        let generation = captureSessionGeneration
+        lock.unlock()
+        if staleTap { removeTap(from: host) }
+
+        do {
+            try installCaptureSession(
+                sink: sink, host: host, isRebuild: isRebuild, generation: generation)
+            lock.lock()
+            captureInstallInFlight = false
+            lock.unlock()
+        } catch {
+            lock.lock()
+            captureInstallInFlight = false
+            // A rebuild keeps the sink: it is the running caller's, and it is
+            // what a later configuration change would rebuild for. A failed
+            // fresh start has no caller waiting on audio at all.
+            if !isRebuild { captureSink = nil }
+            lock.unlock()
+            throw error
+        }
+    }
+
+    /// The install proper, from the pre-flight to a running engine. Split out
+    /// so that every exit is a `throw` the claim-releasing `catch` above sees.
+    ///
+    /// - Throws: ``AudioPipelineError/converterUnavailable`` if CoreAudio will
+    ///   not build a converter for the input device's rate,
+    ///   ``AudioPipelineError/audioEngineBusy`` if the graph could not be
+    ///   reached, whatever ``CaptureTapInstaller`` throws, or whatever
+    ///   `AVAudioEngine.start()` throws.
+    private func installCaptureSession(
+        sink: FrameSink, host: CaptureTapHost, isRebuild: Bool, generation: Int
+    ) throws {
+        // The session this install is for. Step 3 replaces it with its own,
+        // for the same reason step 1 read it after retiring: what must
+        // invalidate the commit is somebody else ending the session, not us.
+        var generation = generation
+        // 2 — pre-flight, with no lock held: can CoreAudio convert at all from
+        // the rate the device is running at now? A `startCapture` that cannot
+        // must leave the session it was asked to replace running rather than
+        // killing it on the way out, and the installer below cannot offer that
+        // because it needs the bus free before its first attempt.
         //
         // A converter rather than a whole chain, because this answer is
         // discarded: the chain that ends up installed is the installer's, built
         // from the format the tap is actually given (RC-15).
         guard RealTimeDownConverter(
-            sourceSampleRate: tapHost.currentInputFormat.sampleRate,
+            sourceSampleRate: host.currentInputFormat.sampleRate,
             wireSampleRate: Self.wireSampleRate,
             maxInputFrames: Self.maxTapFrames
         ) != nil else {
             throw AudioPipelineError.converterUnavailable
         }
 
-        // Installing a second tap on a bus that already has one is a hard error
-        // in AVAudioEngine; make a repeated startCapture mean "restart".
-        teardownCaptureLocked()
+        // 3 — free the bus. Installing a second tap on a bus that already has
+        // one is a hard error in AVAudioEngine; this is what makes a repeated
+        // `startCapture` mean "restart". A rebuild has already done it.
+        if !isRebuild {
+            lock.lock()
+            let staleTap = retireCaptureSessionLocked()
+            generation = captureSessionGeneration
+            lock.unlock()
+            if staleTap { removeTap(from: host) }
+        }
 
+        // 4 — the install, under the engine lock and no other. **This is the
+        // call that raises** (RC-16), so nothing whose loss would wedge a
+        // caller may be held across it.
+        //
         // A chain per capture session, owned by this session's tap alone. Its
         // rate comes from the input device and is never allowed to reach the
         // playback path (RC-7 Defect 1) — and because it is never shared, the
@@ -1361,38 +1584,74 @@ public final class AudioPipeline: @unchecked Sendable {
         // **The installer decides which format that is, not this method**
         // (RC-15). It installs with no format at all, then checks the chain
         // against what the node reports afterwards, so a device that changes
-        // inside the window is retried rather than allowed to raise an
-        // uncatchable format-mismatch exception. The tap body it installs is
-        // the only thing the render thread does: no allocation, no lock, no
-        // caller code — see CaptureTapProcessor.
-        let chain = try CaptureTapInstaller.install(
-            host: tapHost,
-            bufferSize: Self.tapBufferSize,
-            makeChain: { format in
-                CaptureChain(
-                    inputFormat: format,
-                    wireSampleRate: Self.wireSampleRate,
-                    maxInputFrames: Self.maxTapFrames,
-                    frameSize: Self.captureFrameSize,
-                    ringCapacity: Self.captureRingCapacityFrames
-                )
-            })
+        // inside the window is retried rather than left driving a tap it does
+        // not match. The tap body it installs is the only thing the render
+        // thread does: no allocation, no lock, no caller code — see
+        // CaptureTapProcessor.
+        let outcome = withEngine(timeout: Self.engineLockTimeout) {
+            Result {
+                try CaptureTapInstaller.install(
+                    host: host,
+                    bufferSize: Self.tapBufferSize,
+                    makeChain: { format in
+                        CaptureChain(
+                            inputFormat: format,
+                            wireSampleRate: Self.wireSampleRate,
+                            maxInputFrames: Self.maxTapFrames,
+                            frameSize: Self.captureFrameSize,
+                            ringCapacity: Self.captureRingCapacityFrames
+                        )
+                    })
+            }
+        }
+        guard let outcome else { throw AudioPipelineError.audioEngineBusy }
+        let chain = try outcome.get()
+
+        // 5 — commit the session's state, unless the session it was for has
+        // been ended in the meantime. `stop()` does not wait for an install —
+        // waiting is the whole fault — so it can land here, and an install that
+        // committed over it would leave a tap running and a drain task
+        // delivering audio to a caller who has already said stop.
+        lock.lock()
+        guard captureSessionGeneration == generation else {
+            lock.unlock()
+            removeTap(from: host)
+            throw AudioPipelineError.captureInstallSuperseded
+        }
         isCapturing = true
         captureChain = chain
         captureRing = chain.ring
         captureTask = Self.makeDrainTask(ring: chain.ring, sink: sink)
+        if isRebuild {
+            captureChainRebuilds += 1
+        } else {
+            // A new session, so a new count. Step 3 added the outgoing ring's
+            // drops to the carry-over, which is what a *rebuild* wants and a
+            // fresh start does not, so it is cleared here rather than there.
+            droppedFramesFromRetiredRings = 0
+            captureChainRebuilds = 0
+            captureChainRebuildFailures = 0
+        }
+        lock.unlock()
 
-        do {
-            if !engine.isRunning {
+        // 6 — start the engine, again with the state lock released.
+        let startFailure: Error? = withEngine(timeout: Self.engineLockTimeout) { () -> Error? in
+            guard !engine.isRunning else { return nil }
+            do {
                 try engine.start()
+                return nil
+            } catch {
+                return error
             }
-        } catch {
-            tapHost.removeTap()
-            isCapturing = false
-            captureTask?.cancel()
-            captureTask = nil
-            captureChain = nil
-            throw error
+        } ?? AudioPipelineError.audioEngineBusy
+        if let startFailure {
+            // A tap installed on an engine that will not run delivers nothing
+            // and hides the failure; take the session back down and report it.
+            lock.lock()
+            let staleTap = retireCaptureSessionLocked()
+            lock.unlock()
+            if staleTap { removeTap(from: host) }
+            throw startFailure
         }
     }
 
@@ -1420,18 +1679,28 @@ public final class AudioPipeline: @unchecked Sendable {
     }
 
     private func rebuildCaptureAfterConfigurationChange() {
+        // Everything this needs, read under the state lock and worked from
+        // outside it (RC-16). Note this method runs on the `engine` queue,
+        // which is one of the three threads the orphaned lock deadlocked.
         lock.lock()
-        defer { lock.unlock() }
+        let running = isCapturing
+        let sink = captureSink
+        let chain = captureChain
+        // Reached only when a session is running: the nothing-to-rebuild branch
+        // must not instantiate the input audio unit.
+        let host = running ? tapHost : nil
+        lock.unlock()
 
-        guard isCapturing, let sink = captureSink else { return }
+        guard running, let sink, let host else { return }
 
-        let hardwareFormat = tapHost.currentInputFormat
-        if let current = captureChain, current.matches(hardwareFormat) {
+        if let chain, chain.matches(host.currentInputFormat) {
             // The formats agree, so the tap is still reading correctly. The
             // engine may still have been stopped by the reconfiguration,
             // though, and a stopped engine delivers no buffers at all.
-            if !engine.isRunning {
-                try? engine.start()
+            _ = withEngine(timeout: Self.responsiveEngineLockTimeout) {
+                if !engine.isRunning {
+                    try? engine.start()
+                }
             }
             return
         }
@@ -1441,16 +1710,17 @@ public final class AudioPipeline: @unchecked Sendable {
         // refuse a converter for the device the system just moved to — and the
         // failure path must not be the one that leaves a tap reading through a
         // format description we already know is wrong. Silence is recoverable;
-        // an out-of-bounds read on the audio thread is not.
-        teardownCaptureLocked()
+        // an out-of-bounds read on the audio thread is not. That is what the
+        // `isRebuild` flag buys, in step 1 of the install.
         do {
-            try installCaptureLocked(sink: sink)
-            captureChainRebuilds += 1
+            try installCaptureSession(sink: sink, isRebuild: true)
         } catch {
             // Capture is over. The caller finds out through the `.routeChanged`
             // signal published immediately after this, which for SF-3's sake it
             // has to act on anyway.
+            lock.lock()
             captureChainRebuildFailures += 1
+            lock.unlock()
         }
     }
 
@@ -1543,23 +1813,36 @@ public final class AudioPipeline: @unchecked Sendable {
     /// Call from an ordinary thread (typically the jitter buffer's drain
     /// task), **not** from an audio render callback: this takes a lock and
     /// allocates.
+    ///
+    /// **Drops the frame rather than waiting** if the engine cannot be reached
+    /// within ``responsiveEngineLockTimeout`` (RC-16). This is the method that
+    /// used to block forever behind an orphaned lock, and it is called for
+    /// every 20 ms of received audio — a path that waits here does not
+    /// eventually recover, it stops the receive side dead. The drop is silent:
+    /// received audio has no equivalent of ``droppedCaptureFrameCount``, and
+    /// the condition it reports on is the pipeline being wedged, which
+    /// ``startCapture(onFrame:)`` says out loud the moment it is asked for
+    /// anything.
     public func enqueuePlayback(_ pcm: [Int16]) {
         guard !pcm.isEmpty else { return }
 
-        lock.lock()
-        defer { lock.unlock() }
+        // Under ``engineLock`` and not ``lock``: nothing here is capture-session
+        // state — the playback chain, the engine and the player node are all
+        // `let`s. Holding it across `makeBuffer` as well is deliberate twice
+        // over: `PlaybackChain` wraps a stateful AVAudioConverter that
+        // concurrent callers must not drive at once, and it keeps make and
+        // schedule atomic, so two callers cannot schedule out of order.
+        _ = withEngine(timeout: Self.responsiveEngineLockTimeout) {
+            guard let buffer = playback.makeBuffer(wirePCM: pcm) else { return }
 
-        // Under the lock: `PlaybackChain` wraps a stateful AVAudioConverter,
-        // so concurrent callers must not drive it at the same time.
-        guard let buffer = playback.makeBuffer(wirePCM: pcm) else { return }
-
-        if !engine.isRunning {
-            try? engine.start()
+            if !engine.isRunning {
+                try? engine.start()
+            }
+            if !playerNode.isPlaying {
+                playerNode.play()
+            }
+            playerNode.scheduleBuffer(buffer, completionHandler: nil)
         }
-        if !playerNode.isPlaying {
-            playerNode.play()
-        }
-        playerNode.scheduleBuffer(buffer, completionHandler: nil)
     }
 
     // MARK: - Stop
@@ -1572,18 +1855,32 @@ public final class AudioPipeline: @unchecked Sendable {
     /// the call returns would be worse than losing 20 ms of it. The ring itself
     /// is kept so ``droppedCaptureFrameCount`` still answers for the session
     /// that just ended.
+    /// **Also the recovery from an install unwound by an `NSException`**
+    /// (RC-16): it clears the in-flight claim such an unwind leaves behind, so
+    /// a caller that saw ``AudioPipelineError/captureInstallInProgress`` for a
+    /// reason it cannot see can stop and start again. `stop()` is the caller
+    /// saying "abandon whatever is going on", which is exactly what a stale
+    /// claim needs.
     public func stop() {
         lock.lock()
-        defer { lock.unlock() }
-
-        teardownCaptureLocked()
+        let staleTap = retireCaptureSessionLocked()
         // No caller wants audio any more, so there is nothing for a
         // configuration change to rebuild (RC-14).
         captureSink = nil
+        captureInstallInFlight = false
+        let host = staleTap ? tapHost : nil
+        lock.unlock()
 
-        playerNode.stop()
-        if engine.isRunning {
-            engine.stop()
+        // The state above is now consistent whatever the graph does, which is
+        // the point of doing it first: if the engine is unreachable this
+        // returns having still ended the session, rather than blocking a
+        // caller who has already said stop (RC-16).
+        _ = withEngine(timeout: Self.responsiveEngineLockTimeout) {
+            host?.removeTap()
+            playerNode.stop()
+            if engine.isRunning {
+                engine.stop()
+            }
         }
     }
 
@@ -1739,6 +2036,39 @@ public final class AudioPipeline: @unchecked Sendable {
     /// confirmed by `hamvoip-cli` rather than here (AU-5).
     func simulateEngineConfigurationChange() {
         handleEngineConfigurationChange()
+    }
+
+    /// Puts a test double where the input node goes, so the install *sequence*
+    /// can be driven with no engine, no device and no permission prompt (AU-5).
+    ///
+    /// Internal and test-only. Only meaningful before a capture starts: each
+    /// install reads the host once, under ``lock``, and works from that
+    /// reference for its whole run.
+    ///
+    /// This is the seam RC-16's regression test needs. What that test pins is
+    /// that ``lock`` is not held across ``CaptureTapHost/installTap(bufferSize:body:)``
+    /// — a fake host that calls back into the pipeline from inside its own
+    /// install either answers or hangs, and the difference between those two is
+    /// the difference between a reportable failure and a dead host app.
+    func replaceTapHostForTesting(_ host: CaptureTapHost) {
+        lock.lock()
+        tapHost = host
+        lock.unlock()
+    }
+
+    /// Leaves the capture-install claim set, the way an `NSException` unwinding
+    /// out of AVFAudio leaves it: a raise runs no `defer`, so it releases
+    /// nothing (RC-16).
+    ///
+    /// Internal and test-only. The raise itself cannot be staged in a test
+    /// process — an exception no `catch` can intercept would take the runner
+    /// down with it, which is the complaint rather than the test. What can be
+    /// pinned is the state it leaves behind: every path out of it is bounded,
+    /// and ``stop()`` is the way back.
+    func orphanCaptureInstallClaimForTesting() {
+        lock.lock()
+        captureInstallInFlight = true
+        lock.unlock()
     }
 
     /// Starts the same drain loop `startCapture` starts, against a

@@ -38,6 +38,16 @@ final class CaptureTapInstallerTests: XCTestCase {
         private(set) var reads = 0
         private(set) var installs = 0
         private(set) var removals = 0
+        private(set) var reloads = 0
+
+        /// What the hardware says, when a test wants it to differ from what the
+        /// node says (RC-16). Consumed one entry per *reload*, not per read,
+        /// because a reload is the only thing that can change the answer: it
+        /// lets a test say "these disagree, and then they agree".
+        ///
+        /// `nil` — the default — is a hardware that always agrees with the
+        /// node, which is every case written before RC-16.
+        var hardwareFormats: [AVAudioFormat]?
 
         /// Whether a tap is live right now. The installer must leave this
         /// `false` on every throwing path: a tap whose chain is wrong is the
@@ -54,10 +64,36 @@ final class CaptureTapInstallerTests: XCTestCase {
             self.formats = formats
         }
 
+        /// The last answer ``currentInputFormat`` gave, which is what the
+        /// hardware agrees with by default — see ``hardwareInputFormat``.
+        private var lastRead: AVAudioFormat?
+
         var currentInputFormat: AVAudioFormat {
-            defer { if formats.count > 1 { formats.removeFirst() } }
+            defer {
+                lastRead = formats[0]
+                if formats.count > 1 { formats.removeFirst() }
+            }
             reads += 1
             return formats[0]
+        }
+
+        var hardwareInputFormat: AVAudioFormat {
+            // Two things this must not do. It must not consume a `formats`
+            // entry — the installer reads it once per attempt alongside
+            // `currentInputFormat`, and the sequences the other tests are
+            // written around count node reads. And by default it must *agree*
+            // with the node's last answer rather than with the queue's next
+            // one, so that a test about the device moving after the install
+            // (RC-15) is not also a test about the node lagging the hardware
+            // before it (RC-16).
+            hardwareFormats?.first ?? lastRead ?? formats[0]
+        }
+
+        func reloadInputFormat() {
+            reloads += 1
+            if let hardware = hardwareFormats, hardware.count > 1 {
+                hardwareFormats = Array(hardware.dropFirst())
+            }
         }
 
         func installTap(bufferSize: AVAudioFrameCount, body: @escaping (AVAudioPCMBuffer) -> Void) {
@@ -220,6 +256,72 @@ final class CaptureTapInstallerTests: XCTestCase {
         let host = FakeTapHost([try format(rate: 48_000)])
         _ = try install(host, attempts: 0)
         XCTAssertEqual(host.installs, 1, "a zero-attempt install would be a silent no-capture")
+    }
+
+    // MARK: RC-16 — the node and the hardware disagreeing
+
+    /// The RC-16 shape: the node still carries the departed Bluetooth headset's
+    /// 16 kHz while the hardware has already moved to the built-in microphone
+    /// at 44.1 kHz. Installing in that state raises an `NSException` from the
+    /// engine's graph initialisation, so nothing may be installed until the two
+    /// agree.
+    func testADisagreementBetweenTheNodeAndTheHardwareIsNotInstalledInto() throws {
+        let host = FakeTapHost([try format(rate: 16_000)])
+        host.hardwareFormats = [try format(rate: 44_100)]
+
+        XCTAssertThrowsError(try install(host)) { error in
+            XCTAssertEqual(error as? AudioPipelineError, .inputFormatUnstable)
+        }
+        XCTAssertEqual(
+            host.installs, 0,
+            "installTap raises while these disagree, and a raise is not something a caller can "
+                + "catch — so the attempt is spent reconciling them instead"
+        )
+        XCTAssertEqual(host.reloads, CaptureTapInstaller.maxAttempts)
+        XCTAssertFalse(host.tapInstalled)
+    }
+
+    func testTheNodeIsReReadUntilItAgreesAndThenInstalledInto() throws {
+        // The node reports 44.1 kHz throughout; the hardware disagrees once and
+        // then a reload brings the two into line.
+        let host = FakeTapHost([try format(rate: 44_100)])
+        host.hardwareFormats = [try format(rate: 16_000), try format(rate: 44_100)]
+
+        let chain = try install(host)
+
+        XCTAssertEqual(host.reloads, 1, "one attempt spent reconciling, and no more")
+        XCTAssertEqual(host.installs, 1)
+        XCTAssertEqual(chain.sourceSampleRate, 44_100)
+        XCTAssertTrue(host.tapInstalled)
+    }
+
+    func testAnInputWithNoDeviceBehindItIsNotTreatedAsADisagreement() throws {
+        // An input node with nothing behind it reports 0 Hz for the hardware.
+        // That is no opinion rather than a mismatch, and the useful answer is
+        // the converter's, not "unstable".
+        let host = FakeTapHost([try format(rate: 0)])
+        host.hardwareFormats = [try format(rate: 0)]
+
+        XCTAssertThrowsError(try install(host)) { error in
+            XCTAssertEqual(error as? AudioPipelineError, .converterUnavailable)
+        }
+        XCTAssertEqual(host.reloads, 0)
+    }
+
+    func testAgreementIgnoresInterleavingAndComparesWhatTheEngineCompares() throws {
+        let node = try format(rate: 48_000, channels: 2, interleaved: true)
+        let hardware = try format(rate: 48_000, channels: 2, interleaved: false)
+
+        XCTAssertTrue(
+            CaptureTapInstaller.agrees(node: node, hardware: hardware),
+            "interleaving is a property of the buffers the tap is handed — the chain's problem, "
+                + "checked after the install, not the graph's"
+        )
+        XCTAssertFalse(
+            CaptureTapInstaller.agrees(
+                node: node, hardware: try format(rate: 48_000, channels: 1)),
+            "channel count is in the message the engine prints when it refuses"
+        )
     }
 }
 
