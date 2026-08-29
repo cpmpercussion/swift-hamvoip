@@ -6,6 +6,60 @@ All notable changes to this project are recorded here. The format follows
 follows [semantic versioning](https://semver.org/spec/v2.0.0.html) — while the
 major version is 0, the API may change in any release.
 
+## [Unreleased]
+
+Next version is **0.7.0**, not 0.6.3: `AudioPipelineError` gains a case, and a
+public non-frozen enum growing one is source-breaking for any consumer that
+switches over it exhaustively. Nothing else changed shape.
+
+### Fixed
+
+- **Installing the capture tap can no longer terminate the host process
+  (RC-15).** `startCapture` read `inputNode.outputFormat(forBus: 0)`, built its
+  chain from that snapshot, and handed the same snapshot back to
+  `installTap(onBus:bufferSize:format:)`. When the input device changed inside
+  that window — a Bluetooth headset arriving is enough — AVFAudio rejected the
+  install with *"Failed to create tap due to format mismatch"*. **That rejection
+  is an Objective-C `NSException`, which no Swift `catch` can intercept**, so a
+  caller doing the right thing got process termination instead: Currawong died
+  on air on 2026-08-29 from inside a `do/catch` written to tolerate exactly this
+  failure (`BU-24`). A library that can kill its host out of a `do/catch` is a
+  worse defect than the race behind it, so the mismatch is now unreachable
+  rather than handled. The tap is installed with **no format at all** — AVFAudio
+  uses whatever the bus has at that instant, which cannot mismatch — and the
+  chain is then checked against the format the node reports *afterwards*,
+  retrying (up to four times) if the device moved. A device that will not hold
+  still for one install now throws `.inputFormatUnstable` instead.
+
+- **The capture tap bounds its reads by the buffer it is handed, not by the
+  stride it was built with (RC-15).** There is always some window in which
+  buffers arrive from a device the chain was not built for — between the install
+  and the verifying read, and between a device change and the
+  `.AVAudioEngineConfigurationChange` that announces it. A stride of 2 held over
+  a de-interleaved mono buffer read twice the buffer's length: an out-of-bounds
+  read on the real-time audio thread. It is now clamped to what the buffer list
+  actually holds, which turns that into half a buffer of wrong-rate audio. Costs
+  one pointer dereference per buffer; the allocation tests still pass, so
+  nothing was added to the render thread's budget.
+
+### Added
+
+- **`AudioPipelineError.inputFormatUnstable`** — the input device's format
+  changed under every attempt to install a tap in it. **This is the API-visible
+  half of RC-15:** the condition existed before and was not an error at all, it
+  was an uncatchable exception. Callers may treat it as any other failure to
+  open the microphone, and retrying is reasonable — it means the hardware was
+  moving, not that it is unusable.
+
+- **`hamvoip-cli experiment capture-swap --at-start`** — restarts capture
+  repeatedly while the default input device changes alongside it, which is
+  RC-15's window rather than RC-14's. It cannot be aimed at a window
+  microseconds wide, and the write-up says so: a pre-fix build survives the same
+  run. `docs/CLI.md` §12 has the results, including the finding that swapping
+  the default input every 125–400 ms crashes the process from inside CoreAudio's
+  own notification path on both builds — the probe over-driving the system, and
+  a reason not to read a crash under a fast cadence as evidence of anything.
+
 ## [0.6.2] — 2026-08-29
 
 Two probes and the fault one of them found. No API was removed or changed —

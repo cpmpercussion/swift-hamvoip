@@ -65,6 +65,35 @@ struct CaptureSwapCommand: AsyncParsableCommand {
               dropped     frames the ring lost. Should be zero; it counts across rebuilds \
             on purpose, so a swap cannot quietly reset it.
 
+            --at-start MEASURES A DIFFERENT FAULT (RC-15). The default mode changes the \
+            device under a capture that is already running, which is RC-14's window. \
+            RC-15's is narrower and earlier: between `installCaptureLocked` reading the \
+            input format and `installTap` being given it. Landing in it terminated \
+            Currawong on air (BU-24), because AVFAudio rejects a stale format with an \
+            Objective-C NSException that no Swift `catch` can see — from inside a \
+            `do/catch` written to tolerate exactly that failure.
+
+            So --at-start does not swap and wait. It restarts capture over and over on \
+            one pipeline while the default input device changes alongside it, and asks two \
+            things: that the process is still here to print a summary, and that captures \
+            actually started and delivered audio across the changes. A run that ends with \
+            no output and a non-zero exit is the fault it is watching for:
+
+              *** Terminating app due to uncaught exception 'com.apple.coreaudio.avfaudio',
+                  reason: 'Failed to create tap due to format mismatch, ...'
+
+            IT CANNOT BE AIMED AT THE WINDOW, and does not pretend to be. A pre-RC-15 \
+            build survives this run too — the window is microseconds wide and landing in \
+            it is luck. The deterministic half of RC-15 is CaptureTapInstallerTests, which \
+            moves the format under a fake input node; this is the hardware half.
+
+              starts     how many capture sessions were begun against a moving device.
+              errors     starts that threw. A Swift error here is the fix working: \
+            inputFormatUnstable means the device would not hold still for one install, \
+            which is recoverable and reportable rather than fatal.
+              frames     total frames delivered. Some sessions legitimately deliver none \
+            in the time allowed; zero across every session means capture never started.
+
             NEEDS TWO INPUT DEVICES. `--list` prints the ones it can see.
             """)
 
@@ -80,9 +109,15 @@ struct CaptureSwapCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "List the input devices and exit.")
     var list: Bool = false
 
+    @Flag(name: .long,
+          help: "Change the device *during* the tap install rather than under a running capture (RC-15).")
+    var atStart: Bool = false
+
     func run() async throws {
         #if os(macOS)
-        try await CaptureSwapProbe(swaps: swaps, seconds: seconds, target: target, list: list).run()
+        try await CaptureSwapProbe(
+            swaps: swaps, seconds: seconds, target: target, list: list, atStart: atStart
+        ).run()
         #else
         throw ValidationError(
             "capture-swap changes the system default input device, which only macOS exposes.")
@@ -99,6 +134,7 @@ private struct CaptureSwapProbe {
     let seconds: Double
     let target: String?
     let list: Bool
+    let atStart: Bool
 
     func run() async throws {
         let inputs = CoreAudioDevices.inputs()
@@ -134,6 +170,11 @@ private struct CaptureSwapProbe {
         signal(SIGINT, SIG_IGN)
         signalSource.resume()
         defer { restore() }
+
+        if atStart {
+            try await runInstallRace(original: original, other: other, inputs: inputs)
+            return
+        }
 
         let pipeline = AudioPipeline()
         let frames = FrameCounter()
@@ -193,6 +234,131 @@ private struct CaptureSwapProbe {
         }
     }
 
+    /// RC-15: start a capture while the input device is in the middle of
+    /// changing, and keep doing it.
+    ///
+    /// The window being aimed at is a few microseconds wide — the format read,
+    /// the chain build, the tap install — so this does not try to hit it
+    /// precisely. It sets the default input device from another thread and
+    /// begins a capture immediately, with a jittered delay, many times over.
+    /// CoreAudio's device change is asynchronous and takes tens of milliseconds
+    /// to settle, so a `startCapture` fired into that settling period is inside
+    /// the window fairly often.
+    ///
+    /// **The assertion is survival.** Before RC-15, landing in the window
+    /// raised an uncatchable `NSException` and this process would be gone; the
+    /// summary printing at all is the result. Everything else here is
+    /// bookkeeping to show capture actually ran.
+    private func runInstallRace(
+        original: AudioDeviceID, other: CoreAudioDevices.Device,
+        inputs: [CoreAudioDevices.Device]
+    ) async throws {
+        let starts = max(1, swaps)
+        // Long enough for the tap to deliver something, short enough that a
+        // few dozen starts is a probe rather than an afternoon.
+        let dwell = max(0.5, min(seconds, 2.0))
+        // **Deliberately unhurried, and the pacing is a measurement in itself.**
+        // Swapping the default input every 125–400 ms was tried first and is
+        // not a sharper version of this: it takes CoreAudio down. Every attempt
+        // fails in `engine.start()` (-10875,
+        // IsFormatSampleRateAndChannelCountValid), and within a minute the
+        // process dies inside CoreAudio's own property-notification path —
+        // `HALC_ProxyNotifications::SendPropertiesChanged`, on
+        // `com.apple.audio.proxy-event`, with no frame of ours on the stack.
+        // Measured on macOS 26.5.1 both with RC-15's fix and without it, so it
+        // says nothing about this library: it is the probe over-driving the
+        // system, and it drowns the signal the probe exists to look for. A
+        // crash under a faster cadence is not evidence about RC-15.
+        let swapInterval = max(1.0, dwell * 1.5)
+        print("")
+        print("Racing \(starts) capture starts against a device change (RC-15).")
+        print("A summary at the end means no uncatchable exception was raised.")
+        print("")
+
+        let frames = FrameCounter()
+        var errors: [String: Int] = [:]
+        var started = 0
+        let began = Date()
+
+        // The device is kept moving continuously, on its own thread, rather
+        // than swapped once per attempt. A single swap sequenced before a
+        // `startCapture` mostly misses: CoreAudio's change takes tens of
+        // milliseconds to reach the input node, so the format read and the
+        // install both land on the same side of it. A swapper running
+        // alongside means the reads of an attempt can straddle a change.
+        let swapper = DeviceSwapper(devices: [original, other.id], interval: swapInterval)
+        swapper.start()
+        defer { swapper.stop() }
+
+        // **One pipeline, restarted, not one pipeline per attempt.** Building
+        // and dropping an `AVAudioEngine` per attempt while the default device
+        // moves takes CoreAudio itself down — measured, both with and without
+        // RC-15's fix: a SIGSEGV in `AVAudioIOUnit::IOUnitPropertyListener` and
+        // an `EXC_BREAKPOINT` inside `_XIOContext_ResumeIO`, neither with a
+        // frame of ours in it. That is a probe artefact and it drowns the
+        // signal. Restarting capture on a live pipeline reaches exactly the
+        // same install path (`startCapture` tears the old tap down and installs
+        // a new one), and is what the app does anyway: one pipeline, a warm-up
+        // per connect.
+        let pipeline = AudioPipeline()
+        defer { pipeline.stop() }
+
+        for attempt in 1...starts {
+            do {
+                try pipeline.startCapture { _ in frames.increment() }
+                started += 1
+            } catch {
+                let name = "\(error)"
+                errors[name, default: 0] += 1
+                print(String(format: "  [%6.2fs] start %d: %@", Date().timeIntervalSince(began),
+                                    attempt, name))
+            }
+            try await Task.sleep(nanoseconds: UInt64(dwell * 1_000_000_000))
+            // Stop between attempts, so the next one is a fresh install rather
+            // than a restart on top of an engine the last failure left stopped:
+            // without this, one -10868 (`engine.start()` refused while the
+            // device is mid-change) leaves every subsequent attempt failing the
+            // same way, and the probe measures one wedged engine instead of
+            // sixty installs.
+            pipeline.stop()
+        }
+
+        print("")
+        print("Capture starts:   \(starts)")
+        print("Device changes:   \(swapper.swaps)")
+        print("Started cleanly:  \(started)")
+        print("Frames delivered: \(frames.value)")
+        if errors.isEmpty {
+            print("Errors:           none")
+        } else {
+            for (name, count) in errors.sorted(by: { $0.key < $1.key }) {
+                print("Errors:           \(count) x \(name)")
+            }
+        }
+        print("")
+        print("SURVIVED: \(starts) capture starts against a moving input device, no uncatchable "
+              + "exception.")
+        print("")
+        print("WHAT THIS DOES AND DOES NOT SETTLE. Surviving is necessary, not sufficient. The "
+              + "window RC-15 closes is microseconds wide — a format read, a chain build, an "
+              + "install — and this probe cannot be aimed at it: a pre-RC-15 build survives the "
+              + "same run (measured, 24 starts across 20 device changes, no errors). What a clean "
+              + "run does settle is that the new install path starts capture and delivers audio "
+              + "on real hardware across a real device change. That the mismatch can no longer be "
+              + "raised at all is settled deterministically in CaptureTapInstallerTests, by moving "
+              + "the format under a fake input node; this is the hardware half, and it is here to "
+              + "show the fix did not break the ordinary case.")
+        if frames.value == 0 {
+            print("INCONCLUSIVE: no frames were delivered by any session, so the install path may "
+                  + "not have been exercised at all. Check the microphone permission and that "
+                  + "--seconds is long enough.")
+        }
+        if !errors.isEmpty {
+            print("NOTE: the errors above are the recoverable reports RC-15 replaced the "
+                  + "exception with. A caller's do/catch sees these.")
+        }
+    }
+
     private func pickTarget(from inputs: [CoreAudioDevices.Device], avoiding original: AudioDeviceID)
         throws -> CoreAudioDevices.Device
     {
@@ -231,6 +397,64 @@ private struct CaptureSwapProbe {
             + "interleaved=\(format.isInterleaved)"
         withExtendedLifetime(engine) {}
         return description
+    }
+}
+
+/// Changes the system default input device on a cycle, on its own thread,
+/// until told to stop (RC-15's `--at-start` mode).
+///
+/// A thread rather than a `Task`: `AudioObjectSetPropertyData` blocks while
+/// CoreAudio moves the device, and the point is for it to be moving *while*
+/// the probe's own thread is inside `startCapture`.
+private final class DeviceSwapper: @unchecked Sendable {
+    private let devices: [AudioDeviceID]
+    private let interval: TimeInterval
+    private let lock = NSLock()
+    private var running = false
+    private var thread: Thread?
+
+    /// How many times the device was actually changed. Reported so a run that
+    /// found nothing can be told apart from a run where nothing moved.
+    private var swapCount = 0
+    var swaps: Int { lock.lock(); defer { lock.unlock() }; return swapCount }
+
+    init(devices: [AudioDeviceID], interval: TimeInterval) {
+        self.devices = devices
+        self.interval = interval
+    }
+
+    func start() {
+        lock.lock()
+        running = true
+        lock.unlock()
+
+        let thread = Thread { [self] in
+            var index = 0
+            while isRunning {
+                index = (index + 1) % devices.count
+                if CoreAudioDevices.setDefaultInput(devices[index]) == noErr {
+                    lock.lock()
+                    swapCount += 1
+                    lock.unlock()
+                }
+                Thread.sleep(forTimeInterval: interval)
+            }
+        }
+        thread.name = "capture-swap.device-swapper"
+        self.thread = thread
+        thread.start()
+    }
+
+    func stop() {
+        lock.lock()
+        running = false
+        lock.unlock()
+    }
+
+    private var isRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return running
     }
 }
 

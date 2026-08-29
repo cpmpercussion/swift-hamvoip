@@ -1435,6 +1435,64 @@ high bits, which macOS reports as a *possible pointer authentication failure* �
 the same crash shape as `BU-23`, from nothing more exotic than a use-after-free.
 The engine is held in a local for the duration of the call, and must be.
 
+### `--at-start` — the same device change, at the *beginning* of a capture (RC-15)
+
+The mode above changes the device under a capture that is already running, which
+is RC-14's window. RC-15's is earlier and much narrower: between
+`installCaptureLocked` reading the input format and `installTap` being given it.
+Landing in it terminated Currawong on air on 2026-08-29 (`BU-24`), because
+AVFAudio rejects a stale format with an Objective-C `NSException` that no Swift
+`catch` can see — out of a `do/catch` written to tolerate exactly that failure.
+
+```sh
+hamvoip-cli experiment capture-swap --at-start --swaps 24 --seconds 1.0 --target StreamCam
+```
+
+It restarts capture on one pipeline, over and over, while the default input
+device changes alongside it, and asks two things: that the process is still here
+to print a summary, and that captures actually started and delivered audio
+across the changes.
+
+**It cannot be aimed at the window, and the write-up must not pretend it can.**
+A pre-RC-15 build survives this run too — measured, 24 starts across 20 device
+changes, no errors, no crash. The window is microseconds wide and landing in it
+is luck. The deterministic half of RC-15 is `CaptureTapInstallerTests`, which
+moves the format under a fake input node; this is the hardware half, and it is
+here to show the fix did not break the ordinary case.
+
+**Two devices with different formats or nothing is being exercised.** On
+melchior the useful pair is the TID-MIC-Q2L (16 kHz mono, HFP) and the Logitech
+StreamCam (48 kHz); swapping between the StreamCam and the built-in microphone
+changes no format at all, so no mismatch is even possible.
+
+#### Result — melchior, 2026-08-29, macOS 26.5.1 ✅
+
+Transcript in `experiment-data/rc15-capture-swap-at-start.txt`. Q2L ↔ StreamCam,
+24 starts, 19 device changes: **24 started cleanly, 835 frames delivered, no
+errors, no crash.** The pre-fix comparison run, same command: 24 clean starts,
+775 frames, also no crash — which is the point of the caveat above.
+
+#### The pacing is itself a measurement
+
+The first version of this probe swapped the default input every 125–400 ms and
+built a fresh `AVAudioEngine` per attempt. That is not a sharper version of the
+same experiment; it takes **CoreAudio** down:
+
+- every `startCapture` fails in `engine.start()` with `-10875`
+  (`IsFormatSampleRateAndChannelCountValid`), so no capture ever runs, and
+- within a minute the process dies inside CoreAudio's own machinery — a SIGSEGV
+  in `AVAudioIOUnit::IOUnitPropertyListener`, and an `EXC_BREAKPOINT` in
+  `HALC_ProxyNotifications::SendPropertiesChanged` on
+  `com.apple.audio.proxy-event` — **with no frame of ours on the stack.**
+
+Measured on macOS 26.5.1 both with RC-15's fix and without it, so it says
+nothing about this library: it is the probe over-driving the system. **A crash
+under a faster cadence is not evidence about RC-15**, and the probe now paces
+itself (one device change per 1.5 dwells, one pipeline restarted rather than
+one per attempt) so that it stays inside what the system will tolerate. Worth
+carrying into `BU-23`: rapid default-device churn can crash a process from
+inside CoreAudio with nothing of the application's on the stack.
+
 ## 13. `experiment input-warm-up` — the silence a cold device delivers (BU-22)
 
 **What it is for.** Currawong's `BU-22`: the first over after the input device
