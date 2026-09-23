@@ -190,7 +190,7 @@ Phase 2  IAX2Kit          IAX-1 … IAX-13     IAX-10, IAX-11 open
 Phase 3  CLI harness      CLI-1 … CLI-3      ✅ complete
 Phase 4  SwiftUI app      APP-1 … APP-22     ✅ all closed → the app's own plan
 Phase 5  BLE PTT          BLE-1 … BLE-3      ✅ shipped as APP-5 → the app's plan
-Phase 6  EchoLink         EL-1 … EL-15       ✅ complete; M3 2026-08-13, and
+Phase 6  EchoLink         EL-1 … EL-16       ✅ complete; M3 2026-08-13, and
                                              since run from the app
 Phase 7  M17Kit           M17-1 … M17-7      RX proven 2026-08-16; TX heard
                                              2026-08-17. M17-6 re-scoped, open;
@@ -2512,6 +2512,50 @@ withheld from any host but its own (including under `--auto-proxy` and when no
 host is configured at all), host matching is case-insensitive, and a malformed
 port fails loudly. ✅ All of it; 20 tests, none touching the real config
 directory.
+
+### EL-16 — `CGSM` carries no `unsafeFlags`, so a versioned dependency builds ✅ DONE
+**Depends on:** EL-8 ✅. **Blocks:** Currawong building against any tag under
+Xcode 27, and so every app task until a release carries this.
+**Files:** `Package.swift`, `Sources/CGSM/config.h`.
+
+Added 2026-09-23, when Currawong's `make build` failed before compiling any app
+code:
+
+```
+error: The package product 'EchoLinkKit-product' cannot be used as a dependency
+of this target because it uses unsafe build flags.
+```
+
+EL-8 gave `CGSM` `cSettings: [.unsafeFlags(["-w"])]` to keep libgsm's warnings
+from burying ours. SwiftPM does not allow `unsafeFlags` in a package resolved by
+version, and the app names the library `from:` a tag. The flag has shipped in
+every release since `v0.3.0`, and the app built against them all until **Xcode
+27.0** was installed on 2026-09-15. That is the only change we can see; nobody
+built the app under an older Xcode after it to check. `EchoLinkKit-product` is
+the name in the error only because it is the product that pulls in `CGSM`.
+
+**`-w` was hiding much less than its comment said.** Without it, the vendored C
+has none of the implicit declarations or K&R-prototype warnings the manifest
+described. It has six lines in `config.h` where upstream turns an option off by
+writing its `#define` as `/*efine … /* comment */`, which clang reports as
+`-Wcomment` (18 warnings, because the header is included three times). So the
+fix is a `push`/`ignored "-Wcomment"`/`pop` around that header's body, and it is
+the only local change to the vendored libgsm, marked as such in the file. That
+is narrower than `-w`, which silenced *every* warning in the target, including
+any we might introduce there later.
+
+Declined: `CSetting.disableWarning(_:)`. It does the same job from the manifest,
+but it needs tools-version 6.2, and moving the manifest past 6.0 also switches
+every target's default language mode to Swift 6. That is a separate decision,
+not a side effect to take here.
+
+**Done when:** no target in `Package.swift` carries `unsafeFlags`; `CGSM`
+builds with zero warnings; and an app project resolving the library **by
+version** builds. ✅ All three, 2026-09-23. The last was checked with a local
+`file://` clone tagged `v0.8.1` and consumed by a copy of Currawong
+`from: 0.8.1`. That is a real version-resolved dependency, so the check applies:
+under Xcode 27.0 it builds, and the same setup pinned `exactVersion: 0.8.0`
+reproduces the error above.
 
 ## Phase 7 — M17Kit
 

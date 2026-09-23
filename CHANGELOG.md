@@ -6,6 +6,19 @@ All notable changes to this project are recorded here. The format follows
 follows [semantic versioning](https://semver.org/spec/v2.0.0.html) — while the
 major version is 0, the API may change in any release.
 
+## [Unreleased]
+
+### Fixed
+
+- **The package can be consumed by version again under Xcode 27 (EL-16).**
+  `CGSM` carried `unsafeFlags(["-w"])`, which SwiftPM does not allow in a
+  dependency resolved by version. Xcode 27.0 rejects it with *"The package
+  product 'EchoLinkKit-product' cannot be used as a dependency of this target
+  because it uses unsafe build flags"*, so every app naming this library
+  `from:` a tag failed to build. The flag is gone. The only warnings it was
+  hiding, six `-Wcomment` lines in libgsm's `config.h`, are now silenced by a
+  scoped pragma in that header. No API change.
+
 ## [0.8.0] — 2026-08-29
 
 A minor bump rather than 0.7.1, on the same reading as `v0.7.0`:
