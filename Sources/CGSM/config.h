@@ -9,6 +9,14 @@
 #ifndef	CONFIG_H
 #define	CONFIG_H
 
+/* swift-hamvoip (EL-16): the only local change to the vendored libgsm.
+ * Upstream disables an option by writing its #define as a comment that ends in
+ * a trailing comment, which clang reports as -Wcomment on every include. This
+ * silences exactly that, for this header only. It replaces a package-wide
+ * unsafeFlags(["-w"]), which a versioned SwiftPM dependency may not carry. */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcomment"
+
 /*efine	SIGHANDLER_T	int 		/* signal handlers are void	*/
 /*efine HAS_SYSV_SIGNAL	1		/* sigs not blocked/reset?	*/
 
@@ -33,5 +41,7 @@
 #define	HAS_UTIME_H	1		/* UTIME header file		*/
 #define	HAS_UTIMBUF	1		/* struct utimbuf		*/
 /*efine	HAS_UTIMEUSEC   1		/* microseconds in utimbuf?	*/
+
+#pragma clang diagnostic pop
 
 #endif	/* CONFIG_H */

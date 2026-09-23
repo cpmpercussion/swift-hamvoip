@@ -109,14 +109,14 @@ let package = Package(
         // Only the library sources are vendored; the `toast` command-line tool
         // that ships with it is not. The licence travels with the code in
         // Sources/CGSM/LICENCE-libgsm.txt, as its terms require.
-        .target(
-            name: "CGSM",
-            // The vendored C is 1992-era and warns freely — implicit
-            // declarations, K&R prototypes. Those warnings are about upstream
-            // code nobody here should be editing, and left on they bury the
-            // warnings that are about our own.
-            cSettings: [.unsafeFlags(["-w"])]
-        ),
+        //
+        // No cSettings, and none may be `unsafeFlags` (EL-16): SwiftPM refuses
+        // them in a dependency resolved by version, and Xcode 27.0 was seen to
+        // enforce that for app projects too, so one flag here breaks every
+        // consumer. The vendored C builds warning-free except for six
+        // commented-out `#define`s in config.h, silenced by a scoped pragma in
+        // that header.
+        .target(name: "CGSM"),
 
         // EchoLink over the proxy (TCP 8100) and the directory (TCP 5200).
         // Priority 2. No published specification — the wire format comes from
