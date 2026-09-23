@@ -6,7 +6,11 @@ All notable changes to this project are recorded here. The format follows
 follows [semantic versioning](https://semver.org/spec/v2.0.0.html) — while the
 major version is 0, the API may change in any release.
 
-## [Unreleased]
+## [0.8.1] — 2026-09-23
+
+A patch release with no API change: all four products are source-compatible
+with `v0.8.0`. It was cut because Currawong cannot build against any earlier tag
+under Xcode 27.0.
 
 ### Fixed
 
@@ -1121,7 +1125,8 @@ DMR, System Fusion (YSF), D-STAR, P25 and NXDN. All require AMBE or AMBE+2,
 which is patent-encumbered (NG-1). No MMDVM or USB modem support (NG-2), no MFi
 (NG-3), and no RF layer (NG-4).
 
-[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/cpmpercussion/swift-hamvoip/compare/v0.6.1...v0.6.2
